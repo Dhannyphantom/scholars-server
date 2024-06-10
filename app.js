@@ -15,7 +15,7 @@ Joi.objectId = require("joi-objectid")(Joi);
 
 app.use(cors());
 //ROUTES AND CONTROLLERS
-// const users = require("./routes/users");
+const users = require("./routes/users");
 const db = require("./controllers/db");
 
 app.use(express.static("public"));
@@ -23,7 +23,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// app.use("/users", users);
+app.use("/users", users);
 
 app.use(error);
 

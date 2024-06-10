@@ -86,7 +86,7 @@ const userSchema = new schema({
   points: {
     type: Number,
     min: 0,
-    default: 100, // CHANGE TO 20 AND GIVE 80 MORE WHEN ACCOUNT IS VERIFIED
+    default: 0, // CHANGE TO 20 AND GIVE 80 MORE WHEN ACCOUNT IS VERIFIED
   },
   gender: {
     type: String,
