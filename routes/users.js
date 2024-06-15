@@ -17,7 +17,8 @@ const multer = require("multer");
 
 const bcrypt = require("bcrypt");
 const { User, validateLog, validateReg } = require("../models/User");
-// const auth = require("../middlewares/authRoutes");
+const auth = require("../middlewares/authRoutes");
+const { userSelect } = require("../helpers/data_store");
 
 const router = express.Router();
 
@@ -70,6 +71,17 @@ router.post("/login", async (req, res) => {
   const token = user.generateAuthToken();
 
   res.header("x-auth-token", token).json({ token });
+});
+
+router.get("/user", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const userData = await User.findById(userId).select(userSelect);
+
+  if (!userData)
+    return res.status(422).send("User data not found. Please sign in again");
+
+  res.json({ user: userData });
 });
 
 module.exports = router;
