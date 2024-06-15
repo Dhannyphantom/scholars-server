@@ -22,9 +22,7 @@ const { User, validateLog, validateReg } = require("../models/User");
 const router = express.Router();
 
 router.post("/register", async (req, res) => {
-  const { username, email, password } = req.body;
-
-  console.log(req.body);
+  const { username, email, password, accountType } = req.body;
 
   const { error } = validateReg(req.body);
   if (error) return res.status(400).send(error.details[0].message);
@@ -39,6 +37,7 @@ router.post("/register", async (req, res) => {
   const user = new User({
     username,
     email,
+    accountType,
     password,
   });
 

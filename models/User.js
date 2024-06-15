@@ -38,6 +38,11 @@ const userSchema = new schema({
     lowercase: true,
     trim: true,
   },
+  accountType: {
+    type: String,
+    enum: ["teacher", "student", "professional"],
+    required: true,
+  },
   city: {
     type: String,
     minlength: 4,
@@ -137,6 +142,7 @@ userSchema.methods.generateAuthToken = function () {
 const validateReg = (user) => {
   const schema = Joi.object({
     username: Joi.string().required().min(4).max(15).trim().lowercase(),
+    accountType: Joi.string().required().max(255).alphanum(),
     email: Joi.string().required().min(4).max(255).email().trim(),
     password: Joi.string().required().min(8).max(255).trim(),
   });
