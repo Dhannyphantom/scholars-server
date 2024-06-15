@@ -60,7 +60,7 @@ router.post("/login", async (req, res) => {
   if (error) return res.status(400).send(error.details[0].message);
 
   const user = await User.findOne().or([
-    { email: username.toLowerCase().trim() },
+    { email: username.toLowerCase() },
     { username },
   ]);
   if (!user) return res.status(400).send(`Invalid profile account`);
@@ -69,7 +69,7 @@ router.post("/login", async (req, res) => {
   if (!passValid) return res.status(400).send("Invalid profile details");
   const token = user.generateAuthToken();
 
-  res.header("x-auth-token", token).send(token);
+  res.header("x-auth-token", token).json({ token });
 });
 
 module.exports = router;
