@@ -26,14 +26,14 @@ router.post("/register", async (req, res) => {
   const { username, email, password, accountType } = req.body;
 
   const { error } = validateReg(req.body);
-  if (error) return res.status(400).send(error.details[0].message);
+  if (error) return res.status(400).json(error.details[0].message);
 
   const aUser = await User.findOne({ username });
   if (aUser)
-    return res.status(400).send("Username has been used already, Try another");
+    return res.status(400).json("Username has been used already, Try another");
   const eEmail = await User.findOne({ email });
   if (eEmail)
-    return res.status(400).send("Email has already been registered, Sign in!");
+    return res.status(400).json("Email has already been registered, Sign in!");
 
   const user = new User({
     username,
@@ -58,16 +58,16 @@ router.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   const { error } = validateLog(req.body);
-  if (error) return res.status(400).send(error.details[0].message);
+  if (error) return res.status(400).json(error.details[0].message);
 
   const user = await User.findOne().or([
     { email: username.toLowerCase() },
     { username },
   ]);
-  if (!user) return res.status(400).send(`Invalid profile account`);
+  if (!user) return res.status(400).json(`Invalid profile account`);
 
   const passValid = await bcrypt.compare(password, user.password);
-  if (!passValid) return res.status(400).send("Invalid profile details");
+  if (!passValid) return res.status(400).json("Invalid profile details");
   const token = user.generateAuthToken();
 
   res.header("x-auth-token", token).json({ token });
@@ -79,7 +79,7 @@ router.get("/user", auth, async (req, res) => {
   const userData = await User.findById(userId).select(userSelect);
 
   if (!userData)
-    return res.status(422).send("User data not found. Please sign in again");
+    return res.status(422).json("User data not found. Please sign in again");
 
   res.json({ user: userData });
 });
