@@ -13,6 +13,7 @@ const mediaDataSchema = new schema({
   type: {
     type: String,
     enum: ["image", "video", "text"],
+    default: "image",
     maxlength: 255,
   },
   thumb: {
@@ -43,7 +44,14 @@ const userSchema = new schema({
     enum: ["teacher", "student", "professional"],
     required: true,
   },
-  city: {
+  state: {
+    type: String,
+    minlength: 4,
+    maxlength: 255,
+    lowercase: true,
+    trim: true,
+  },
+  country: {
     type: String,
     minlength: 4,
     maxlength: 255,
@@ -66,7 +74,14 @@ const userSchema = new schema({
     maxlength: 1024,
     trim: true,
   },
-  fullName: {
+  firstName: {
+    type: String,
+    minlength: 4,
+    maxlength: 255,
+    lowercase: true,
+    trim: true,
+  },
+  lastName: {
     type: String,
     minlength: 4,
     maxlength: 255,
@@ -78,13 +93,13 @@ const userSchema = new schema({
       type: Number,
       trim: true,
     },
-    contactCode: {
+    code: {
       type: String,
       trim: true,
     },
     status: {
       type: String,
-      enum: ["public", "private", "weebs"],
+      enum: ["public", "private", "friends"],
       default: "private",
     },
   },
@@ -115,6 +130,10 @@ const userSchema = new schema({
   isActive: {
     type: Boolean, // NOT FULLY FUNCTIONAL YET
     default: false,
+  },
+  rank: {
+    type: String,
+    default: "beginner",
   },
   tokens: {
     mailToken: {
@@ -165,3 +184,4 @@ module.exports.User = User;
 module.exports.validateReg = validateReg;
 module.exports.validateLog = validateLog;
 module.exports.mediaSchema = mediaDataSchema;
+module.exports.userSelector = "-password -__v";

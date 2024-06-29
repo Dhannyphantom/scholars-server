@@ -45,20 +45,23 @@ module.exports = async (req, res, next) => {
   if (_NET == "offline") {
     const data = Boolean(req.file) ? [req.file] : req.files;
     const resizePromises = data.map(async (file) => {
+      const filePath = path.resolve(outputFolder, file.filename);
       await sharp(file.path)
-        .resize(1500)
+        .resize(1000)
         .toFormat("jpeg", { mozjpeg: true, quality: SHARP_QUALITY })
-        .toFile(path.resolve(outputFolder, file.filename));
+        .toFile(filePath);
 
       await sharp(file.path)
         .resize(100)
         .toFormat("jpeg", { mozjpeg: true, quality: 20 })
         .toFile(path.resolve(outputThumb, file.filename));
 
-      fs.unlinkSync(file.path);
-      const imageObject = await sharp(
-        path.resolve(outputFolder, file.filename)
-      ).metadata();
+      try {
+        fs.unlinkSync(file.path);
+      } catch (err) {
+        console.log({ err });
+      }
+      const imageObject = await sharp(filePath).metadata();
 
       media.push({
         uri: file.filename,
@@ -72,7 +75,7 @@ module.exports = async (req, res, next) => {
     const data = Boolean(req.file) ? [req.file] : req.files;
     const resizePromises = data.map(async (file) => {
       const { data, info } = await sharp(file.path)
-        .resize(1500)
+        .resize(1000)
         .toFormat("jpeg", { mozjpeg: true, quality: SHARP_QUALITY })
         .toBuffer({ resolveWithObject: true });
 
