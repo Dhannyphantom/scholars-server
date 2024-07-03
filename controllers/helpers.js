@@ -7,8 +7,6 @@ const PORT = process.env.PORT;
 module.exports.getUploadUri = (imageData, images, bucketName) => {
   let imgUri, thumbUri;
 
-  console.log({ imageData, images });
-
   if (Array.isArray(imageData) && images.length > 1) {
     //   an array of images
     if (_NET === "offline") {

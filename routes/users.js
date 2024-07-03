@@ -100,7 +100,6 @@ router.post(
     if (!imageData) return res.status(400).json("Media data not found!");
 
     const userAvatarObj = getUploadUri(imageData, req.media, "avatars");
-    console.log({ userAvatarObj });
     user.avatar = userAvatarObj;
 
     await user.save();
@@ -108,5 +107,36 @@ router.post(
     res.json({ avatar: userAvatarObj });
   }
 );
+
+router.put("/updateProfile", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const userData = req.body;
+
+  const update_object = {};
+
+  Object.entries(userData).map(([key, val]) => {
+    update_object[key] = val;
+  });
+
+  await User.updateOne(
+    { _id: userId },
+    {
+      $set: update_object,
+    }
+  );
+
+  const updatedUser = await User.findByIdAndUpdate(
+    userId,
+    {
+      $set: update_object,
+    },
+    {
+      new: true,
+    }
+  );
+
+  res.json({ user: updatedUser });
+});
 
 module.exports = router;

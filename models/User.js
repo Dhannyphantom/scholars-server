@@ -44,6 +44,11 @@ const userSchema = new schema({
     enum: ["teacher", "student", "professional"],
     required: true,
   },
+  birthday: {
+    type: Date,
+    required: false,
+    max: Date.now,
+  },
   state: {
     type: String,
     minlength: 4,
