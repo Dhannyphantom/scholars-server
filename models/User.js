@@ -47,7 +47,6 @@ const userSchema = new schema({
   birthday: {
     type: Date,
     required: false,
-    max: Date.now,
   },
   state: {
     type: String,

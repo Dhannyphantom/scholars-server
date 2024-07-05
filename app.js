@@ -16,6 +16,7 @@ Joi.objectId = require("joi-objectid")(Joi);
 app.use(cors());
 //ROUTES AND CONTROLLERS
 const users = require("./routes/users");
+const payments = require("./routes/payments");
 const db = require("./controllers/db");
 
 app.use(express.static("public"));
@@ -24,6 +25,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 app.use("/users", users);
+app.use("/payments", payments);
 
 app.use(error);
 
