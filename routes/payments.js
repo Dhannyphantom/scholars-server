@@ -7,7 +7,6 @@ const router = express.Router();
 router.post("/subscribe", auth, async (req, res) => {
   const user = req.user.userId;
   const { email, amount } = req.body;
-  console.log({ body: req.body });
 
   const params = JSON.stringify({
     email,
@@ -48,6 +47,8 @@ router.post("/subscribe", auth, async (req, res) => {
   reqPaystack.end();
 });
 
-router.get("/subcription_callback", async (req, res) => {});
+router.get("/subscription_callback", async (req, res) => {
+  res.json({ success: true });
+});
 
 module.exports = router;
