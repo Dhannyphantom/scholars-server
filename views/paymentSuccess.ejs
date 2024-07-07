@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transaction Successful</title>
+    <style>
+      body {
+        font-family: "Arial", sans-serif;
+        background: linear-gradient(to right, #6a11cb, #2575fc);
+        color: #ffffff;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        background-color: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 30px;
+        text-align: center;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+      }
+      h1 {
+        font-size: 2.5em;
+        margin-bottom: 20px;
+      }
+      p {
+        font-size: 1.2em;
+        margin: 10px 0;
+      }
+      .highlight {
+        color: #ffd700;
+        font-weight: bold;
+      }
+      .points {
+        background-color: #ffffff;
+        color: #6a11cb;
+        padding: 10px;
+        border-radius: 5px;
+        display: inline-block;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Transaction Successful!</h1>
+      <p>User Name: <span class="highlight"><%= userName %></span></p>
+      <p>Amount Paid: <span class="highlight">₦<%= amountPaid %></span></p>
+      <p class="points">Points Added: <%= pointsAdded %></p>
+      <p>Please click Finish session above</p>
+    </div>
+  </body>
+</html>

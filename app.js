@@ -13,6 +13,10 @@ const bodyParser = require("body-parser");
 const Joi = require("joi");
 Joi.objectId = require("joi-objectid")(Joi);
 
+// Set EJS as the template engine
+app.set("view engine", "ejs");
+app.set("views", path.join(__dirname, "views"));
+
 app.use(cors());
 //ROUTES AND CONTROLLERS
 const users = require("./routes/users");

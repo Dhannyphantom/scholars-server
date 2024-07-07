@@ -64,7 +64,14 @@ router.get("/subscription_callback", async (req, res) => {
 
     if (response.data.status) {
       // Handle successful payment
-      res.status(200).json({ status: "success", data: response.data });
+      console.log(response.data);
+      res.render("paymentSuccess", {
+        userName: "Dhannyphantom",
+        amountPaid: response.data.amount / 100,
+        pointsAdded: "30 days",
+      });
+      // award user subscription
+      // res.status(200).json({ status: "success", data: response.data });
     } else {
       // Handle failed payment
       res.status(400).json({ status: "failed", data: response.data });
