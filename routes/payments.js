@@ -1,6 +1,7 @@
 const https = require("https");
 const express = require("express");
 const auth = require("../middlewares/authRoutes");
+const axios = require("axios");
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ router.post("/subscribe", auth, async (req, res) => {
     port: 443,
     path: "/transaction/initialize",
     method: "POST",
-    callback_url: `${process.env.ADDRESS_ONLINE}/payments/subcription_callback`,
+    callback_url: `${process.env.ADDRESS_ONLINE}/payments/subscription_callback`,
     headers: {
       Authorization: `Bearer ${process.env.STACK_API}`,
       "Content-Type": "application/json",
@@ -48,7 +49,30 @@ router.post("/subscribe", auth, async (req, res) => {
 });
 
 router.get("/subscription_callback", async (req, res) => {
-  res.json({ success: true });
+  const { reference } = req.query;
+
+  try {
+    // Verify payment with Paystack
+    const response = await axios.get(
+      `https://api.paystack.co/transaction/verify/${reference}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.STACK_API}`,
+        },
+      }
+    );
+
+    if (response.data.status) {
+      // Handle successful payment
+      res.status(200).json({ status: "success", data: response.data });
+    } else {
+      // Handle failed payment
+      res.status(400).json({ status: "failed", data: response.data });
+    }
+  } catch (error) {
+    // Handle error
+    res.status(500).json({ status: "error", message: error.message });
+  }
 });
 
 module.exports = router;
