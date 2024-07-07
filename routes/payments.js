@@ -7,10 +7,11 @@ const router = express.Router();
 router.post("/subscribe", auth, async (req, res) => {
   const user = req.user.userId;
   const { email, amount } = req.body;
+  console.log({ body: req.body });
 
   const params = JSON.stringify({
-    email: "customer@email.com",
-    amount: "500000",
+    email,
+    amount,
   });
 
   const options = {
@@ -18,7 +19,7 @@ router.post("/subscribe", auth, async (req, res) => {
     port: 443,
     path: "/transaction/initialize",
     method: "POST",
-    callback_url: `${process.env.ADDRESS}:${process.env.PORT}/payments/success`,
+    callback_url: `${process.env.ADDRESS_ONLINE}/payments/subcription_callback`,
     headers: {
       Authorization: `Bearer ${process.env.STACK_API}`,
       "Content-Type": "application/json",
@@ -35,18 +36,18 @@ router.post("/subscribe", auth, async (req, res) => {
 
       resPaystack.on("end", () => {
         const payload = JSON.parse(data);
-        console.log(payload);
 
         res.json(payload);
       });
     })
     .on("error", (error) => {
-      console.log({ error });
-      res.status(422).json({ msg: "Error making server requests" });
+      res.status(422).json({ msg: "Error making server requests", err: error });
     });
 
   reqPaystack.write(params);
   reqPaystack.end();
 });
+
+router.get("/subcription_callback", async (req, res) => {});
 
 module.exports = router;
