@@ -23,7 +23,7 @@ const {
   userSelector,
 } = require("../models/User");
 const auth = require("../middlewares/authRoutes");
-const { getUploadUri } = require("../controllers/helpers");
+const { getUploadUri, fetchUser } = require("../controllers/helpers");
 
 const router = express.Router();
 
@@ -56,7 +56,9 @@ router.post("/register", async (req, res) => {
 
   await user.save();
 
-  res.header("x-auth-token", token).json({ token });
+  const userData = await fetchUser(user._id);
+
+  res.header("x-auth-token", token).json({ token, user: userData });
 });
 
 router.post("/login", async (req, res) => {
@@ -76,7 +78,9 @@ router.post("/login", async (req, res) => {
   if (!passValid) return res.status(400).json("Invalid profile details");
   const token = user.generateAuthToken();
 
-  res.header("x-auth-token", token).json({ token });
+  const userData = await fetchUser(user._id);
+
+  res.header("x-auth-token", token).json({ token, user: userData });
 });
 
 router.get("/user", auth, async (req, res) => {

@@ -4,6 +4,9 @@ const jwt = require("jsonwebtoken");
 
 const schema = mongoose.Schema;
 
+//
+const DEFAULT_SUB_MILLI = 1000 * 60 * 60 * 24 * 2; // 2 DAYS
+
 const mediaDataSchema = new schema({
   uri: {
     type: String,
@@ -25,6 +28,27 @@ const mediaDataSchema = new schema({
     required: true,
   },
   height: {
+    type: Number,
+    required: true,
+  },
+});
+
+const txHistorySchema = new schema({
+  tx_type: {
+    type: String,
+    enum: ["withdrawal", "subscription"],
+    required: true,
+  },
+  date: {
+    type: Date,
+    required: true,
+  },
+  message: {
+    type: String,
+    maxlength: 255,
+    required: true,
+  },
+  amount: {
     type: Number,
     required: true,
   },
@@ -110,7 +134,7 @@ const userSchema = new schema({
   points: {
     type: Number,
     min: 0,
-    default: 0, // CHANGE TO 20 AND GIVE 80 MORE WHEN ACCOUNT IS VERIFIED
+    default: 0,
   },
   gender: {
     type: String,
@@ -135,6 +159,20 @@ const userSchema = new schema({
     type: Boolean, // NOT FULLY FUNCTIONAL YET
     default: false,
   },
+  subscription: {
+    current: {
+      type: Date,
+      default: new Date(new Date().getMilliseconds() - DEFAULT_SUB_MILLI),
+    },
+    lastSub: {
+      type: Date,
+    },
+    isActive: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  transaction_history: [txHistorySchema],
   rank: {
     type: String,
     default: "beginner",
@@ -161,6 +199,10 @@ const userSchema = new schema({
 userSchema.methods.generateAuthToken = function () {
   return jwt.sign({ userId: this._id }, process.env.JWT_KEY);
 };
+
+userSchema.virtual("fullName").get(function () {
+  return `${this.firstName} ${this.lastName}`;
+});
 
 const validateReg = (user) => {
   const schema = Joi.object({
