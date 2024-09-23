@@ -103,7 +103,7 @@ router.post("/withdraw", auth, async (req, res) => {
     const transfer = await initiateTransfer(
       amount,
       recipient.data.recipient_code,
-      "Payment for Scholars points withdrawal"
+      "Payment for Scholax points withdrawal"
     );
     console.log("Transfer:", transfer);
     res.status(200).json({ transfer });
