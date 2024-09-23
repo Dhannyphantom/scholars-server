@@ -56,7 +56,7 @@ router.post("/register", async (req, res) => {
 
   await user.save();
 
-  const userData = await fetchUser(user._id);
+  const userData = await User.findById(user._id).select(userSelector);
 
   res.header("x-auth-token", token).json({ token, user: userData });
 });
@@ -78,7 +78,7 @@ router.post("/login", async (req, res) => {
   if (!passValid) return res.status(400).json("Invalid profile details");
   const token = user.generateAuthToken();
 
-  const userData = await fetchUser(user._id);
+  const userData = await User.findById(user._id).select(userSelector);
 
   res.header("x-auth-token", token).json({ token, user: userData });
 });

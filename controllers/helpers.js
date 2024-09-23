@@ -1,6 +1,6 @@
 const _NET = process.env.NET_DEV;
-const image_exts = ["jpg", "jpeg", "png", "gif"];
-const User = require("../models/User");
+// const image_exts = ["jpg", "jpeg", "png", "gif"];
+const User = require("../models/User.js");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
@@ -62,7 +62,8 @@ module.exports.getUploadUri = (imageData, images, bucketName) => {
 };
 
 module.exports.fetchUser = async (userId) => {
-  const userData = await User.findById(userId).select("-password -__v");
+  console.log({ User });
+  const userData = await User.findOne({ _id: userId }).select("-password -__v");
 
   return userData ?? null;
 };
