@@ -136,6 +136,11 @@ const userSchema = new schema({
     min: 0,
     default: 0,
   },
+  streak: {
+    type: Number,
+    min: 0,
+    default: 0,
+  },
   gender: {
     type: String,
     enum: ["male", "Male", "female", "Female", "others", "Others"],

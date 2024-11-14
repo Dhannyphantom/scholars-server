@@ -7,8 +7,7 @@ let connectUri = "";
 const currentIp = process.env.ADDRESS;
 
 process.env.NET_DEV === "offline"
-  ? (connectUri =
-      process.env.MONGO_LOCAL + currentIp.replaceAll(".", "").slice(-6))
+  ? (connectUri = process.env.MONGO_LOCAL)
   : (connectUri = process.env.MONGO_URI);
 
 module.exports = () => {
