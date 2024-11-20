@@ -105,21 +105,25 @@ const chargeCard = async (data) => {
   }
 };
 
-const initTrans = async () => {
+const initTrans = async (data = {}) => {
+  const { account_bank, account_number } = data;
+  const tx_ref = nanoid();
+
   try {
     const payload = {
       account_bank: "044", //This is the recipient bank code. Get list here :https://developer.flutterwave.com/v3.0/reference#get-all-banks
       account_number: "0690000040",
-      amount: 5500,
-      narration: "Akhlm Pstmn Trnsfr xx007",
+      amount: 2500,
+      narration: "Guru Points withdrawal. Enjoy!",
       currency: "NGN",
-      reference: "akhlm-pstmnpyt-r02ens007_PMCKDU_1", //This is a merchant's unique reference for the transfer, it can be used to query for the status of the transfer
+      reference: tx_ref, //This is a merchant's unique reference for the transfer, it can be used to query for the status of the transfer
       callback_url: "https://www.flutterwave.com/ng/",
       debit_currency: "NGN",
     };
 
     const response = await flw.Transfer.initiate(payload);
     console.log(response);
+    return response;
   } catch (error) {
     console.log(error);
   }
@@ -156,10 +160,10 @@ const initBulk = async () => {
   }
 };
 
-const getFee = async () => {
+const getFee = async (amount) => {
   try {
     const payload = {
-      amount: "12500",
+      amount,
       currency: "NGN",
     };
 

@@ -7,7 +7,7 @@ const {
   createRecipient,
   initiateTransfer,
 } = require("../controllers/pstack");
-const { chargeCard } = require("../controllers/flw");
+const { chargeCard, initTrans } = require("../controllers/flw");
 
 const router = express.Router();
 
@@ -25,28 +25,12 @@ router.post("/withdraw", auth, async (req, res) => {
   const userId = req.user.userId;
   const { fullName, accountNumber, bankCode, amount } = req.body;
 
-  // // 'John Doe', '0123456789', '058'
-  console.log({ body: req.body });
-  // const accountDetails = await verifyBankAccount({
-  //   account_number: accountNumber,
-  //   bank_code: bankCode,
-  // });
-
-  // res.send(accountDetails);
-
-  // get User Info and check if amount exceed the user's current amount
-
   try {
     // Replace with actual details
-    const recipient = await createRecipient(fullName, accountNumber, bankCode);
-    console.log("Recipient:", recipient);
+    const transfer = await initTrans();
+    // const recipient = await createRecipient(fullName, accountNumber, bankCode);
+    // console.log("Response:", recipient);
 
-    const transfer = await initiateTransfer(
-      amount,
-      recipient.data.recipient_code,
-      "Payment for Scholax points withdrawal"
-    );
-    console.log("Transfer:", transfer);
     res.status(200).json({ transfer });
   } catch (error) {
     console.error("Error transferring funds:", error);
