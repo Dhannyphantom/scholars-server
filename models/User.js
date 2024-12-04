@@ -34,7 +34,7 @@ const mediaDataSchema = new schema({
 });
 
 const txHistorySchema = new schema({
-  tx_type: {
+  type: {
     type: String,
     enum: ["withdrawal", "subscription"],
     required: true,
@@ -44,6 +44,16 @@ const txHistorySchema = new schema({
     required: true,
   },
   message: {
+    type: String,
+    maxlength: 255,
+    required: true,
+  },
+  tx_ref: {
+    type: String,
+    maxlength: 255,
+    required: true,
+  },
+  flw_ref: {
     type: String,
     maxlength: 255,
     required: true,
@@ -169,7 +179,7 @@ const userSchema = new schema({
       type: Date,
       default: new Date(new Date().getMilliseconds() - DEFAULT_SUB_MILLI),
     },
-    lastSub: {
+    expiry: {
       type: Date,
     },
     isActive: {
@@ -177,7 +187,7 @@ const userSchema = new schema({
       default: false,
     },
   },
-  transaction_history: [txHistorySchema],
+  tx_history: [txHistorySchema],
   rank: {
     type: String,
     default: "beginner",

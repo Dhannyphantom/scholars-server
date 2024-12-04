@@ -1,22 +1,57 @@
 const express = require("express");
 const auth = require("../middlewares/authRoutes");
 const axios = require("axios");
-const {
-  pStackOptions,
-  verifyBankAccount,
-  createRecipient,
-  initiateTransfer,
-} = require("../controllers/pstack");
+// const {
+//   pStackOptions,
+//   verifyBankAccount,
+//   createRecipient,
+//   initiateTransfer,
+// } = require("../controllers/pstack");
 const { chargeCard, initTrans } = require("../controllers/flw");
+const { User } = require("../models/User");
+
+const SUB_MILLI = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const router = express.Router();
 
 router.post("/subscribe", auth, async (req, res) => {
-  // const user = req.user.userId;
+  const userId = req.user.userId;
   const data = req.body;
   console.log({ body: req.body });
+  let flwData;
 
-  const flwData = await chargeCard(data);
+  const userInfo = await User.findById(userId);
+
+  try {
+    flwData = await chargeCard(data);
+  } catch (error) {
+    return res.status(422).send({ msg: "Payment error", data: error });
+  }
+
+  if (flwData?.status == "success") {
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          subscription: {
+            current: new Date(),
+            expiry: new Date(new Date().getMilliseconds() + SUB_MILLI),
+            isActive: true,
+          },
+        },
+        $push: {
+          tx_history: {
+            type: "subscription",
+            date: new Date(),
+            message: "+30 days",
+            amount: Number.parseInt(data?.amount),
+            tx_ref: flwData.tx_ref,
+            flw_ref: flwData.flw_ref,
+          },
+        },
+      }
+    );
+  }
 
   res.send(flwData);
 });
@@ -75,7 +110,9 @@ router.get("/subscription_callback", async (req, res) => {
 router.get("/subscription_redirect", async (req, res) => {
   const {} = req.query;
 
-  console.log("Redirected!");
+  console.log("Route Redirected!");
+  console.log("Route Redirected!");
+  console.log("Route Redirected!");
   res.send("Redirected");
 });
 

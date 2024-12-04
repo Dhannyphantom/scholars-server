@@ -1,6 +1,7 @@
 const Flutterwave = require("flutterwave-node-v3");
 const uuid = require("uuid");
 const nanoid = uuid.v4;
+const axios = require("axios");
 
 const flw = new Flutterwave(
   process.env.FLW_PUBLIC_KEY,
@@ -33,14 +34,14 @@ const chargeCard = async (data) => {
     email,
     pin,
     otp,
+    flw_ref,
+    tx_ref,
     card_number,
     cvv,
     expiry_month,
     expiry_year,
     fullname,
     phone_number,
-    flw_ref,
-    tx_ref,
   } = data;
   const custom_ref = nanoid();
   const payload = {
@@ -49,11 +50,11 @@ const chargeCard = async (data) => {
     expiry_month: "09",
     expiry_year: "31",
     currency: "NGN",
-    amount: amount || "100",
-    redirect_url: "http://localhost:3700/payments/subscribe_redirect",
-    fullname: "Olufemi Obafunmiso",
-    email: email || "olufemi@flw.com",
-    phone_number: "0902620185",
+    amount: amount || "2000",
+    redirect_url: "http://192.168.28.9:3700/payments/subscribe_redirect",
+    fullname: "Daniel Olojo",
+    email: email || "youngskillzzz@gmail.com",
+    phone_number: "07081713909",
     tx_ref: tx_ref || custom_ref, // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
     enckey: process.env.FLW_ENC_KEY,
   };
@@ -69,39 +70,63 @@ const chargeCard = async (data) => {
         pin: pin,
       };
       if (otp && flw_ref) {
-        const callValidate = await flw.Charge.validate({
-          otp,
-          // otp: "12345",
-          flw_ref,
-        });
-        console.log("TRANSACTION VALIDATED", callValidate);
+        try {
+          const callValidate = await flw.Charge.validate({
+            otp,
+            // otp: "12345",
+            flw_ref,
+          });
+          console.log("TRANSACTION VALIDATED", callValidate);
+        } catch (err) {
+          return {
+            msg: "OTP verification failed",
+            flw_ref,
+            tx_ref,
+            status: "failed",
+            error: err,
+          };
+        }
       }
 
       const reCallCharge = await flw.Charge.card(payload2);
 
       const gen_ref = reCallCharge?.data?.flw_ref;
-      console.log({ gen_ref });
 
       if (!otp) {
         return {
           msg: reCallCharge?.data?.processor_response,
           flw_ref: gen_ref,
           tx_ref: payload.tx_ref,
+          status: "verify",
         };
       }
     }
-    if (response.meta.authorization.mode === "redirect") {
-      var url = response.meta.authorization.redirect;
-      open(url);
-      return {
-        msg: "Transaction successful",
-        flw_ref,
-      };
-    }
+    // if (response.meta.authorization.mode === "redirect") {
+    //   console.log("redirecting!");
+    //   var url = response.meta.authorization.redirect;
+    //   // open(url);
 
-    console.log("SUCCESSFUL TRANSACTION", response);
+    //   const res = await axios.get(url);
+    //   return {
+    //     msg: "Transaction successful",
+    //     flw_ref,
+    //   };
+    // }
+
+    return {
+      msg: "Transaction successful",
+      flw_ref,
+      tx_ref,
+      status: "success",
+    };
   } catch (error) {
-    console.log(error);
+    return {
+      msg: "Transaction failed",
+      flw_ref,
+      tx_ref,
+      status: "failed",
+      error,
+    };
   }
 };
 
