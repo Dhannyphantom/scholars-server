@@ -43,3 +43,15 @@ app.get("/", (req, res) => {
 
 const port = process.env.PORT;
 http.listen(port, () => console.log(`Server running on port ${port}....`));
+
+// Global Error Handlers
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+  // Optional: Shut down gracefully or restart
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection:", reason?.code);
+  // Optional: Shut down gracefully or restart
+});

@@ -17,16 +17,10 @@ const router = express.Router();
 router.post("/subscribe", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  console.log({ body: req.body });
   let flwData;
 
-  const userInfo = await User.findById(userId);
-
-  try {
-    flwData = await chargeCard(data);
-  } catch (error) {
-    return res.status(422).send({ msg: "Payment error", data: error });
-  }
+  // const userInfo = await User.findById(userId);
+  flwData = await chargeCard(data);
 
   if (flwData?.status == "success") {
     await User.updateOne(
@@ -35,7 +29,7 @@ router.post("/subscribe", auth, async (req, res) => {
         $set: {
           subscription: {
             current: new Date(),
-            expiry: new Date(new Date().getMilliseconds() + SUB_MILLI),
+            expiry: new Date(new Date().getTime() + SUB_MILLI),
             isActive: true,
           },
         },
@@ -53,7 +47,7 @@ router.post("/subscribe", auth, async (req, res) => {
     );
   }
 
-  res.send(flwData);
+  return res.send(flwData);
 });
 
 router.post("/withdraw", auth, async (req, res) => {
@@ -75,6 +69,8 @@ router.post("/withdraw", auth, async (req, res) => {
 
 router.get("/subscription_callback", async (req, res) => {
   const { reference } = req.query;
+
+  return res.send("ok");
 
   try {
     // Verify payment with Paystack

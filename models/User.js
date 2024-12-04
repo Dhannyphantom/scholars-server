@@ -127,19 +127,10 @@ const userSchema = new schema({
     trim: true,
   },
   contact: {
-    number: {
-      type: Number,
-      trim: true,
-    },
-    code: {
-      type: String,
-      trim: true,
-    },
-    status: {
-      type: String,
-      enum: ["public", "private", "friends"],
-      default: "private",
-    },
+    type: String,
+    minlength: 4,
+    maxlength: 15,
+    trim: true,
   },
   points: {
     type: Number,
@@ -150,6 +141,10 @@ const userSchema = new schema({
     type: Number,
     min: 0,
     default: 0,
+  },
+  school: {
+    type: schema.Types.ObjectId,
+    ref: "School",
   },
   gender: {
     type: String,

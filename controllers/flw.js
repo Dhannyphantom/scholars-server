@@ -1,13 +1,13 @@
 const Flutterwave = require("flutterwave-node-v3");
+
 const uuid = require("uuid");
 const nanoid = uuid.v4;
-const axios = require("axios");
+// const axios = require("axios");
 
 const flw = new Flutterwave(
   process.env.FLW_PUBLIC_KEY,
   process.env.FLW_SECRET_KEY
 );
-
 const cardEndpoint = "https://api.flutterwave.com/v3/charges?type=card";
 
 const chargeCardV2 = async (amount, email) => {
@@ -50,9 +50,9 @@ const chargeCard = async (data) => {
     expiry_month: "09",
     expiry_year: "31",
     currency: "NGN",
-    amount: amount || "2000",
-    redirect_url: "http://192.168.28.9:3700/payments/subscribe_redirect",
-    fullname: "Daniel Olojo",
+    amount: amount || "1000",
+    redirect_url: "http://localhost:3700/payments/subscription_redirect",
+    fullname: "John Paul",
     email: email || "youngskillzzz@gmail.com",
     phone_number: "07081713909",
     tx_ref: tx_ref || custom_ref, // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
@@ -70,22 +70,12 @@ const chargeCard = async (data) => {
         pin: pin,
       };
       if (otp && flw_ref) {
-        try {
-          const callValidate = await flw.Charge.validate({
-            otp,
-            // otp: "12345",
-            flw_ref,
-          });
-          console.log("TRANSACTION VALIDATED", callValidate);
-        } catch (err) {
-          return {
-            msg: "OTP verification failed",
-            flw_ref,
-            tx_ref,
-            status: "failed",
-            error: err,
-          };
-        }
+        const callValidate = await flw.Charge.validate({
+          otp,
+          // otp: "12345",
+          flw_ref,
+        });
+        console.log("TRANSACTION VALIDATED", callValidate);
       }
 
       const reCallCharge = await flw.Charge.card(payload2);
@@ -126,6 +116,33 @@ const chargeCard = async (data) => {
       tx_ref,
       status: "failed",
       error,
+    };
+  }
+};
+
+const chargeCardX = async (data) => {
+  const payload = {
+    card_number: "5531886652142950",
+    cvv: "564",
+    expiry_month: "09",
+    expiry_year: "25",
+    currency: "NGN",
+    amount: "100",
+    redirect_url: "https://www.google.com",
+    fullname: "Olufemi Obafunmiso",
+    email: "olufemi@flw.com",
+    phone_number: "0902620185",
+    enckey: process.env.FLW_ENC_KEY,
+    tx_ref: "MC-32444ee--4eerye4euee3rerds4423e43e", // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
+  };
+  try {
+    const response = await flw.Charge.card(payload);
+    console.log(response);
+  } catch (err) {
+    return {
+      msg: "Transaction Failed",
+      status: "failed",
+      error: err,
     };
   }
 };
