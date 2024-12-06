@@ -4,6 +4,7 @@ const User = require("../models/User.js");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
+const GT_VALUE = 1000;
 
 module.exports.getUploadUri = (imageData, images, bucketName) => {
   let imgUri, thumbUri;
@@ -61,9 +62,46 @@ module.exports.getUploadUri = (imageData, images, bucketName) => {
   }
 };
 
+const getCurrencyAmount = (number) => {
+  if (number && typeof number == "number") {
+    return `₦${Number(number).toLocaleString()}`;
+  } else {
+    return null;
+  }
+};
+
+const formatPoints = (number) => {
+  // if (number && typeof number == "number") {
+  return `${number} GT`;
+  // return `${Number(number).toLocaleString()} TK`;
+  // } else {
+  //   return null;
+  // }
+};
+
+const calculatePointsAmount = (value) => {
+  // reverse is false, value = "points"
+  // reverse is true, value = "amount"
+  // N1 = 1000 GT;
+  // x = points;
+  const amount = (value / GT_VALUE).toPrecision(2);
+  const pointsVal = Math.floor(value * GT_VALUE);
+  return {
+    amount,
+    format: getCurrencyAmount(Number(amount)),
+    point: pointsVal,
+    pointFormat: formatPoints(pointsVal),
+  };
+};
+
 module.exports.fetchUser = async (userId) => {
-  console.log({ User });
   const userData = await User.findOne({ _id: userId }).select("-password -__v");
 
   return userData ?? null;
+};
+
+module.exports = {
+  formatPoints,
+  calculatePointsAmount,
+  getCurrencyAmount,
 };

@@ -78,6 +78,36 @@ const userSchema = new schema({
     enum: ["teacher", "student", "professional"],
     required: true,
   },
+  accountDetail: {
+    acct_number: {
+      type: String,
+      maxlength: 50,
+    },
+    bank_code: {
+      type: String,
+      maxlength: 4,
+    },
+    bank_name: {
+      type: String,
+      maxlength: 255,
+    },
+    card_number: {
+      type: String,
+      maxlength: 80,
+    },
+    card_cvv: {
+      type: String,
+      maxlength: 4,
+    },
+    card_exp_month: {
+      type: String,
+      maxlength: 4,
+    },
+    card_exp_year: {
+      type: String,
+      maxlength: 4,
+    },
+  },
   birthday: {
     type: Date,
     required: false,
@@ -137,6 +167,11 @@ const userSchema = new schema({
     min: 0,
     default: 0,
   },
+  totalPoints: {
+    type: Number,
+    min: 0,
+    default: 0,
+  },
   streak: {
     type: Number,
     min: 0,
@@ -172,10 +207,11 @@ const userSchema = new schema({
   subscription: {
     current: {
       type: Date,
-      default: new Date(new Date().getMilliseconds() - DEFAULT_SUB_MILLI),
+      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
     },
     expiry: {
       type: Date,
+      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
     },
     isActive: {
       type: Boolean,
@@ -213,6 +249,9 @@ userSchema.methods.generateAuthToken = function () {
 userSchema.virtual("fullName").get(function () {
   return `${this.firstName} ${this.lastName}`;
 });
+
+userSchema.set("toJSON", { virtuals: true });
+userSchema.set("toObject", { virtuals: true });
 
 const validateReg = (user) => {
   const schema = Joi.object({

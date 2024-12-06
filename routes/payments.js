@@ -7,8 +7,9 @@ const axios = require("axios");
 //   createRecipient,
 //   initiateTransfer,
 // } = require("../controllers/pstack");
-const { chargeCard, initTrans } = require("../controllers/flw");
+const { chargeCard, initTrans, verifyTx } = require("../controllers/flw");
 const { User } = require("../models/User");
+const { calculatePointsAmount } = require("../controllers/helpers");
 
 const SUB_MILLI = 1000 * 60 * 60 * 24 * 30; // 30 days
 
@@ -19,8 +20,11 @@ router.post("/subscribe", auth, async (req, res) => {
   const data = req.body;
   let flwData;
 
-  // const userInfo = await User.findById(userId);
-  flwData = await chargeCard(data);
+  const userInfo = await User.findById(userId);
+  if (!userInfo) return res.status(422).send("User not found!");
+  const { email, contact, fullName } = userInfo;
+
+  flwData = await chargeCard({ ...data, email, contact, fullName });
 
   if (flwData?.status == "success") {
     await User.updateOne(
@@ -38,7 +42,7 @@ router.post("/subscribe", auth, async (req, res) => {
             type: "subscription",
             date: new Date(),
             message: "+30 days",
-            amount: Number.parseInt(data?.amount),
+            amount: Number.parseInt(data?.sub_amount),
             tx_ref: flwData.tx_ref,
             flw_ref: flwData.flw_ref,
           },
@@ -52,15 +56,31 @@ router.post("/subscribe", auth, async (req, res) => {
 
 router.post("/withdraw", auth, async (req, res) => {
   const userId = req.user.userId;
-  const { fullName, accountNumber, bankCode, amount } = req.body;
+  // const { fullName, accountNumber, bankCode, amount } = req.body;
 
   try {
     // Replace with actual details
-    const transfer = await initTrans();
-    // const recipient = await createRecipient(fullName, accountNumber, bankCode);
-    // console.log("Response:", recipient);
+    const transfer = await initTrans(req.body);
 
-    res.status(200).json({ transfer });
+    if (transfer?.status == "success") {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $push: {
+            tx_history: {
+              type: "withdrawal",
+              date: new Date(),
+              message: `-${calculatePointsAmount(transfer?.data?.amount)}`,
+              amount: Number.parseInt(transfer?.data?.amount),
+              tx_ref: transfer.data.reference,
+              flw_ref: transfer.data?.id,
+            },
+          },
+        }
+      );
+    }
+
+    return res.send(transfer);
   } catch (error) {
     console.error("Error transferring funds:", error);
     return res.status(500).json({ error });
@@ -101,6 +121,14 @@ router.get("/subscription_callback", async (req, res) => {
     // Handle error
     res.status(500).json({ status: "error", message: error.message });
   }
+});
+
+router.post("/verify_tx", auth, async (req, res) => {
+  const { txId } = req.body;
+
+  const resData = await verifyTx(txId);
+
+  res.send(resData);
 });
 
 router.get("/subscription_redirect", async (req, res) => {

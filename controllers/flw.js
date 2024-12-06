@@ -30,31 +30,36 @@ const chargeCardV2 = async (amount, email) => {
 
 const chargeCard = async (data) => {
   const {
-    amount,
+    sub_amount,
     email,
     pin,
     otp,
     flw_ref,
     tx_ref,
     card_number,
-    cvv,
-    expiry_month,
-    expiry_year,
-    fullname,
-    phone_number,
+    card_cvv,
+    card_exp_month,
+    card_exp_year,
+    fullName,
+    contact,
   } = data;
   const custom_ref = nanoid();
+
   const payload = {
-    card_number: "5531886652142950",
-    cvv: "564",
-    expiry_month: "09",
-    expiry_year: "31",
+    card_number,
+    // card_number: "5531886652142950",
+    cvv: card_cvv,
+    // cvv: "564",
+    expiry_month: card_exp_month,
+    // expiry_month: "09",
+    expiry_year: card_exp_year,
+    // expiry_year: "31",
     currency: "NGN",
-    amount: amount || "1000",
+    amount: sub_amount,
     redirect_url: "http://localhost:3700/payments/subscription_redirect",
-    fullname: "John Paul",
-    email: email || "youngskillzzz@gmail.com",
-    phone_number: "07081713909",
+    fullname: fullName,
+    email: email,
+    phone_number: contact,
     tx_ref: tx_ref || custom_ref, // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
     enckey: process.env.FLW_ENC_KEY,
   };
@@ -62,7 +67,7 @@ const chargeCard = async (data) => {
   try {
     const response = await flw.Charge.card(payload);
     // console.log(response);
-    if (response.meta.authorization.mode === "pin") {
+    if (response.meta.authorization.mode === "pin" && pin) {
       let payload2 = payload;
       payload2.authorization = {
         mode: "pin",
@@ -90,6 +95,13 @@ const chargeCard = async (data) => {
           status: "verify",
         };
       }
+    } else if (response.meta.authorization.mode === "pin" && !pin) {
+      return {
+        msg: "Enter your card pin",
+        tx_ref: payload.tx_ref,
+        amount: payload.amount,
+        status: "pin",
+      };
     }
     // if (response.meta.authorization.mode === "redirect") {
     //   console.log("redirecting!");
@@ -120,35 +132,8 @@ const chargeCard = async (data) => {
   }
 };
 
-const chargeCardX = async (data) => {
-  const payload = {
-    card_number: "5531886652142950",
-    cvv: "564",
-    expiry_month: "09",
-    expiry_year: "25",
-    currency: "NGN",
-    amount: "100",
-    redirect_url: "https://www.google.com",
-    fullname: "Olufemi Obafunmiso",
-    email: "olufemi@flw.com",
-    phone_number: "0902620185",
-    enckey: process.env.FLW_ENC_KEY,
-    tx_ref: "MC-32444ee--4eerye4euee3rerds4423e43e", // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
-  };
-  try {
-    const response = await flw.Charge.card(payload);
-    console.log(response);
-  } catch (err) {
-    return {
-      msg: "Transaction Failed",
-      status: "failed",
-      error: err,
-    };
-  }
-};
-
 const initTrans = async (data = {}) => {
-  const { account_bank, account_number } = data;
+  const { account_bank, account_number, fullName } = data;
   const tx_ref = nanoid();
 
   try {
@@ -160,7 +145,12 @@ const initTrans = async (data = {}) => {
       currency: "NGN",
       reference: tx_ref, //This is a merchant's unique reference for the transfer, it can be used to query for the status of the transfer
       callback_url: "https://www.flutterwave.com/ng/",
+      beneficiary_name: fullName ?? "Dan Olojo",
       debit_currency: "NGN",
+      meta: {
+        sender: "Guru App",
+        sender_email_address: "guruapp4scholars@gmail.com",
+      },
     };
 
     const response = await flw.Transfer.initiate(payload);
@@ -216,7 +206,20 @@ const getFee = async (amount) => {
   }
 };
 
+const verifyTx = async (txId) => {
+  try {
+    const payload = { id: txId };
+    //This is the transaction unique identifier. It is returned in the initiate transaction call as data.id}
+    const response = await flw.Transaction.verify(payload);
+    console.log(response);
+    return response;
+  } catch (error) {
+    console.log(error);
+  }
+};
+
 module.exports = {
   initTrans,
   chargeCard,
+  verifyTx,
 };
