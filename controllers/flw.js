@@ -218,8 +218,34 @@ const verifyTx = async (txId) => {
   }
 };
 
+const fetchBanks = async () => {
+  try {
+    const res = await flw.Bank.country({ country: "NG" });
+    return res;
+  } catch (error) {
+    return {
+      status: "error",
+      error,
+    };
+  }
+};
+
+const verifyAccount = async (data) => {
+  try {
+    const res = await flw.Misc.verify_Account(data);
+    return res;
+  } catch (error) {
+    return {
+      error,
+      status: "error",
+    };
+  }
+};
+
 module.exports = {
   initTrans,
   chargeCard,
   verifyTx,
+  fetchBanks,
+  verifyAccount,
 };

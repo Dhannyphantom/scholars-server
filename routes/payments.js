@@ -7,7 +7,12 @@ const axios = require("axios");
 //   createRecipient,
 //   initiateTransfer,
 // } = require("../controllers/pstack");
-const { chargeCard, initTrans, verifyTx } = require("../controllers/flw");
+const {
+  chargeCard,
+  initTrans,
+  verifyTx,
+  fetchBanks,
+} = require("../controllers/flw");
 const { User } = require("../models/User");
 const { calculatePointsAmount } = require("../controllers/helpers");
 
@@ -121,6 +126,12 @@ router.get("/subscription_callback", async (req, res) => {
     // Handle error
     res.status(500).json({ status: "error", message: error.message });
   }
+});
+
+router.get("/banks", auth, async (req, res) => {
+  const banks = await fetchBanks();
+
+  res.send(banks);
 });
 
 router.post("/verify_tx", auth, async (req, res) => {
