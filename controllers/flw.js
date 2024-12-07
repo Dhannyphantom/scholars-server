@@ -8,6 +8,7 @@ const flw = new Flutterwave(
   process.env.FLW_PUBLIC_KEY,
   process.env.FLW_SECRET_KEY
 );
+const isOffline = process.env.NET_DEV;
 const cardEndpoint = "https://api.flutterwave.com/v3/charges?type=card";
 
 const chargeCardV2 = async (amount, email) => {
@@ -133,14 +134,15 @@ const chargeCard = async (data) => {
 };
 
 const initTrans = async (data = {}) => {
-  const { account_bank, account_number, fullName } = data;
+  const { acct_number, bank, amount, fullName } = data;
+
   const tx_ref = nanoid();
 
   try {
     const payload = {
-      account_bank: "044", //This is the recipient bank code. Get list here :https://developer.flutterwave.com/v3.0/reference#get-all-banks
-      account_number: "0690000040",
-      amount: 2500,
+      account_bank: isOffline ? "044" : bank?.code, //This is the recipient bank code. Get list here :https://developer.flutterwave.com/v3.0/reference#get-all-banks
+      account_number: isOffline ? "0690000040" : acct_number,
+      amount: amount || 500,
       narration: "Guru Points withdrawal. Enjoy!",
       currency: "NGN",
       reference: tx_ref, //This is a merchant's unique reference for the transfer, it can be used to query for the status of the transfer
@@ -154,7 +156,6 @@ const initTrans = async (data = {}) => {
     };
 
     const response = await flw.Transfer.initiate(payload);
-    console.log(response);
     return response;
   } catch (error) {
     console.log(error);
@@ -230,9 +231,13 @@ const fetchBanks = async () => {
   }
 };
 
-const verifyAccount = async (data) => {
+const verifyAccount = async (data, test = false) => {
+  const payload = test
+    ? { account_number: "0690000032", account_bank: "044" }
+    : data;
   try {
-    const res = await flw.Misc.verify_Account(data);
+    const res = await flw.Misc.verify_Account(payload);
+
     return res;
   } catch (error) {
     return {

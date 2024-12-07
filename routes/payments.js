@@ -12,6 +12,7 @@ const {
   initTrans,
   verifyTx,
   fetchBanks,
+  verifyAccount,
 } = require("../controllers/flw");
 const { User } = require("../models/User");
 const { calculatePointsAmount } = require("../controllers/helpers");
@@ -61,11 +62,15 @@ router.post("/subscribe", auth, async (req, res) => {
 
 router.post("/withdraw", auth, async (req, res) => {
   const userId = req.user.userId;
+  const userInfo = await User.findById(userId);
   // const { fullName, accountNumber, bankCode, amount } = req.body;
 
   try {
     // Replace with actual details
-    const transfer = await initTrans(req.body);
+    const transfer = await initTrans({
+      ...req.body,
+      fullName: userInfo.fullName,
+    });
 
     if (transfer?.status == "success") {
       await User.updateOne(
@@ -132,6 +137,17 @@ router.get("/banks", auth, async (req, res) => {
   const banks = await fetchBanks();
 
   res.send(banks);
+});
+
+router.post("/verify_account", auth, async (req, res) => {
+  const { bank, acct_number } = req.body;
+  const payload = {
+    account_number: acct_number,
+    account_bank: bank?.code,
+  };
+  const detail = await verifyAccount(payload, true);
+
+  res.send(detail);
 });
 
 router.post("/verify_tx", auth, async (req, res) => {
