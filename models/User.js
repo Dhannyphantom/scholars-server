@@ -247,7 +247,9 @@ userSchema.methods.generateAuthToken = function () {
 };
 
 userSchema.virtual("fullName").get(function () {
-  return `${this.firstName} ${this.lastName}`;
+  if (Boolean(this.firsName) && Boolean(this.lastName)) {
+    return `${this.firstName} ${this.lastName}`;
+  }
 });
 
 userSchema.set("toJSON", { virtuals: true });
@@ -257,6 +259,7 @@ const validateReg = (user) => {
   const schema = Joi.object({
     username: Joi.string().required().min(4).max(15).trim().lowercase(),
     accountType: Joi.string().required().max(255).alphanum(),
+    referral: Joi.string().optional().max(255).alphanum(),
     email: Joi.string().required().min(4).max(255).email().trim(),
     password: Joi.string().required().min(8).max(255).trim(),
   });
