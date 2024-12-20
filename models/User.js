@@ -167,6 +167,11 @@ const userSchema = new schema({
     min: 0,
     default: 0,
   },
+  preffix: {
+    type: String,
+    required: false,
+    enum: ["mr.", "ms.", "mrs."],
+  },
   totalPoints: {
     type: Number,
     min: 0,

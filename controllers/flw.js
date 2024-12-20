@@ -9,25 +9,6 @@ const flw = new Flutterwave(
   process.env.FLW_SECRET_KEY
 );
 const isOffline = process.env.NET_DEV;
-const cardEndpoint = "https://api.flutterwave.com/v3/charges?type=card";
-
-const chargeCardV2 = async (amount, email) => {
-  const details = {
-    card_number: "5531886652142950",
-    cvv: "564",
-    expiry_month: "09",
-    expiry_year: "32",
-    currency: "NGN",
-    amount: String(amount) || "100",
-    fullname: "Example User",
-    email: email || "user@example.com",
-    tx_ref: "MC5FSJFadj",
-    redirect_url: "https://www,flutterwave.ng",
-    enckey: process.env.FLW_ENC_KEY,
-  };
-  const data = await flw.Charge.card(details);
-  return data;
-};
 
 const chargeCard = async (data) => {
   const {
@@ -57,17 +38,20 @@ const chargeCard = async (data) => {
     // expiry_year: "31",
     currency: "NGN",
     amount: sub_amount,
-    redirect_url: "http://localhost:3700/payments/subscription_redirect",
-    fullname: fullName,
+    redirect_url:
+      "https://scholars-server.onrender.com/payments/subscription_redirect",
+    fullname: fullName ?? "John Doe",
     email: email,
     phone_number: contact,
     tx_ref: tx_ref || custom_ref, // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
     enckey: process.env.FLW_ENC_KEY,
   };
 
+  console.log({ payload });
+
   try {
     const response = await flw.Charge.card(payload);
-    // console.log(response);
+    console.log({ response });
     if (response.meta.authorization.mode === "pin" && pin) {
       let payload2 = payload;
       payload2.authorization = {
