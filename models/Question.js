@@ -4,7 +4,7 @@ const Joi = require("joi");
 const schema = mongoose.Schema;
 
 const QuestionSchema = new schema({
-  title: {
+  question: {
     type: String,
     required: true,
     trim: true,
@@ -25,6 +25,14 @@ const QuestionSchema = new schema({
   subject: {
     type: schema.Types.ObjectId,
     ref: "Subject",
+  },
+  categories: {
+    type: [String],
+    required: true,
+  },
+  isTheory: {
+    type: Boolean,
+    default: false,
   },
   timer: {
     type: Number,
