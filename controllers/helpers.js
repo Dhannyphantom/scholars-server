@@ -94,6 +94,8 @@ const calculatePointsAmount = (value) => {
   };
 };
 
+const classEnums = ["jss1", "jss2", "jss3", "ss1", "ss2", "ss3"];
+
 module.exports.fetchUser = async (userId) => {
   const userData = await User.findOne({ _id: userId }).select("-password -__v");
 
@@ -104,4 +106,5 @@ module.exports = {
   formatPoints,
   calculatePointsAmount,
   getCurrencyAmount,
+  classEnums,
 };

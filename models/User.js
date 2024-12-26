@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Joi = require("joi");
 const jwt = require("jsonwebtoken");
+const { classEnums } = require("../controllers/helpers");
 
 const schema = mongoose.Schema;
 
@@ -64,6 +65,110 @@ const txHistorySchema = new schema({
   },
 });
 
+const rewardSchema = new schema({
+  title: {
+    type: String,
+    required: true,
+  },
+  point: {
+    type: Number,
+    required: true,
+  },
+  claimed: {
+    type: Boolean,
+    default: false,
+  },
+});
+
+const quotaSchema = new schema({
+  last_update: {
+    type: Date,
+    default: Date.now,
+  },
+  daily_update: {
+    type: Date,
+    default: Date.now,
+  },
+  daily_questions: {
+    type: [schema.Types.ObjectId],
+    ref: "Question",
+  },
+  subjects: {
+    subject: {
+      type: [schema.Types.ObjectId],
+      ref: "Subject",
+    },
+
+    questions: {
+      type: [schema.Types.ObjectId],
+      ref: "Question",
+    },
+  },
+});
+
+const quizSchema = new schema({
+  status: {
+    type: String,
+    enum: ["active", "inactive"],
+  },
+  subject: {
+    type: schema.Types.ObjectId,
+    ref: "Subject",
+  },
+  title: {
+    type: String,
+    maxlength: 100,
+  },
+  sessions: [
+    {
+      date: {
+        type: Date,
+      },
+      participants: {
+        user: {
+          type: [schema.Types.ObjectId],
+          ref: "User",
+        },
+        score: {
+          type: Number,
+          default: 0,
+        },
+      },
+    },
+  ],
+});
+
+const assQuestionSchema = new schema({
+  title: {
+    type: String,
+    required: true,
+  },
+  status: {
+    type: String,
+    enum: ["pending", "closed"],
+  },
+  expiry: {
+    type: Date,
+    required: true,
+  },
+  question: {
+    type: String,
+    required: true,
+  },
+  class: {
+    type: [String],
+    enum: classEnums,
+  },
+});
+
+const assignmentSchema = new schema({
+  subject: {
+    type: schema.Types.ObjectId,
+    ref: "Subject",
+  },
+  list: [assQuestionSchema],
+});
+
 const userSchema = new schema({
   avatar: mediaDataSchema,
   address: {
@@ -108,6 +213,7 @@ const userSchema = new schema({
       maxlength: 4,
     },
   },
+  assignments: [assignmentSchema],
   birthday: {
     type: Date,
     required: false,
@@ -186,6 +292,29 @@ const userSchema = new schema({
     type: schema.Types.ObjectId,
     ref: "School",
   },
+  subscription: {
+    current: {
+      type: Date,
+      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
+    },
+    expiry: {
+      type: Date,
+      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
+    },
+    isActive: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  class: {
+    type: String,
+    required: false,
+  },
+  schoolLevel: {
+    type: String,
+    required: true,
+    enum: ["junior", "senior"],
+  },
   gender: {
     type: String,
     enum: ["male", "Male", "female", "Female", "others", "Others"],
@@ -209,20 +338,19 @@ const userSchema = new schema({
     type: Boolean, // NOT FULLY FUNCTIONAL YET
     default: false,
   },
-  subscription: {
-    current: {
-      type: Date,
-      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
+
+  rewards: new schema({
+    point: {
+      type: Number,
+      default: 0,
     },
-    expiry: {
-      type: Date,
-      default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
+    code: {
+      type: String,
+      required: true,
     },
-    isActive: {
-      type: Boolean,
-      default: false,
-    },
-  },
+    history: [rewardSchema],
+  }),
+
   tx_history: [txHistorySchema],
   rank: {
     type: String,
@@ -245,6 +373,13 @@ const userSchema = new schema({
       },
     },
   },
+  lga: {
+    type: String,
+    required: true,
+  },
+  quota: quotaSchema,
+  quotas: [quotaSchema],
+  quizzes: [quizSchema],
 });
 
 userSchema.methods.generateAuthToken = function () {
@@ -287,4 +422,5 @@ module.exports.User = User;
 module.exports.validateReg = validateReg;
 module.exports.validateLog = validateLog;
 module.exports.mediaSchema = mediaDataSchema;
+module.exports.txHistorySchema = txHistorySchema;
 module.exports.userSelector = "-password -__v";
