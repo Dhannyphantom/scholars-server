@@ -6,10 +6,10 @@ const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
 const GT_VALUE = 1000;
 
-module.exports.getUploadUri = (imageData, images, bucketName) => {
+const getUploadUri = (images, bucketName) => {
   let imgUri, thumbUri;
 
-  if (Array.isArray(imageData) && images.length > 1) {
+  if (Array.isArray(images)) {
     //   an array of images
     if (_NET === "offline") {
       const imgUris = images.map((obj) => {
@@ -18,7 +18,8 @@ module.exports.getUploadUri = (imageData, images, bucketName) => {
           uri: `${
             ADDRESS + ":" + PORT + "/uploads/" + bucketName + "/" + obj.uri
           }`,
-          type: obj.type ?? "image",
+          key: obj.uri,
+          type: obj.type ?? "image/jpg",
           thumb: `${
             ADDRESS +
             ":" +
@@ -54,7 +55,7 @@ module.exports.getUploadUri = (imageData, images, bucketName) => {
 
     return {
       uri: imgUri,
-      type: imageData.type ?? images[0].type ?? "image",
+      type: images[0].type ?? "image/jpg",
       thumb: thumbUri,
       width: images[0].width,
       height: images[0].height,
@@ -107,4 +108,5 @@ module.exports = {
   calculatePointsAmount,
   getCurrencyAmount,
   classEnums,
+  getUploadUri,
 };

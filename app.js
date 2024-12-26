@@ -21,6 +21,7 @@ app.use(cors());
 //ROUTES AND CONTROLLERS
 const users = require("./routes/users");
 const payments = require("./routes/payments");
+const create = require("./routes/create");
 const db = require("./controllers/db");
 
 app.use(express.static("public"));
@@ -30,6 +31,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 app.use("/users", users);
 app.use("/payments", payments);
+app.use("/create", create);
 
 app.use(error);
 

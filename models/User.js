@@ -16,7 +16,7 @@ const mediaDataSchema = new schema({
   },
   type: {
     type: String,
-    enum: ["image", "video", "text"],
+    // enum: ["image", "video", "text"],
     default: "image",
     maxlength: 255,
   },

@@ -8,8 +8,9 @@ const CategorySchema = new schema({
   name: {
     type: String,
     required: true,
-    trim: true,
-    lowercase: true,
+    unique: true,
+    index: true,
+    collation: { locale: "en", strength: 2 },
   },
   subjects: [{ type: schema.Types.ObjectId, ref: "Subject" }],
   image: mediaSchema,

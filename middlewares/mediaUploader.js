@@ -41,31 +41,36 @@ module.exports = async (req, res, next) => {
   if (!mediaData) return res.status(422).json("No media data");
   const outputFolder = `uploads/${mediaData.bucket}`;
   const outputThumb = "uploads/thumbs";
+  const isFiles = Boolean(req.files);
 
   if (_NET == "offline") {
-    const data = Boolean(req.file) ? [req.file] : req.files;
+    const data = isFiles ? req.files : [req.file];
     const resizePromises = data.map(async (file) => {
       const filePath = path.resolve(outputFolder, file.filename);
       await sharp(file.path)
-        .resize(1000)
-        .toFormat("jpeg", { mozjpeg: true, quality: SHARP_QUALITY })
+        .toFormat(file.mimetype?.split("/")[1], {
+          mozjpeg: true,
+          quality: 65,
+        })
         .toFile(filePath);
 
       await sharp(file.path)
-        .resize(100)
-        .toFormat("jpeg", { mozjpeg: true, quality: 20 })
+        .resize(60)
+        .toFormat(file.mimetype?.split("/")[1], { mozjpeg: true, quality: 5 })
         .toFile(path.resolve(outputThumb, file.filename));
 
       try {
         fs.unlinkSync(file.path);
-      } catch (err) {}
+      } catch (err) {
+        console.log({ unlinkErr: err });
+      }
       const imageObject = await sharp(filePath).metadata();
 
       media.push({
         uri: file.filename,
         width: imageObject.width,
         height: imageObject.height,
-        type: "image",
+        type: file.mimetype,
       });
     });
     await Promise.all([...resizePromises]);
@@ -106,7 +111,7 @@ module.exports = async (req, res, next) => {
     await Promise.all([...resizePromises]);
   }
 
-  req.media = media;
+  req.media = isFiles ? media : media[0];
 
   next();
 };
