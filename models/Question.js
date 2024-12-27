@@ -3,17 +3,28 @@ const Joi = require("joi");
 
 const schema = mongoose.Schema;
 
+const answerSchema = new schema({
+  name: {
+    type: String,
+    required: true,
+  },
+  correct: {
+    type: Boolean,
+    default: false,
+  },
+});
+
 const QuestionSchema = new schema({
   question: {
     type: String,
     required: true,
     trim: true,
   },
-  answers: [{ type: String, required: true }],
-  answer: {
-    type: String,
-    required: true,
-  },
+  answers: [answerSchema],
+  // answer: {
+  //   type: String,
+  //   required: true,
+  // },
   point: {
     type: Number,
     default: 50,
@@ -21,13 +32,16 @@ const QuestionSchema = new schema({
   topic: {
     type: schema.Types.ObjectId,
     ref: "Topic",
+    required: true,
   },
   subject: {
     type: schema.Types.ObjectId,
     ref: "Subject",
+    required: true,
   },
   categories: {
-    type: [String],
+    type: [schema.Types.ObjectId],
+    ref: "Category",
     required: true,
   },
   isTheory: {
