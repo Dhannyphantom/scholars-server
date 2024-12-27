@@ -19,10 +19,11 @@ app.set("views", path.join(__dirname, "views"));
 
 app.use(cors());
 //ROUTES AND CONTROLLERS
+const db = require("./controllers/db");
 const users = require("./routes/users");
 const payments = require("./routes/payments");
 const create = require("./routes/create");
-const db = require("./controllers/db");
+const instance = require("./routes/instance");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -32,6 +33,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use("/users", users);
 app.use("/payments", payments);
 app.use("/create", create);
+app.use("/instance", instance);
 
 app.use(error);
 
