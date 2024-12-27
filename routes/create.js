@@ -6,6 +6,7 @@ const { getUploadUri } = require("../controllers/helpers");
 const auth = require("../middlewares/authRoutes");
 const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
+const { Topic } = require("../models/Topic");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -19,6 +20,29 @@ const storage = multer.diskStorage({
 const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); // 2MB
 
 const router = express.Router();
+
+router.post("/topic", auth, async (req, res) => {
+  const data = req.body;
+
+  data.forEach(async (item) => {
+    const topic = new Topic({
+      name: item.name,
+    });
+
+    await topic.save();
+    //  save topics to subject
+    await Subject.updateOne(
+      { _id: item?.subject?._id },
+      {
+        $addToSet: {
+          topics: topic._id,
+        },
+      }
+    );
+  });
+
+  res.send({ status: "success" });
+});
 
 router.post(
   "/subject",
