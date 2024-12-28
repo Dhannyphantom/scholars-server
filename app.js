@@ -24,6 +24,7 @@ const users = require("./routes/users");
 const payments = require("./routes/payments");
 const create = require("./routes/create");
 const instance = require("./routes/instance");
+const school = require("./routes/school");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -34,6 +35,7 @@ app.use("/users", users);
 app.use("/payments", payments);
 app.use("/create", create);
 app.use("/instance", instance);
+app.use("/school", school);
 
 app.use(error);
 

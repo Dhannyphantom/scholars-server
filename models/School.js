@@ -103,6 +103,7 @@ const SchoolSchema = new schema({
     type: String,
     enum: ["private", "public"],
     required: true,
+    lowercase: true,
   },
   levels: [schLevelSchema],
 });
