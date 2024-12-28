@@ -16,45 +16,130 @@ const {
 } = require("../controllers/flw");
 const { User } = require("../models/User");
 const { calculatePointsAmount } = require("../controllers/helpers");
+const { School } = require("../models/School");
 
-const SUB_MILLI = 1000 * 60 * 60 * 24 * 30; // 30 days
+const THIRTY_DAYS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const router = express.Router();
 
 router.post("/subscribe", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
+
   let flwData;
 
   const userInfo = await User.findById(userId);
-  if (!userInfo) return res.status(422).send("User not found!");
-  const { email, contact, fullName } = userInfo;
+  const school = await School.findById(data?.school);
+  const isSchool = Boolean(school);
 
-  flwData = await chargeCard({ ...data, email, contact, fullName });
+  if (!userInfo) return res.status(422).send("User not found!");
+
+  const { email, contact, firstName, lastName } = userInfo;
+
+  flwData = await chargeCard({
+    ...data,
+    email,
+    contact,
+    fullName: `${firstName} ${lastName}`,
+  });
+
+  console.log({ flwData });
 
   if (flwData?.status == "success") {
-    await User.updateOne(
-      { _id: userId },
-      {
-        $set: {
-          subscription: {
-            current: new Date(),
-            expiry: new Date(new Date().getTime() + SUB_MILLI),
-            isActive: true,
-          },
-        },
-        $push: {
-          tx_history: {
-            type: "subscription",
-            date: new Date(),
-            message: "+30 days",
-            amount: Number.parseInt(data?.sub_amount),
-            tx_ref: flwData.tx_ref,
-            flw_ref: flwData.flw_ref,
-          },
-        },
+    let expiry;
+
+    if (isSchool) {
+      switch (data?.sub_amount?.value) {
+        case 10000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 3);
+          break;
+
+        case 20000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 6);
+          break;
+
+        case 30000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 9);
+          break;
+
+        default:
+          break;
       }
-    );
+    } else {
+      // student subscription
+      switch (data?.sub_amount?.value) {
+        case 2000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS);
+          break;
+        case 4000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 2);
+          break;
+        case 6000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 3);
+          break;
+        case 8000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 4);
+          break;
+        case 10000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 5);
+          break;
+        case 12000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 6);
+          break;
+        case 14000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 7);
+          break;
+        case 16000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 8);
+          break;
+        case 18000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 9);
+          break;
+        case 20000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 10);
+          break;
+        case 22000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 11);
+          break;
+        case 24000:
+          expiry = new Date(new Date().getTime() + THIRTY_DAYS * 12);
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    const subDetails = {
+      $set: {
+        subscription: {
+          current: new Date(),
+          expiry,
+          isActive: true,
+        },
+      },
+      $push: {
+        tx_history: {
+          type: "subscription",
+          date: new Date(),
+          message: data?.sub_amount?.title,
+          amount: Number.parseInt(data?.sub_amount?.value),
+          tx_ref: flwData.tx_ref,
+          flw_ref: flwData.flw_ref,
+          tx: flwData.tx,
+          user: userId,
+        },
+      },
+    };
+    await User.updateOne({ _id: userId }, subDetails);
+    if (isSchool) {
+      await School.updateOne({ _id: data?.school }, subDetails);
+      // subscribe all teachers
+      await User.updateMany(
+        { _id: { $in: school?.teachers } },
+        { $set: subDetails.$set }
+      );
+    }
   }
 
   return res.send(flwData);

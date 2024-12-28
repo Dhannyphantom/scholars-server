@@ -34,11 +34,43 @@ const mediaDataSchema = new schema({
   },
 });
 
+const cardSchema = new schema({
+  first_6digits: {
+    type: String,
+    required: false,
+  },
+  last_4digits: {
+    type: String,
+    required: false,
+  },
+  issuer: {
+    type: String,
+    required: false,
+  },
+  country: {
+    type: String,
+    required: false,
+  },
+  type: {
+    type: String,
+    required: false,
+  },
+  expiry: {
+    type: String,
+    required: false,
+  },
+});
+
 const txHistorySchema = new schema({
   type: {
     type: String,
     enum: ["withdrawal", "subscription"],
     required: true,
+  },
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: false,
   },
   date: {
     type: Date,
@@ -48,6 +80,20 @@ const txHistorySchema = new schema({
     type: String,
     maxlength: 255,
     required: true,
+  },
+  tx: {
+    card: {
+      type: cardSchema,
+      required: true,
+    },
+    id: {
+      type: Number,
+      required: true,
+    },
+    customerId: {
+      type: Number,
+      required: true,
+    },
   },
   tx_ref: {
     type: String,

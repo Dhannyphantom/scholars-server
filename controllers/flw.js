@@ -37,21 +37,18 @@ const chargeCard = async (data) => {
     expiry_year: card_exp_year,
     // expiry_year: "31",
     currency: "NGN",
-    amount: sub_amount,
-    redirect_url:
-      "https://scholars-server.onrender.com/payments/subscription_redirect",
-    fullname: fullName ?? "John Doe",
+    amount: sub_amount?.value,
+    redirect_url: `https://scholars-server.onrender.com/payments/subscription_redirect`,
+    fullname: fullName ?? "Jane Doe",
     email: email,
     phone_number: contact,
     tx_ref: tx_ref || custom_ref, // This is a unique reference, unique to the particular transaction being carried out. It is generated when it is not provided by the merchant for every transaction.
     enckey: process.env.FLW_ENC_KEY,
   };
 
-  console.log({ payload });
-
   try {
+    let txDetails;
     const response = await flw.Charge.card(payload);
-    console.log({ response });
     if (response.meta.authorization.mode === "pin" && pin) {
       let payload2 = payload;
       payload2.authorization = {
@@ -66,6 +63,11 @@ const chargeCard = async (data) => {
           flw_ref,
         });
         console.log("TRANSACTION VALIDATED", callValidate);
+        txDetails = {
+          card: callValidate?.data?.card,
+          id: callValidate?.data?.id,
+          customerId: callValidate?.data?.customer?.id,
+        };
       }
 
       const reCallCharge = await flw.Charge.card(payload2);
@@ -104,6 +106,7 @@ const chargeCard = async (data) => {
       msg: "Transaction successful",
       flw_ref,
       tx_ref,
+      tx: txDetails,
       status: "success",
     };
   } catch (error) {
