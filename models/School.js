@@ -15,7 +15,16 @@ const classSchema = new schema({
   level: {
     type: String,
     required: true,
+    lowercase: true,
     enum: classEnums,
+  },
+  teachers: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
+  students: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
   },
 });
 

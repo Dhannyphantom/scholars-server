@@ -78,4 +78,41 @@ router.get("/fetch", auth, async (req, res) => {
   res.send({ status: "success", data: school });
 });
 
+router.post("/class", auth, async (req, res) => {
+  const data = req.body;
+  const school = await School.findById(data?.schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  school.classes.push({ alias: data.name, level: data.class?.name });
+
+  await school.save();
+
+  res.send({ status: "success" });
+});
+
+router.get("/classes", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId } = req.query;
+  const school = await School.findById(schoolId).select("classes");
+  const userInfo = await User.findById(userId);
+
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  res.send({
+    status: "success",
+    data: school.classes,
+  });
+});
+
 module.exports = router;
