@@ -115,4 +115,22 @@ router.get("/classes", auth, async (req, res) => {
   });
 });
 
+router.get("/search", auth, async (req, res) => {
+  const { q } = req.query;
+  console.log({ q });
+  const reqExp = new RegExp(q, "gi");
+
+  const search = await School.find({ name: reqExp })
+    .select("name state lga subscription rep")
+    .populate([
+      {
+        path: "rep",
+        model: "User",
+        select: "avatar username firstName lastName preffix",
+      },
+    ]);
+
+  res.send({ status: "success", data: search });
+});
+
 module.exports = router;

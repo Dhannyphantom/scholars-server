@@ -270,7 +270,7 @@ const userSchema = new schema({
   },
   schoolLevel: {
     type: String,
-    required: true,
+    required: false,
     enum: ["junior", "senior"],
   },
   gender: {
@@ -333,7 +333,7 @@ const userSchema = new schema({
   },
   lga: {
     type: String,
-    required: true,
+    required: false,
   },
   quota: quotaSchema,
   quotas: [quotaSchema],
