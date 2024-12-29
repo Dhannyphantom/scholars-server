@@ -11,6 +11,11 @@ const TopicSchema = new schema({
     lowercase: true,
   },
   questions: [{ type: schema.Types.ObjectId, ref: "Question" }],
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
 });
 
 const Topic = mongoose.model("Topic", TopicSchema);

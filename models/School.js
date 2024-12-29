@@ -81,7 +81,6 @@ const SchoolSchema = new schema({
       default: false,
     },
   },
-  subjects: [{ type: schema.Types.ObjectId, ref: "Subject" }],
   state: {
     type: String,
     minlength: 4,
@@ -94,7 +93,6 @@ const SchoolSchema = new schema({
     ref: "User",
   },
   tx_history: [txHistorySchema],
-
   teachers: {
     type: [schema.Types.ObjectId],
     ref: "User",

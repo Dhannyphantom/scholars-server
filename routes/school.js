@@ -8,6 +8,7 @@ const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { School } = require("../models/School");
+const { User } = require("../models/User");
 
 // const storage = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -40,6 +41,33 @@ router.post("/create", auth, async (req, res) => {
   });
 
   await school.save();
+
+  res.send({ status: "success", data: school });
+});
+
+router.get("/fetch", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("accountType");
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  const isTeacher = userInfo?.accountType == "teacher";
+  const isStudent = userInfo?.accountType == "student";
+
+  let school;
+  if (isTeacher) {
+    school = await School.findOne({ teachers: userId }).select(
+      "-__v -tx_history"
+    );
+  } else if (isStudent) {
+    school = await School.findOne({ students: userId }).select(
+      "-__v -tx_history"
+    );
+  }
 
   res.send({ status: "success", data: school });
 });

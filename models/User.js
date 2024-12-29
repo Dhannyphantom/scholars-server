@@ -229,36 +229,6 @@ const userSchema = new schema({
     enum: ["teacher", "student", "professional"],
     required: true,
   },
-  accountDetail: {
-    acct_number: {
-      type: String,
-      maxlength: 50,
-    },
-    bank_code: {
-      type: String,
-      maxlength: 4,
-    },
-    bank_name: {
-      type: String,
-      maxlength: 255,
-    },
-    card_number: {
-      type: String,
-      maxlength: 80,
-    },
-    card_cvv: {
-      type: String,
-      maxlength: 4,
-    },
-    card_exp_month: {
-      type: String,
-      maxlength: 4,
-    },
-    card_exp_year: {
-      type: String,
-      maxlength: 4,
-    },
-  },
   assignments: [assignmentSchema],
   birthday: {
     type: Date,

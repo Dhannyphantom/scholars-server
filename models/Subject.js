@@ -13,6 +13,11 @@ const SubjectSchema = new schema({
   },
   topics: [{ type: schema.Types.ObjectId, ref: "Topic" }],
   image: mediaSchema,
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
 });
 
 const Subject = mongoose.model("Subject", SubjectSchema);

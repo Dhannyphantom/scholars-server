@@ -52,6 +52,11 @@ const QuestionSchema = new schema({
     type: Number,
     default: 40,
   },
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
 });
 
 const Question = mongoose.model("Question", QuestionSchema);

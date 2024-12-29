@@ -14,6 +14,11 @@ const CategorySchema = new schema({
   },
   subjects: [{ type: schema.Types.ObjectId, ref: "Subject" }],
   image: mediaSchema,
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
 });
 
 const Category = mongoose.model("Category", CategorySchema);
