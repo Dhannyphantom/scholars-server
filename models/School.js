@@ -150,6 +150,18 @@ const assignmentSchema = new schema({
   submissions: [submissionSchema],
 });
 
+const userSchema = new schema({
+  verified: {
+    type: Boolean,
+    default: false,
+  },
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
+});
+
 const schLevelSchema = new schema({
   name: {
     type: String,
@@ -221,15 +233,9 @@ const SchoolSchema = new schema({
     lowercase: true,
     trim: true,
   },
-  students: {
-    type: [schema.Types.ObjectId],
-    ref: "User",
-  },
+  students: [userSchema],
   tx_history: [txHistorySchema],
-  teachers: {
-    type: [schema.Types.ObjectId],
-    ref: "User",
-  },
+  teachers: [userSchema],
   type: {
     type: String,
     enum: ["private", "public"],

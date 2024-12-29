@@ -38,27 +38,26 @@ const getUploadUri = (images, bucketName) => {
   } else {
     // Single upload
     if (_NET === "offline") {
+      console.log("Single Upload", images);
       let thumber;
-      if (images[0].thumb) {
-        thumber = images[0].thumb;
-      } else {
-        thumber = images[0].uri;
-      }
+
+      thumber = images?.thumb ?? images.uri;
+
       imgUri = `${
-        ADDRESS + ":" + PORT + "/uploads/" + bucketName + "/" + images[0].uri
+        ADDRESS + ":" + PORT + "/uploads/" + bucketName + "/" + images.uri
       }`;
       thumbUri = `${ADDRESS + ":" + PORT + "/uploads/thumbs" + "/" + thumber}`;
     } else {
-      imgUri = images[0].uri;
-      thumbUri = images[0].thumb;
+      imgUri = images.uri;
+      thumbUri = images.thumb;
     }
 
     return {
       uri: imgUri,
-      type: images[0].type ?? "image/jpg",
+      type: images.type,
       thumb: thumbUri,
-      width: images[0].width,
-      height: images[0].height,
+      width: images.width,
+      height: images.height,
     };
   }
 };

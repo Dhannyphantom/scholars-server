@@ -9,7 +9,7 @@ const storage = multer.diskStorage({
     return cb(null, "./uploads/assets/");
   },
   filename: (req, file, cb) => {
-    return cb(null, `${Date.now()}_${file.originalname}`);
+    return cb(null, `${file.originalname}`);
   },
 });
 
@@ -99,16 +99,18 @@ router.post(
   [auth, uploader.single("upload"), mediaUploader],
   async (req, res) => {
     const user = await User.findById(req.user.userId);
-    const imageData = req.data;
+    const imageData = req.media;
 
     if (!imageData) return res.status(400).json("Media data not found!");
 
-    const userAvatarObj = getUploadUri(imageData, req.media, "avatars");
-    user.avatar = userAvatarObj;
+    const userAvatarObj = getUploadUri(req.media, "avatars");
+
+    user.avatar.image = userAvatarObj;
+    user.avatar.lastUpdate = new Date();
 
     await user.save();
 
-    res.json({ avatar: userAvatarObj });
+    res.json({ avatar: user.avatar });
   }
 );
 

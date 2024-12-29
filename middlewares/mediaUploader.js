@@ -111,6 +111,8 @@ module.exports = async (req, res, next) => {
     await Promise.all([...resizePromises]);
   }
 
+  console.log({ media });
+
   req.media = isFiles ? media : media[0];
 
   next();
