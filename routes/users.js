@@ -121,9 +121,21 @@ router.put("/updateProfile", auth, async (req, res) => {
 
   const update_object = {};
 
+  const getNameVal = ["state", "lga", "preffix", "schoolLevel"];
+
   Object.entries(userData).map(([key, val]) => {
-    update_object[key] = val;
+    update_object[key] = getNameVal.includes(key) ? val?.name : val;
   });
+
+  const preffix = update_object?.preffix;
+
+  if (Boolean(preffix)) {
+    if (preffix == "mr.") {
+      update_object["gender"] = "male";
+    } else if (["ms.", "mrs."].includes(preffix)) {
+      update_object["gender"] = "female";
+    }
+  }
 
   await User.updateOne(
     { _id: userId },
