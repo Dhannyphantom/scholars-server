@@ -60,9 +60,15 @@ router.get("/fetch", auth, async (req, res) => {
 
   let school;
   if (isTeacher) {
-    school = await School.findOne({ teachers: userId }).select(
-      "-__v -tx_history"
-    );
+    school = await School.findOne({ teachers: userId })
+      .select("-__v -tx_history")
+      .populate([
+        {
+          path: "teachers",
+          model: "User",
+          select: "username firstName lastName avatar preffix",
+        },
+      ]);
   } else if (isStudent) {
     school = await School.findOne({ students: userId }).select(
       "-__v -tx_history"

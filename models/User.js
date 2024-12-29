@@ -152,71 +152,14 @@ const quotaSchema = new schema({
   },
 });
 
-const quizSchema = new schema({
-  status: {
-    type: String,
-    enum: ["active", "inactive"],
-  },
-  subject: {
-    type: schema.Types.ObjectId,
-    ref: "Subject",
-  },
-  title: {
-    type: String,
-    maxlength: 100,
-  },
-  sessions: [
-    {
-      date: {
-        type: Date,
-      },
-      participants: {
-        user: {
-          type: [schema.Types.ObjectId],
-          ref: "User",
-        },
-        score: {
-          type: Number,
-          default: 0,
-        },
-      },
-    },
-  ],
-});
-
-const assQuestionSchema = new schema({
-  title: {
-    type: String,
-    required: true,
-  },
-  status: {
-    type: String,
-    enum: ["pending", "closed"],
-  },
-  expiry: {
-    type: Date,
-    required: true,
-  },
-  question: {
-    type: String,
-    required: true,
-  },
-  class: {
-    type: [String],
-    enum: classEnums,
-  },
-});
-
-const assignmentSchema = new schema({
-  subject: {
-    type: schema.Types.ObjectId,
-    ref: "Subject",
-  },
-  list: [assQuestionSchema],
-});
-
 const userSchema = new schema({
-  avatar: mediaDataSchema,
+  avatar: {
+    image: mediaDataSchema,
+    lastUpdate: {
+      type: Date,
+      default: Date.now,
+    },
+  },
   address: {
     type: String,
     minlength: 4,
@@ -229,7 +172,6 @@ const userSchema = new schema({
     enum: ["teacher", "student", "professional"],
     required: true,
   },
-  assignments: [assignmentSchema],
   birthday: {
     type: Date,
     required: false,
@@ -395,7 +337,6 @@ const userSchema = new schema({
   },
   quota: quotaSchema,
   quotas: [quotaSchema],
-  quizzes: [quizSchema],
 });
 
 userSchema.methods.generateAuthToken = function () {
