@@ -380,4 +380,3 @@ module.exports.validateReg = validateReg;
 module.exports.validateLog = validateLog;
 module.exports.mediaSchema = mediaDataSchema;
 module.exports.txHistorySchema = txHistorySchema;
-module.exports.userSelector = "-password -__v";

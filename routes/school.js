@@ -9,6 +9,7 @@ const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { School } = require("../models/School");
 const { User } = require("../models/User");
+const { capFirstLetter, userSelector } = require("../controllers/helpers");
 
 // const storage = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -22,6 +23,8 @@ const { User } = require("../models/User");
 // const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); // 2MB
 
 const router = express.Router();
+
+// MAKE A SEPERATE AUTH ROUTE CHECKER FOR TEACHERS ONLY
 
 router.post("/create", auth, async (req, res) => {
   const data = req.body;
@@ -43,6 +46,61 @@ router.post("/create", auth, async (req, res) => {
   await school.save();
 
   res.send({ status: "success", data: school });
+});
+
+router.post("/verify", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { instanceId, instance, schoolId } = req.body;
+
+  const userInfo = await User.findById(userId).select(
+    "firstName lastName preffix"
+  );
+  const instanceInfo = await User.findById(instanceId).select(
+    "firstName lastName preffix"
+  );
+
+  const school = await School.findOne({
+    _id: schoolId,
+    "teachers.user": userId,
+  });
+
+  const teacherData = school.teachers.find(
+    (item) => item.user?.toString() == userId
+  );
+
+  if (!teacherData?.verified) {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Unauthorized request" });
+  }
+
+  if (instance == "teacher") {
+    await School.updateOne(
+      { _id: schoolId, "teachers.user": instanceId },
+      {
+        $set: {
+          "teachers.$.verified": true,
+        },
+        $push: {
+          announcements: {
+            system: true,
+            message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+              userInfo.firstName
+            )} ${capFirstLetter(
+              userInfo?.lastName
+            )} has verified ${capFirstLetter(
+              instanceInfo?.preffix
+            )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+              instanceInfo?.lastName
+            )} as a fellow colleaque`,
+            visibility: "all",
+          },
+        },
+      }
+    );
+  }
+
+  res.send({ status: "success" });
 });
 
 router.post("/join", auth, async (req, res) => {
@@ -126,12 +184,12 @@ router.get("/fetch", auth, async (req, res) => {
         {
           path: "teachers.user",
           model: "User",
-          select: "username firstName lastName avatar preffix",
+          select: userSelector,
         },
         {
           path: "rep",
           model: "User",
-          select: "username firstName lastName avatar preffix",
+          select: userSelector,
         },
       ]);
     if (school) {
@@ -215,7 +273,7 @@ router.get("/instances", auth, async (req, res) => {
         {
           path: "teachers.user",
           model: "User",
-          select: "preffix firstName lastName username avatar",
+          select: userSelector,
         },
       ]);
 

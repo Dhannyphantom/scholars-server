@@ -16,14 +16,9 @@ const storage = multer.diskStorage({
 const uploader = multer({ storage, limits: { fieldSize: 15 * 1024 * 1024 } }); // 15MB
 
 const bcrypt = require("bcrypt");
-const {
-  User,
-  validateLog,
-  validateReg,
-  userSelector,
-} = require("../models/User");
+const { User, validateLog, validateReg } = require("../models/User");
 const auth = require("../middlewares/authRoutes");
-const { getUploadUri, fetchUser } = require("../controllers/helpers");
+const { getUploadUri, fullUserSelector } = require("../controllers/helpers");
 
 const router = express.Router();
 
@@ -56,7 +51,7 @@ router.post("/register", async (req, res) => {
 
   await user.save();
 
-  const userData = await User.findById(user._id).select(userSelector);
+  const userData = await User.findById(user._id).select(fullUserSelector);
 
   res.header("x-auth-token", token).json({ token, user: userData });
 });
@@ -78,7 +73,7 @@ router.post("/login", async (req, res) => {
   if (!passValid) return res.status(400).json("Invalid profile details");
   const token = user.generateAuthToken();
 
-  const userData = await User.findById(user._id).select(userSelector);
+  const userData = await User.findById(user._id).select(fullUserSelector);
 
   res.header("x-auth-token", token).json({ token, user: userData });
 });
@@ -86,7 +81,7 @@ router.post("/login", async (req, res) => {
 router.get("/user", auth, async (req, res) => {
   const userId = req.user.userId;
 
-  const userData = await User.findById(userId).select(userSelector);
+  const userData = await User.findById(userId).select(fullUserSelector);
 
   if (!userData)
     return res.status(422).json("User data not found. Please sign in again");

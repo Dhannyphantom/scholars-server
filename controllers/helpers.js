@@ -61,6 +61,25 @@ const getUploadUri = (images, bucketName) => {
   }
 };
 
+const capFirstLetter = (str) => {
+  if (!str) return null;
+  return str[0].toUpperCase() + str.slice(1);
+};
+
+const capCapitalize = (str) => {
+  let capitalized = capFirstLetter(str);
+  for (let i = 0; i < str.length; i++) {
+    const letter = capitalized[i];
+    if (letter === " " && capitalized[i + 1]) {
+      capitalized =
+        capitalized.slice(0, i + 1) +
+        capitalized[i + 1].toUpperCase() +
+        capitalized.slice(i + 2);
+    }
+  }
+  return capitalized;
+};
+
 const getCurrencyAmount = (number) => {
   if (number && typeof number == "number") {
     return `₦${Number(number).toLocaleString()}`;
@@ -94,6 +113,9 @@ const calculatePointsAmount = (value) => {
 };
 
 const classEnums = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
+const userSelector =
+  "avatar firstName lastName gender preffix state lga points rank accountType";
+const fullUserSelector = "-password -__v";
 
 module.exports.fetchUser = async (userId) => {
   const userData = await User.findOne({ _id: userId }).select("-password -__v");
@@ -107,4 +129,8 @@ module.exports = {
   getCurrencyAmount,
   classEnums,
   getUploadUri,
+  userSelector,
+  fullUserSelector,
+  capFirstLetter,
+  capCapitalize,
 };
