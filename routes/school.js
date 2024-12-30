@@ -50,7 +50,7 @@ router.post("/create", auth, async (req, res) => {
 
 router.post("/verify", auth, async (req, res) => {
   const userId = req.user.userId;
-  const { instanceId, instance, schoolId } = req.body;
+  const { instanceId, instance, type, schoolId } = req.body;
 
   const userInfo = await User.findById(userId).select(
     "firstName lastName preffix"
@@ -74,12 +74,64 @@ router.post("/verify", auth, async (req, res) => {
       .send({ status: "failed", message: "Unauthorized request" });
   }
 
-  if (instance == "teacher") {
+  if (type === "accept") {
+    if (instance == "teacher") {
+      await School.updateOne(
+        { _id: schoolId, "teachers.user": instanceId },
+        {
+          $set: {
+            "teachers.$.verified": true,
+          },
+          $push: {
+            announcements: {
+              system: true,
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has verified ${capFirstLetter(
+                instanceInfo?.preffix
+              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+                instanceInfo?.lastName
+              )} as a fellow colleaque`,
+              visibility: "all",
+            },
+          },
+        }
+      );
+    }
+  } else if (type == "reject") {
+    if (instance == "teacher") {
+      await School.updateOne(
+        { _id: schoolId, "teachers.user": instanceId },
+        {
+          $pull: {
+            teachers: { user: instanceId },
+          },
+          $push: {
+            announcements: {
+              system: true,
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has rejected ${capFirstLetter(
+                instanceInfo?.preffix
+              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+                instanceInfo?.lastName
+              )} as a fellow colleaque`,
+              visibility: "all",
+            },
+          },
+        }
+      );
+    }
+  } else if (type == "unverify") {
     await School.updateOne(
       { _id: schoolId, "teachers.user": instanceId },
       {
         $set: {
-          "teachers.$.verified": true,
+          "teachers.$.verified": false,
         },
         $push: {
           announcements: {
@@ -88,7 +140,7 @@ router.post("/verify", auth, async (req, res) => {
               userInfo.firstName
             )} ${capFirstLetter(
               userInfo?.lastName
-            )} has verified ${capFirstLetter(
+            )} has un-verified ${capFirstLetter(
               instanceInfo?.preffix
             )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
               instanceInfo?.lastName

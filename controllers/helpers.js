@@ -114,7 +114,7 @@ const calculatePointsAmount = (value) => {
 
 const classEnums = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
 const userSelector =
-  "avatar firstName lastName gender preffix state lga points rank accountType";
+  "avatar firstName lastName username gender preffix state lga points rank accountType";
 const fullUserSelector = "-password -__v";
 
 module.exports.fetchUser = async (userId) => {
