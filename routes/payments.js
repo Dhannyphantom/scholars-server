@@ -43,8 +43,6 @@ router.post("/subscribe", auth, async (req, res) => {
     fullName: `${firstName} ${lastName}`,
   });
 
-  console.log({ flwData });
-
   if (flwData?.status == "success") {
     let expiry;
 
@@ -133,12 +131,22 @@ router.post("/subscribe", auth, async (req, res) => {
     };
     await User.updateOne({ _id: userId }, subDetails);
     if (isSchool) {
-      await School.updateOne({ _id: data?.school }, subDetails);
+      await School.updateOne(
+        { _id: data?.school, "teachers.user": userId },
+        {
+          $set: {
+            ...subDetails.$set,
+            "teachers.$.verified": true,
+          },
+          $push: subDetails.$push,
+        }
+      );
       // subscribe all teachers
       await User.updateMany(
         { _id: { $in: school?.teachers } },
         { $set: subDetails.$set }
       );
+    } else {
     }
   }
 

@@ -38,7 +38,6 @@ const getUploadUri = (images, bucketName) => {
   } else {
     // Single upload
     if (_NET === "offline") {
-      console.log("Single Upload", images);
       let thumber;
 
       thumber = images?.thumb ?? images.uri;

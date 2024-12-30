@@ -25,7 +25,7 @@ const router = express.Router();
 
 router.post("/create", auth, async (req, res) => {
   const data = req.body;
-  const user = req.user.userId;
+  const userId = req.user.userId;
 
   const school = new School({
     contact: data.contact,
@@ -35,14 +35,75 @@ router.post("/create", auth, async (req, res) => {
     lga: data?.lga?.name,
     state: data?.state?.name,
     type: data?.type?.name,
-    rep: user,
+    rep: userId,
     createdAt: new Date(),
-    teachers: [user],
+    teachers: [{ user: userId }],
   });
 
   await school.save();
 
   res.send({ status: "success", data: school });
+});
+
+router.post("/join", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId } = req.body;
+
+  const userInfo = await User.findById(userId);
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid user account" });
+
+  const school = await School.findById(schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  if (!school?.subscription?.isActive) {
+    return res.status(422).send({
+      status: "failed",
+      message: "School does not have an active subscription",
+    });
+  }
+
+  const isTeacher = userInfo?.accountType == "teacher";
+  const isStudent = userInfo?.accountType == "student";
+
+  if (isTeacher) {
+    // check if teacher has joined other schools
+    const teachSchool = await School.findOne({
+      _id: { $ne: schoolId },
+      "teachers.user": userId,
+    });
+
+    if (teachSchool) {
+      teachSchool.teachers = teachSchool.teachers.filter(
+        (item) => item?.user?.toString() != userId
+      );
+      await teachSchool.save();
+    }
+
+    // Check if school already has this teacher
+    const checker = school.teachers.findIndex(
+      (item) => item?.user?.toString() == userId
+    );
+    if (checker < 0) {
+      school.teachers.push({ user: userId });
+      await school.save();
+    }
+  } else if (isStudent) {
+    const checker = school.students.findIndex(
+      (item) => item?.user?.toString() == userId
+    );
+    if (checker < 0) {
+      school.students.push({ user: userId });
+      await school.save();
+    }
+  }
+
+  res.send({ status: "success" });
 });
 
 router.get("/fetch", auth, async (req, res) => {
@@ -63,7 +124,7 @@ router.get("/fetch", auth, async (req, res) => {
       .select("-__v -tx_history")
       .populate([
         {
-          path: "teachers",
+          path: "teachers.user",
           model: "User",
           select: "username firstName lastName avatar preffix",
         },
@@ -75,7 +136,7 @@ router.get("/fetch", auth, async (req, res) => {
       ]);
     if (school) {
       const teacherData = school.teachers.find(
-        (item) => item.user?.toString() == userId
+        (item) => item.user?._id?.toString() == userId
       );
       isVerified = teacherData?.verified;
     }
@@ -143,65 +204,24 @@ router.get("/search", auth, async (req, res) => {
   res.send({ status: "success", data: search });
 });
 
-router.post("/join", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const { schoolId } = req.body;
+router.get("/instances", auth, async (req, res) => {
+  const { type, schoolId } = req.query;
+  let data;
 
-  const userInfo = await User.findById(userId);
-  if (!userInfo)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "Invalid user account" });
+  if (type === "teacher") {
+    const school = await School.findById(schoolId)
+      .select("teachers")
+      .populate([
+        {
+          path: "teachers.user",
+          model: "User",
+          select: "preffix firstName lastName username avatar",
+        },
+      ]);
 
-  const school = await School.findById(schoolId);
-  if (!school)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "School not found" });
-
-  if (!school?.subscription?.isActive) {
-    return res.status(422).send({
-      status: "failed",
-      message: "School does not have an active subscription",
-    });
+    data = school.teachers.sort((a, b) => a.verified - b.verified);
   }
-
-  const isTeacher = userInfo?.accountType == "teacher";
-  const isStudent = userInfo?.accountType == "student";
-
-  if (isTeacher) {
-    // check if teacher has joined other schools
-    const teachSchool = await School.findOne({
-      _id: { $ne: schoolId },
-      "teachers.user": userId,
-    });
-
-    if (teachSchool) {
-      teachSchool.teachers = teachSchool.teachers.filter(
-        (item) => item?.user?.toString() != userId
-      );
-      await teachSchool.save();
-    }
-
-    // Check if school already has this teacher
-    const checker = school.teachers.findIndex(
-      (item) => item?.user?.toString() == userId
-    );
-    if (checker < 0) {
-      school.teachers.push({ user: userId });
-      await school.save();
-    }
-  } else if (isStudent) {
-    const checker = school.students.findIndex(
-      (item) => item?.user?.toString() == userId
-    );
-    if (checker < 0) {
-      school.students.push({ user: userId });
-      await school.save();
-    }
-  }
-
-  res.send({ status: "success" });
+  res.send({ status: "success", data });
 });
 
 module.exports = router;
