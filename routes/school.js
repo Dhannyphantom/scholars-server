@@ -88,7 +88,7 @@ router.post("/verify", auth, async (req, res) => {
           },
           $push: {
             announcements: {
-              system: true,
+              type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
                 userInfo.firstName
               )} ${capFirstLetter(
@@ -114,7 +114,7 @@ router.post("/verify", auth, async (req, res) => {
           },
           $push: {
             announcements: {
-              system: true,
+              type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
                 userInfo.firstName
               )} ${capFirstLetter(
@@ -139,7 +139,7 @@ router.post("/verify", auth, async (req, res) => {
         },
         $push: {
           announcements: {
-            system: true,
+            type: "system",
             message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
               userInfo.firstName
             )} ${capFirstLetter(
@@ -263,6 +263,74 @@ router.post("/assignment", auth, async (req, res) => {
   await school.save();
 
   res.send({ status: "success" });
+});
+
+router.post("/announcement", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+  const { title, classes, schoolId } = data;
+
+  try {
+    await School.updateOne(
+      { _id: schoolId },
+      {
+        $addToSet: {
+          announcements: {
+            teacher: userId,
+            message: title,
+            visibility: "class",
+            classes: classes.map((item) => item.name?.toLowerCase()),
+          },
+        },
+      }
+    );
+  } catch (error) {
+    return res
+      .status(422)
+      .send({ status: "failed", message: error?.data ?? error?.message });
+  }
+
+  res.send({ status: "success" });
+});
+
+router.get("/announcements", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId } = req.query;
+
+  const userInfo = await User.findById(userId).select("accountType");
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  const school = await School.findById(schoolId)
+    .populate([
+      {
+        path: "announcements.teacher",
+        model: "User",
+        select: userSelector,
+      },
+    ])
+    .select("announcements");
+
+  const prevAnnouncements = school.announcements;
+
+  await School.updateOne(
+    { _id: schoolId, "announcements.read": false },
+    {
+      $set: {
+        "announcements.$.read": true,
+      },
+    }
+  );
+
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  res.send({ status: "success", data: prevAnnouncements });
 });
 
 router.get("/fetch", auth, async (req, res) => {

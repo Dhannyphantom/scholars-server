@@ -61,11 +61,6 @@ const quizSchema = new schema({
 });
 
 const announcementSchema = new schema({
-  // school: {
-  //   type: schema.Types.ObjectId,
-  //   ref: "School",
-  //   required: true,
-  // },
   teacher: {
     type: schema.Types.ObjectId,
     ref: "User",
@@ -76,7 +71,12 @@ const announcementSchema = new schema({
     maxlength: 180,
     required: true,
   },
-  system: {
+  type: {
+    type: String,
+    enum: ["system", "school", "important", "alert"],
+    default: "school",
+  },
+  read: {
     type: Boolean,
     default: false,
   },
@@ -84,13 +84,14 @@ const announcementSchema = new schema({
     type: Date,
     default: Date.now,
   },
-  class: {
+  classes: {
     type: [String],
     enum: classEnums,
   },
   visibility: {
     type: String,
     enum: ["class", "teacher", "all"],
+    default: "all",
   },
 });
 
