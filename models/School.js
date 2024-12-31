@@ -125,9 +125,10 @@ const submissionSchema = new schema({
 });
 
 const assignmentSchema = new schema({
-  class: {
+  classes: {
     type: [String],
     enum: classEnums,
+    lowercase: true,
   },
   question: {
     type: String,
@@ -146,7 +147,7 @@ const assignmentSchema = new schema({
   status: {
     type: String,
     enum: ["ongoing", "inactive"],
-    default: "inactive",
+    default: "ongoing",
   },
   date: {
     type: Date,

@@ -220,6 +220,51 @@ router.post("/join", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.post("/class", auth, async (req, res) => {
+  const data = req.body;
+  const school = await School.findById(data?.schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  if (data.type === "all") {
+    school.classes = school.classes.concat(getClasses());
+  } else {
+    school.classes.push({ alias: data.name, level: data.class?.name });
+  }
+
+  await school.save();
+
+  res.send({ status: "success" });
+});
+
+router.post("/assignment", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+  const { classes, title, question, subject, date, schoolId } = data;
+
+  const school = await School.findById(schoolId);
+
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  school.assignments.addToSet({
+    classes: classes.map((item) => item.name?.toLowerCase()),
+    title,
+    question,
+    subject: subject?._id,
+    expiry: date,
+    teacher: userId,
+  });
+
+  await school.save();
+
+  res.send({ status: "success" });
+});
+
 router.get("/fetch", auth, async (req, res) => {
   const userId = req.user.userId;
 
@@ -261,25 +306,6 @@ router.get("/fetch", auth, async (req, res) => {
   }
 
   res.send({ status: "success", data: school, isVerified });
-});
-
-router.post("/class", auth, async (req, res) => {
-  const data = req.body;
-  const school = await School.findById(data?.schoolId);
-  if (!school)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "School not found" });
-
-  if (data.type === "all") {
-    school.classes = school.classes.concat(getClasses());
-  } else {
-    school.classes.push({ alias: data.name, level: data.class?.name });
-  }
-
-  await school.save();
-
-  res.send({ status: "success" });
 });
 
 router.get("/classes", auth, async (req, res) => {
@@ -339,6 +365,55 @@ router.get("/instances", auth, async (req, res) => {
 
     data = school.teachers.sort((a, b) => a.verified - b.verified);
   }
+  res.send({ status: "success", data });
+});
+
+router.get("/assignments", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId } = req.query;
+
+  const userInfo = await User.findById(userId).select("accountType");
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  const school = await School.findById(schoolId)
+    .populate([
+      {
+        path: "assignments.subject",
+        model: "Subject",
+        select: "name",
+      },
+    ])
+    .select("assignments classes");
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  let data;
+  if (userInfo.accountType == "teacher") {
+    data = school.assignments
+      .filter((item) => item.teacher.toString() == userId)
+      .map((item) => {
+        let len = 0;
+        item.classes.forEach((classItem) => {
+          const finder = school.classes?.find((classObj) => {
+            return classObj.level == classItem;
+          });
+          if (finder) {
+            len += finder?.students?.length;
+          }
+        });
+        return {
+          ...item._doc,
+          total: len,
+          submissionsCount: item?.submissions?.length,
+        };
+      });
+  }
+
   res.send({ status: "success", data });
 });
 
