@@ -6,6 +6,11 @@ const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
 const GT_VALUE = 1000;
 
+const classEnums = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
+const userSelector =
+  "avatar firstName lastName username gender preffix state lga points rank accountType";
+const fullUserSelector = "-password -__v";
+
 const getUploadUri = (images, bucketName) => {
   let imgUri, thumbUri;
 
@@ -112,10 +117,9 @@ const calculatePointsAmount = (value) => {
   };
 };
 
-const classEnums = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
-const userSelector =
-  "avatar firstName lastName username gender preffix state lga points rank accountType";
-const fullUserSelector = "-password -__v";
+const getClasses = () => {
+  return classEnums.map((item) => ({ level: item, alias: "Class" }));
+};
 
 module.exports.fetchUser = async (userId) => {
   const userData = await User.findOne({ _id: userId }).select("-password -__v");
@@ -129,6 +133,7 @@ module.exports = {
   getCurrencyAmount,
   classEnums,
   getUploadUri,
+  getClasses,
   userSelector,
   fullUserSelector,
   capFirstLetter,

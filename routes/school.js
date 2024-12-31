@@ -9,7 +9,11 @@ const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { School } = require("../models/School");
 const { User } = require("../models/User");
-const { capFirstLetter, userSelector } = require("../controllers/helpers");
+const {
+  capFirstLetter,
+  userSelector,
+  getClasses,
+} = require("../controllers/helpers");
 
 // const storage = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -267,7 +271,11 @@ router.post("/class", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "School not found" });
 
-  school.classes.push({ alias: data.name, level: data.class?.name });
+  if (data.type === "all") {
+    school.classes = school.classes.concat(getClasses());
+  } else {
+    school.classes.push({ alias: data.name, level: data.class?.name });
+  }
 
   await school.save();
 
