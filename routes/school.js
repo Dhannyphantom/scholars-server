@@ -293,6 +293,13 @@ router.post("/announcement", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.post("/quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { questions, data, saveForLater, schoolId } = req.body;
+
+  const school = await School.findById(schoolId);
+});
+
 router.get("/announcements", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.query;

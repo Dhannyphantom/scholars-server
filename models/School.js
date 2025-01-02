@@ -32,14 +32,21 @@ const quizSchema = new schema({
   status: {
     type: String,
     enum: ["active", "inactive"],
+    default: "inactive",
   },
   subject: {
     type: schema.Types.ObjectId,
     ref: "Subject",
+    required: true,
   },
   title: {
     type: String,
     maxlength: 100,
+    required: true,
+  },
+  class: {
+    type: String,
+    required: true,
   },
   sessions: [
     {
