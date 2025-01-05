@@ -295,9 +295,61 @@ router.post("/announcement", auth, async (req, res) => {
 
 router.post("/quiz", auth, async (req, res) => {
   const userId = req.user.userId;
-  const { questions, data, saveForLater, schoolId } = req.body;
+  const {
+    questions,
+    subject,
+    class: schoolClass,
+    title,
+    schoolId,
+    save,
+  } = req.body;
 
   const school = await School.findById(schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  const userInfo = await User.findById(userId).select(userSelector);
+  if (!userInfo)
+    return res.status(422).send({ status: "failed", message: "Invalid User" });
+
+  const pushObj = {
+    class: schoolClass?.name?.toLowerCase(),
+    user: userId,
+    questions: [],
+    subject: subject?._id,
+    title,
+    status: save ? "active" : "inactive",
+  };
+  // console.log(pushObj);
+  // console.log(pushObj?.questions[0]?.answers);
+  const quizQuestions = questions.map((item) => ({
+    ...item,
+    answers: item?.answers?.map((ans) => ({
+      name: ans.name,
+      correct: ans.correct,
+    })),
+  }));
+  console.log({ quizQuestions: quizQuestions[0].answers });
+  pushObj.questions = quizQuestions;
+  school.quiz.push(pushObj);
+
+  if (save === false) {
+    school.announcements.push({
+      classes: [schoolClass?.name?.toLowerCase()],
+      teacher: userId,
+      message: `${capFirstLetter(subject?.name)} quiz is now active by ${
+        userInfo.preffix
+      } ${userInfo.firstName} ${userInfo.lastName} `,
+      visibility: "class",
+    });
+  }
+
+  await school.save();
+  // START A QUIZ SESSION
+
+  res.send({ status: "success" });
 });
 
 router.get("/announcements", auth, async (req, res) => {

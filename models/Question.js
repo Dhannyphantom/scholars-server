@@ -27,7 +27,7 @@ const QuestionSchema = new schema({
   // },
   point: {
     type: Number,
-    default: 50,
+    default: 40,
   },
   topic: {
     type: schema.Types.ObjectId,

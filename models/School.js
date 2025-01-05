@@ -28,6 +28,36 @@ const classSchema = new schema({
   },
 });
 
+const answerSchema = new schema({
+  name: {
+    type: String,
+    required: true,
+  },
+  correct: {
+    type: Boolean,
+    default: false,
+  },
+});
+
+const quizQuestionsSchema = new schema({
+  question: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  answers: [answerSchema],
+
+  point: {
+    type: Number,
+    default: 40,
+  },
+
+  timer: {
+    type: Number,
+    default: 40,
+  },
+});
+
 const quizSchema = new schema({
   status: {
     type: String,
@@ -44,9 +74,16 @@ const quizSchema = new schema({
     maxlength: 100,
     required: true,
   },
+  questions: [quizQuestionsSchema],
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+  },
   class: {
     type: String,
-    required: true,
+    required: false,
+    lowercase: true,
+    enum: classEnums,
   },
   sessions: [
     {
@@ -93,6 +130,7 @@ const announcementSchema = new schema({
   },
   classes: {
     type: [String],
+    lowercase: true,
     enum: classEnums,
   },
   visibility: {
