@@ -163,7 +163,7 @@ router.post("/join", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.body;
 
-  const userInfo = await User.findById(userId);
+  const userInfo = await User.findById(userId).select("accountType");
   if (!userInfo)
     return res
       .status(422)
@@ -208,6 +208,20 @@ router.post("/join", auth, async (req, res) => {
       await school.save();
     }
   } else if (isStudent) {
+    // check if student has joined other schools
+    const stdSchool = await School.findOne({
+      _id: { $ne: schoolId },
+      "students.user": userId,
+    });
+
+    if (stdSchool) {
+      stdSchool.students = stdSchool.students.filter(
+        (item) => item?.user?.toString() != userId
+      );
+      await stdSchool.save();
+    }
+
+    // Check if student already has this teacher
     const checker = school.students.findIndex(
       (item) => item?.user?.toString() == userId
     );
@@ -322,8 +336,7 @@ router.post("/quiz", auth, async (req, res) => {
     title,
     status: save ? "active" : "inactive",
   };
-  // console.log(pushObj);
-  // console.log(pushObj?.questions[0]?.answers);
+
   const quizQuestions = questions.map((item) => ({
     ...item,
     answers: item?.answers?.map((ans) => ({
@@ -331,7 +344,7 @@ router.post("/quiz", auth, async (req, res) => {
       correct: ans.correct,
     })),
   }));
-  console.log({ quizQuestions: quizQuestions[0].answers });
+
   pushObj.questions = quizQuestions;
   school.quiz.push(pushObj);
 
@@ -459,10 +472,10 @@ router.get("/classes", auth, async (req, res) => {
 
 router.get("/search", auth, async (req, res) => {
   const { q } = req.query;
-  console.log({ q });
-  const reqExp = new RegExp(q, "gi");
+  // Split query into words, escaping special regex characters
+  const regex = new RegExp(q.split(/\s+/).join(".*"), "i");
 
-  const search = await School.find({ name: reqExp })
+  const search = await School.find({ name: regex })
     .select("name state lga subscription rep")
     .populate([
       {
