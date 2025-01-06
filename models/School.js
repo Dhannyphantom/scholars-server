@@ -120,9 +120,13 @@ const announcementSchema = new schema({
     enum: ["system", "school", "important", "alert"],
     default: "school",
   },
-  read: {
-    type: Boolean,
-    default: false,
+  reads: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
+  hides: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
   },
   date: {
     type: Date,

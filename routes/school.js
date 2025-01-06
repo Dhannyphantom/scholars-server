@@ -492,7 +492,7 @@ router.get("/fetch", auth, async (req, res) => {
   let school, isVerified;
   if (isTeacher) {
     school = await School.findOne({ "teachers.user": userId })
-      .select("-__v -tx_history -announcements -assignments")
+      .select("-__v -tx_history")
       .populate([
         {
           path: "teachers.user",
@@ -536,13 +536,32 @@ router.get("/fetch", auth, async (req, res) => {
           select: userSelector,
         },
       ]);
+    if (school) {
+      const stdData = school.students.find(
+        (item) => item.user?._id?.toString() == userId
+      );
+      isVerified = stdData?.verified;
+    }
   }
+  let assignmentCount, announcementCount, classCount, quizCount;
   if (school) {
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
+
+    // Get Counts
+    assignmentCount = (school.assignments?.filter(
+      (item) => item.status == "ongoing"
+    )).length;
+    // announcementCount = school.announcements?.filter()
+    classCount = school.classes.length;
+    quizCount = school.quiz.filter((item) => item.status == "active").length;
   }
 
-  res.send({ status: "success", data: school, isVerified });
+  res.send({
+    status: "success",
+    data: { ...school._doc, classCount, assignmentCount, quizCount },
+    isVerified,
+  });
 });
 
 router.get("/classes", auth, async (req, res) => {
