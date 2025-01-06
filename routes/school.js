@@ -103,6 +103,28 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+    } else if (instance === "student") {
+      await School.updateOne(
+        { _id: schoolId, "students.user": instanceId },
+        {
+          $set: {
+            "students.$.verified": true,
+          },
+          $push: {
+            announcements: {
+              type: "system",
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has verified ${capFirstLetter(
+                instanceInfo.firstName
+              )} ${capFirstLetter(instanceInfo?.lastName)} as a valid student`,
+              visibility: "all",
+            },
+          },
+        }
+      );
     }
   } else if (type == "reject") {
     if (instance == "teacher") {
@@ -129,31 +151,81 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+    } else if (instance == "student") {
+      await School.updateOne(
+        { _id: schoolId, "students.user": instanceId },
+        {
+          $pull: {
+            students: { user: instanceId },
+          },
+          $push: {
+            announcements: {
+              type: "system",
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has rejected ${capFirstLetter(
+                instanceInfo.firstName
+              )} ${capFirstLetter(
+                instanceInfo?.lastName
+              )} as a invalid student`,
+              visibility: "all",
+            },
+          },
+        }
+      );
     }
   } else if (type == "unverify") {
-    await School.updateOne(
-      { _id: schoolId, "teachers.user": instanceId },
-      {
-        $set: {
-          "teachers.$.verified": false,
-        },
-        $push: {
-          announcements: {
-            type: "system",
-            message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-              userInfo.firstName
-            )} ${capFirstLetter(
-              userInfo?.lastName
-            )} has un-verified ${capFirstLetter(
-              instanceInfo?.preffix
-            )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-              instanceInfo?.lastName
-            )} as a fellow colleaque`,
-            visibility: "all",
+    if (instance == "teacher") {
+      await School.updateOne(
+        { _id: schoolId, "teachers.user": instanceId },
+        {
+          $set: {
+            "teachers.$.verified": false,
           },
-        },
-      }
-    );
+          $push: {
+            announcements: {
+              type: "system",
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has un-verified ${capFirstLetter(
+                instanceInfo?.preffix
+              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+                instanceInfo?.lastName
+              )} as a fellow colleaque`,
+              visibility: "all",
+            },
+          },
+        }
+      );
+    } else if (instance === "student") {
+      await School.updateOne(
+        { _id: schoolId, "students.user": instanceId },
+        {
+          $set: {
+            "students.$.verified": false,
+          },
+          $push: {
+            announcements: {
+              type: "system",
+              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+                userInfo.firstName
+              )} ${capFirstLetter(
+                userInfo?.lastName
+              )} has un-verified ${capFirstLetter(
+                instanceInfo.firstName
+              )} ${capFirstLetter(
+                instanceInfo?.lastName
+              )} as a student in probation`,
+              visibility: "all",
+            },
+          },
+        }
+      );
+    }
   }
 
   res.send({ status: "success" });
@@ -420,10 +492,15 @@ router.get("/fetch", auth, async (req, res) => {
   let school, isVerified;
   if (isTeacher) {
     school = await School.findOne({ "teachers.user": userId })
-      .select("-__v -tx_history")
+      .select("-__v -tx_history -announcements -assignments")
       .populate([
         {
           path: "teachers.user",
+          model: "User",
+          select: userSelector,
+        },
+        {
+          path: "students.user",
           model: "User",
           select: userSelector,
         },
@@ -440,9 +517,29 @@ router.get("/fetch", auth, async (req, res) => {
       isVerified = teacherData?.verified;
     }
   } else if (isStudent) {
-    school = await School.findOne({ "students.user": userId }).select(
-      "-__v -tx_history"
-    );
+    school = await School.findOne({ "students.user": userId })
+      .select("-__v -tx_history")
+      .populate([
+        {
+          path: "teachers.user",
+          model: "User",
+          select: userSelector,
+        },
+        {
+          path: "students.user",
+          model: "User",
+          select: userSelector,
+        },
+        {
+          path: "rep",
+          model: "User",
+          select: userSelector,
+        },
+      ]);
+  }
+  if (school) {
+    school.students = school.students.filter((item) => item.verified);
+    school.teachers = school.teachers.filter((item) => item.verified);
   }
 
   res.send({ status: "success", data: school, isVerified });
@@ -490,10 +587,10 @@ router.get("/search", auth, async (req, res) => {
 
 router.get("/instances", auth, async (req, res) => {
   const { type, schoolId } = req.query;
-  let data;
+  let data, school;
 
   if (type === "teacher") {
-    const school = await School.findById(schoolId)
+    school = await School.findById(schoolId)
       .select("teachers")
       .populate([
         {
@@ -504,6 +601,22 @@ router.get("/instances", auth, async (req, res) => {
       ]);
 
     data = school.teachers.sort((a, b) => a.verified - b.verified);
+  } else if (type == "student") {
+    school = await School.findById(schoolId)
+      .select("students")
+      .populate([
+        {
+          path: "students.user",
+          model: "User",
+          select: userSelector,
+        },
+      ]);
+
+    data = school.students.sort((a, b) => a.verified - b.verified);
+  } else {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid instance" });
   }
   res.send({ status: "success", data });
 });

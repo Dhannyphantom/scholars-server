@@ -65,7 +65,7 @@ const txHistorySchema = new schema({
   type: {
     type: String,
     enum: ["withdrawal", "subscription"],
-    required: true,
+    required: false,
   },
   user: {
     type: schema.Types.ObjectId,
@@ -74,40 +74,40 @@ const txHistorySchema = new schema({
   },
   date: {
     type: Date,
-    required: true,
+    required: false,
   },
   message: {
     type: String,
     maxlength: 255,
-    required: true,
+    required: false,
   },
   tx: {
     card: {
       type: cardSchema,
-      required: true,
+      required: false,
     },
     id: {
       type: Number,
-      required: true,
+      required: false,
     },
     customerId: {
       type: Number,
-      required: true,
+      required: false,
     },
   },
   tx_ref: {
     type: String,
     maxlength: 255,
-    required: true,
+    required: false,
   },
   flw_ref: {
     type: String,
     maxlength: 255,
-    required: true,
+    required: false,
   },
   amount: {
     type: Number,
-    required: true,
+    required: false,
   },
 });
 
@@ -234,7 +234,7 @@ const userSchema = new schema({
   preffix: {
     type: String,
     required: false,
-    enum: ["mr.", "ms.", "mrs."],
+    enum: ["mr.", "ms.", "mrs.", ""],
   },
   totalPoints: {
     type: Number,
