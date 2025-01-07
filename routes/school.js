@@ -1,4 +1,5 @@
 const express = require("express");
+const uuid = require("uuid");
 // const nodemailer = require("nodemailer");
 // const mediaUploader = require("../middlewares/mediaUploader");
 // const multer = require("multer");
@@ -14,6 +15,7 @@ const {
   userSelector,
   getClasses,
 } = require("../controllers/helpers");
+const nanoid = uuid.v4;
 
 // const storage = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -402,11 +404,11 @@ router.post("/quiz", auth, async (req, res) => {
 
   const pushObj = {
     class: schoolClass?.name?.toLowerCase(),
-    user: userId,
+    teacher: userId,
     questions: [],
     subject: subject?._id,
     title,
-    status: save ? "active" : "inactive",
+    status: save ? "inactive" : "active",
   };
 
   const quizQuestions = questions.map((item) => ({
@@ -435,6 +437,135 @@ router.post("/quiz", auth, async (req, res) => {
   // START A QUIZ SESSION
 
   res.send({ status: "success" });
+});
+
+router.get("/quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, type, quizId } = req.query;
+
+  if (!schoolId && !type)
+    return res.status(422).send({ status: "failed", message: "Invalid info" });
+
+  const userInfo = await User.findById(userId).select("accountType");
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  let school,
+    quizzes = [];
+  if (type == "detail") {
+    if (userInfo.accountType === "student") {
+      school = await School.findById(schoolId)
+        .select("quiz.title quiz.subject quiz.status quiz.teacher")
+        .populate([
+          {
+            path: "quiz.subject",
+            model: "Subject",
+            select: "name",
+          },
+          {
+            path: "quiz.teacher",
+            model: "User",
+            select: "firstName lastName avatar preffix",
+          },
+        ]);
+      if (!school)
+        return res
+          .status(422)
+          .send({ status: "failed", message: "School not found" });
+
+      school.quiz = school.quiz.filter((item) => item?.status != "inactive");
+    } else if (userInfo.accountType === "teacher") {
+      school = await School.findById(schoolId)
+        .select("quiz.title quiz.subject quiz.status quiz._id")
+        .populate([
+          {
+            path: "quiz.subject",
+            model: "Subject",
+            select: "name",
+          },
+        ]);
+      if (!school)
+        return res
+          .status(422)
+          .send({ status: "failed", message: "School not found" });
+    }
+  } else if (type === "full") {
+    if (userInfo.accountType === "student") {
+      school = await School.findById(schoolId)
+        .select("quiz")
+        .populate([
+          {
+            path: "quiz.subject",
+            model: "Subject",
+            select: "name",
+          },
+          {
+            path: "quiz.teacher",
+            model: "User",
+            select: "firstName lastName preffix",
+          },
+        ]);
+
+      school.quiz.forEach((quizItem) => {
+        quizItem.sessions.forEach((sess) => {
+          sess.participants.forEach((participant) => {
+            if (participant.student.toString() == userId) {
+              quizzes.push({
+                _id: nanoid(),
+                score: participant.score,
+                total: sess.total_score,
+                date: sess.date,
+                teacher: quizItem.teacher,
+                average_score: Math.round(
+                  (participant.score / sess.total_score) * 100
+                ),
+                subject: quizItem.subject,
+              });
+            }
+          });
+        });
+      });
+
+      if (!school)
+        return res
+          .status(422)
+          .send({ status: "failed", message: "School not found" });
+
+      return res.status(200).send({ status: "success", data: quizzes });
+    } else if (userInfo.accountType === "teacher") {
+      school = await School.findOne({ _id: schoolId })
+        .select("quiz")
+        .populate([
+          {
+            path: "quiz.subject",
+            model: "Subject",
+            select: "name",
+          },
+        ]);
+
+      if (!school)
+        return res
+          .status(422)
+          .send({ status: "failed", message: "School not found" });
+
+      console.log({ quizId });
+      const getQuiz = school.quiz.find((item) => item._id == quizId);
+      const sessions = getQuiz.sessions.map((item) => {
+        return {
+          date: item.date,
+          average_score: item.average_score,
+          percentage: item.participants?.length,
+        };
+      });
+      return res.status(200).send({ status: "success", data: sessions });
+    }
+  } else if (type === "sessions") {
+  }
+
+  res.send({ status: "success", data: school?.quiz });
 });
 
 router.get("/announcements", auth, async (req, res) => {

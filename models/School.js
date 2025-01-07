@@ -28,6 +28,17 @@ const classSchema = new schema({
   },
 });
 
+const participantsSchema = new schema({
+  student: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+  },
+  score: {
+    type: Number,
+    default: 0,
+  },
+});
+
 const answerSchema = new schema({
   name: {
     type: String,
@@ -61,7 +72,7 @@ const quizQuestionsSchema = new schema({
 const quizSchema = new schema({
   status: {
     type: String,
-    enum: ["active", "inactive"],
+    enum: ["active", "review", "inactive", "result"],
     default: "inactive",
   },
   subject: {
@@ -75,7 +86,7 @@ const quizSchema = new schema({
     required: true,
   },
   questions: [quizQuestionsSchema],
-  user: {
+  teacher: {
     type: schema.Types.ObjectId,
     ref: "User",
   },
@@ -89,16 +100,16 @@ const quizSchema = new schema({
     {
       date: {
         type: Date,
+        default: Date.now,
       },
-      participants: {
-        user: {
-          type: [schema.Types.ObjectId],
-          ref: "User",
-        },
-        score: {
-          type: Number,
-          default: 0,
-        },
+      participants: [participantsSchema],
+      average_score: {
+        type: Number,
+        default: 0,
+      },
+      total_score: {
+        type: Number,
+        default: 0,
       },
     },
   ],
