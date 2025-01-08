@@ -439,6 +439,45 @@ router.post("/quiz", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.put("/quiz_status", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const { schoolId, quizId, status, class: schoolClass } = req.body;
+
+  if (!schoolId && !quizId && !status)
+    return res.status(422).send({ status: "failed", message: "Invalid info" });
+
+  const userInfo = await User.findById(userId).select("accountType");
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+
+  if (userInfo.accountType !== "teacher") {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not authorized" });
+  }
+
+  const school = await School.findById(schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  await School.updateOne(
+    { _id: schoolId, "quiz._id": quizId },
+    {
+      $set: {
+        "quiz.$.status": status,
+        "quiz.$.class": schoolClass,
+      },
+    }
+  );
+
+  res.send({ status: "success" });
+});
+
 router.get("/quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId, type, quizId } = req.query;
@@ -551,7 +590,6 @@ router.get("/quiz", auth, async (req, res) => {
           .status(422)
           .send({ status: "failed", message: "School not found" });
 
-      console.log({ quizId });
       const getQuiz = school.quiz.find((item) => item._id == quizId);
       const sessions = getQuiz.sessions.map((item) => {
         return {
@@ -560,7 +598,13 @@ router.get("/quiz", auth, async (req, res) => {
           percentage: item.participants?.length,
         };
       });
-      return res.status(200).send({ status: "success", data: sessions });
+      return res
+        .status(200)
+        .send({
+          status: "success",
+          data: sessions,
+          extra: { title: getQuiz.title, status: getQuiz.status },
+        });
     }
   } else if (type === "sessions") {
   }
