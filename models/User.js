@@ -231,6 +231,11 @@ const userSchema = new schema({
     min: 0,
     default: 0,
   },
+  schoolPoints: {
+    type: Number,
+    min: 0,
+    default: 0,
+  },
   preffix: {
     type: String,
     required: false,

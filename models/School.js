@@ -89,6 +89,11 @@ const quizSchema = new schema({
   teacher: {
     type: schema.Types.ObjectId,
     ref: "User",
+    required: true,
+  },
+  date: {
+    type: Date,
+    default: Date.now,
   },
   class: {
     type: String,

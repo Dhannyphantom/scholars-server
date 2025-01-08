@@ -472,6 +472,8 @@ router.put("/quiz", auth, async (req, res) => {
       subject: quizData?.subject,
       class: quizData?.class,
       title: quizData?.title,
+      date: new Date(),
+      teacher: userId,
     };
     // update questions
     school.quiz[quizIdx].questions = quizData?.questions;
@@ -495,7 +497,9 @@ router.put("/quiz_status", auth, async (req, res) => {
   if (!schoolId && !quizId && !status)
     return res.status(422).send({ status: "failed", message: "Invalid info" });
 
-  const userInfo = await User.findById(userId).select("accountType");
+  const userInfo = await User.findById(userId).select(
+    "accountType preffix firstName lastName"
+  );
   if (!userInfo)
     return res
       .status(422)
@@ -513,6 +517,34 @@ router.put("/quiz_status", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "School not found" });
 
+  let pusher = {};
+
+  if (status === "active") {
+    pusher.$push = {
+      announcements: {
+        teacher: userId,
+        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+          userInfo?.firstName
+        )} ${capFirstLetter(
+          userInfo?.lastName
+        )} has started a new quiz session for your class\nParticipate Now`,
+        classes: [schoolClass],
+      },
+    };
+  } else if (status === "review") {
+    pusher.$push = {
+      announcements: {
+        teacher: userId,
+        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+          userInfo?.firstName
+        )} ${capFirstLetter(
+          userInfo?.lastName
+        )} has closed the quiz session for your class\nWait for your scores to be released`,
+        classes: [schoolClass],
+      },
+    };
+  }
+
   await School.updateOne(
     { _id: schoolId, "quiz._id": quizId },
     {
@@ -520,6 +552,7 @@ router.put("/quiz_status", auth, async (req, res) => {
         "quiz.$.status": status,
         "quiz.$.class": schoolClass,
       },
+      ...pusher,
     }
   );
 
@@ -542,10 +575,13 @@ router.get("/quiz", auth, async (req, res) => {
 
   let school,
     quizzes = [];
+
   if (type == "detail") {
     if (userInfo.accountType === "student") {
       school = await School.findById(schoolId)
-        .select("quiz.title quiz.subject quiz.status quiz.teacher")
+        .select(
+          "quiz.title quiz.date quiz.subject quiz._id quiz.status quiz.teacher"
+        )
         .populate([
           {
             path: "quiz.subject",
@@ -563,7 +599,9 @@ router.get("/quiz", auth, async (req, res) => {
           .status(422)
           .send({ status: "failed", message: "School not found" });
 
-      school.quiz = school.quiz.filter((item) => item?.status != "inactive");
+      const quizz = school.quiz.filter((item) => item?.status != "inactive");
+
+      return res.status(200).send({ status: "success", data: quizz });
     } else if (userInfo.accountType === "teacher") {
       school = await School.findById(schoolId)
         .select("quiz.title quiz.subject quiz.status quiz._id")
@@ -654,6 +692,7 @@ router.get("/quiz", auth, async (req, res) => {
           status: getQuiz.status,
           questions: getQuiz.questions,
           class: getQuiz.class,
+          subject: getQuiz.subject,
         },
       });
     }
@@ -661,6 +700,52 @@ router.get("/quiz", auth, async (req, res) => {
   }
 
   res.send({ status: "success", data: school?.quiz });
+});
+
+router.post("/get_quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, quizId, type } = req.body;
+
+  if (!quizId)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid quiz info" });
+
+  const userInfo = await User.findById(userId).select("accountType");
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+  if (userInfo.accountType !== "student")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not authorized" });
+
+  const school = await School.findById(schoolId)
+    .populate([
+      {
+        path: "quiz.subject",
+        model: "Subject",
+        select: "name",
+      },
+    ])
+    .select("quiz._id quiz.questions quiz.subject quiz.teacher");
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  let quiz;
+  if (type === "school") {
+    quiz = school.quiz.find((item) => item._id?.toString() == quizId);
+    quiz = [quiz];
+  } else {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid type info" });
+  }
+
+  return res.send({ status: "success", data: quiz });
 });
 
 router.get("/announcements", auth, async (req, res) => {
@@ -689,8 +774,8 @@ router.get("/announcements", auth, async (req, res) => {
   await School.updateOne(
     { _id: schoolId, "announcements.read": false },
     {
-      $set: {
-        "announcements.$.read": true,
+      $addToSet: {
+        "announcements.$.reads": userId,
       },
     }
   );
@@ -700,7 +785,7 @@ router.get("/announcements", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "School not found" });
 
-  res.send({ status: "success", data: prevAnnouncements });
+  res.send({ status: "success", data: prevAnnouncements.reverse() });
 });
 
 router.get("/fetch", auth, async (req, res) => {
