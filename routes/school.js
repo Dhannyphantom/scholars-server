@@ -439,6 +439,54 @@ router.post("/quiz", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.put("/quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const quiz = req.body;
+  const { schoolId } = quiz;
+
+  if (!quiz)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Please provide info" });
+
+  const school = await School.findById(schoolId);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  const quizIdx = school.quiz.findIndex(
+    (item) => item?._id?.toString() == quiz?._id
+  );
+
+  if (quizIdx > -1) {
+    const quizData = { ...quiz };
+    delete quizData.schoolId;
+    quizData.subject = quizData?.subject?._id;
+    quizData.class = quizData?.class?.name?.toLowerCase();
+    quizData.status = "inactive";
+    school.quiz[quizIdx] = {
+      ...school.quiz[quizIdx],
+      title: quizData?.title,
+      status: quizData?.status,
+      subject: quizData?.subject,
+      class: quizData?.class,
+      title: quizData?.title,
+    };
+    // update questions
+    school.quiz[quizIdx].questions = quizData?.questions;
+    school.quiz[quizIdx]._id = quizData?._id;
+
+    await school.save();
+  } else {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Quiz data not found" });
+  }
+
+  res.send({ status: "success" });
+});
+
 router.put("/quiz_status", auth, async (req, res) => {
   const userId = req.user.userId;
 
@@ -598,13 +646,16 @@ router.get("/quiz", auth, async (req, res) => {
           percentage: item.participants?.length,
         };
       });
-      return res
-        .status(200)
-        .send({
-          status: "success",
-          data: sessions,
-          extra: { title: getQuiz.title, status: getQuiz.status },
-        });
+      return res.status(200).send({
+        status: "success",
+        data: sessions,
+        extra: {
+          title: getQuiz.title,
+          status: getQuiz.status,
+          questions: getQuiz.questions,
+          class: getQuiz.class,
+        },
+      });
     }
   } else if (type === "sessions") {
   }
