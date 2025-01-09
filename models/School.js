@@ -28,17 +28,6 @@ const classSchema = new schema({
   },
 });
 
-const participantsSchema = new schema({
-  student: {
-    type: schema.Types.ObjectId,
-    ref: "User",
-  },
-  score: {
-    type: Number,
-    default: 0,
-  },
-});
-
 const answerSchema = new schema({
   name: {
     type: String,
@@ -69,6 +58,58 @@ const quizQuestionsSchema = new schema({
   },
 });
 
+const quizSessionSchema = new schema({
+  subject: {
+    _id: {
+      type: schema.Types.ObjectId,
+      ref: "Subject",
+    },
+    name: {
+      type: String,
+      required: false,
+    },
+  },
+  teacher: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+  },
+  questions: [quizQuestionsSchema],
+});
+
+const participantsSchema = new schema({
+  student: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+  },
+  score: {
+    type: Number,
+    default: 0,
+  },
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+  quiz: {
+    type: [quizSessionSchema],
+  },
+});
+
+const sessionSchema = new schema({
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+  participants: [participantsSchema],
+  average_score: {
+    type: Number,
+    default: 0,
+  },
+  total_score: {
+    type: Number,
+    default: 0,
+  },
+});
+
 const quizSchema = new schema({
   status: {
     type: String,
@@ -86,6 +127,13 @@ const quizSchema = new schema({
     required: true,
   },
   questions: [quizQuestionsSchema],
+  currentSession: {
+    type: schema.Types.ObjectId,
+  },
+  currentSubmissions: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
   teacher: {
     type: schema.Types.ObjectId,
     ref: "User",
@@ -101,23 +149,7 @@ const quizSchema = new schema({
     lowercase: true,
     enum: classEnums,
   },
-  sessions: [
-    {
-      date: {
-        type: Date,
-        default: Date.now,
-      },
-      participants: [participantsSchema],
-      average_score: {
-        type: Number,
-        default: 0,
-      },
-      total_score: {
-        type: Number,
-        default: 0,
-      },
-    },
-  ],
+  sessions: [sessionSchema],
 });
 
 const announcementSchema = new schema({

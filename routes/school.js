@@ -5,9 +5,9 @@ const uuid = require("uuid");
 // const multer = require("multer");
 // const { getUploadUri } = require("../controllers/helpers");
 const auth = require("../middlewares/authRoutes");
-const { Category } = require("../models/Category");
-const { Subject } = require("../models/Subject");
-const { Topic } = require("../models/Topic");
+// const { Category } = require("../models/Category");
+// const { Subject } = require("../models/Subject");
+// const { Topic } = require("../models/Topic");
 const { School } = require("../models/School");
 const { User } = require("../models/User");
 const {
@@ -15,7 +15,11 @@ const {
   userSelector,
   getClasses,
 } = require("../controllers/helpers");
+const { default: mongoose } = require("mongoose");
 const nanoid = uuid.v4;
+
+const selectQuiz =
+  "quiz._id quiz.questions quiz.currentSession quiz.currentSubmissions quiz.sessions quiz.subject quiz.teacher";
 
 // const storage = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -381,6 +385,153 @@ router.post("/announcement", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.post("/get_quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, quizId, type } = req.body;
+
+  // if (!quizId)
+  //   return res
+  //     .status(422)
+  //     .send({ status: "failed", message: "Invalid quiz info" });
+
+  const userInfo = await User.findById(userId).select("accountType");
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+  if (userInfo.accountType !== "student")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not authorized" });
+
+  const school = await School.findById(schoolId)
+    .populate([
+      {
+        path: "quiz.subject",
+        model: "Subject",
+        select: "name",
+      },
+    ])
+    .select("quiz._id quiz.questions quiz.subject quiz.teacher");
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  let quiz;
+  if (type === "school") {
+    quiz = school.quiz.find((item) => item._id?.toString() == quizId);
+    quiz = [quiz];
+  } else {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid type info" });
+  }
+
+  return res.send({ status: "success", data: quiz });
+});
+
+router.post("/submit_quiz", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+  const { schoolId, type, questions, quizId } = data;
+
+  const userInfo = await User.findById(userId).select(
+    "accountType schoolPoints"
+  );
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+  if (userInfo.accountType !== "student")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not authorized" });
+
+  const school = await School.findById(schoolId)
+    .populate([
+      {
+        path: "quiz.subject",
+        model: "Subject",
+        select: "name",
+      },
+    ])
+    .select(selectQuiz);
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  // Get stats
+
+  let point = 0,
+    total = 0;
+
+  questions.forEach((quest) => {
+    quest.questions.forEach((question) => {
+      const correctAnswer = question?.answers?.find(
+        (item) => item?.correct == true
+      );
+      if (correctAnswer?._id == question?.answered?._id) {
+        point += question.point;
+        total += question.point;
+      } else {
+        total += question.point;
+        point -= 15;
+        // setStat({ ...stat, point: statPoints });
+      }
+    });
+  });
+
+  if (type == "school") {
+    const getQuiz = school.quiz?.find(
+      (item) => item?._id?.toString() == quizId
+    );
+    const checkUser = getQuiz.currentSubmissions.findIndex(
+      (item) => item?.toString() == userId
+    );
+    if (checkUser > -1) {
+      return res.status(422).send({
+        status: "failed",
+        message: "You have already this attempted this quiz, No points added",
+      });
+    }
+    getQuiz.currentSubmissions.push(userId);
+    if (Boolean(getQuiz)) {
+      const sess = getQuiz.sessions?.find(
+        (item) => item?._id?.toString() == getQuiz.currentSession?.toString()
+      );
+      if (sess) {
+        sess.participants.addToSet({
+          student: userId,
+          quiz: questions,
+          score: point,
+        });
+        sess.total_score = total;
+        sess.average_score =
+          sess.participants.reduce((acc, curr) => acc + curr.score, 0) /
+          sess.participants.length;
+
+        // give school points
+        userInfo.schoolPoints += point;
+
+        await school.save();
+        await userInfo.save();
+      } else {
+        return res
+          .status(422)
+          .send({ status: "failed", message: "Session not found" });
+      }
+    } else {
+      return res
+        .status(422)
+        .send({ status: "failed", message: "Quiz not found" });
+    }
+  }
+
+  res.send({ status: "success" });
+});
+
 router.post("/quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const {
@@ -402,11 +553,15 @@ router.post("/quiz", auth, async (req, res) => {
   if (!userInfo)
     return res.status(422).send({ status: "failed", message: "Invalid User" });
 
+  const sessionId = new mongoose.Types.ObjectId();
+
   const pushObj = {
     class: schoolClass?.name?.toLowerCase(),
     teacher: userId,
     questions: [],
     subject: subject?._id,
+    sessions: [{ _id: sessionId }],
+    currentSession: sessionId,
     title,
     status: save ? "inactive" : "active",
   };
@@ -420,6 +575,7 @@ router.post("/quiz", auth, async (req, res) => {
   }));
 
   pushObj.questions = quizQuestions;
+
   school.quiz.push(pushObj);
 
   if (save === false) {
@@ -580,7 +736,7 @@ router.get("/quiz", auth, async (req, res) => {
     if (userInfo.accountType === "student") {
       school = await School.findById(schoolId)
         .select(
-          "quiz.title quiz.date quiz.subject quiz._id quiz.status quiz.teacher"
+          "quiz.title quiz.date quiz.currentSubmissions quiz.subject quiz._id quiz.status quiz.teacher"
         )
         .populate([
           {
@@ -599,7 +755,21 @@ router.get("/quiz", auth, async (req, res) => {
           .status(422)
           .send({ status: "failed", message: "School not found" });
 
-      const quizz = school.quiz.filter((item) => item?.status != "inactive");
+      const quizz = school.quiz
+        .filter((item) => item?.status != "inactive")
+        .map((item) => {
+          const checkUser = item.currentSubmissions?.findIndex(
+            (usr) => usr?.toString() == userId
+          );
+          if (checkUser > -1) {
+            return {
+              ...item._doc,
+              status: "submitted",
+            };
+          } else {
+            return item;
+          }
+        });
 
       return res.status(200).send({ status: "success", data: quizz });
     } else if (userInfo.accountType === "teacher") {
@@ -696,56 +866,9 @@ router.get("/quiz", auth, async (req, res) => {
         },
       });
     }
-  } else if (type === "sessions") {
   }
 
   res.send({ status: "success", data: school?.quiz });
-});
-
-router.post("/get_quiz", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const { schoolId, quizId, type } = req.body;
-
-  if (!quizId)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "Invalid quiz info" });
-
-  const userInfo = await User.findById(userId).select("accountType");
-  if (!userInfo)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "User not found" });
-  if (userInfo.accountType !== "student")
-    return res
-      .status(422)
-      .send({ status: "failed", message: "User not authorized" });
-
-  const school = await School.findById(schoolId)
-    .populate([
-      {
-        path: "quiz.subject",
-        model: "Subject",
-        select: "name",
-      },
-    ])
-    .select("quiz._id quiz.questions quiz.subject quiz.teacher");
-  if (!school)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "School not found" });
-
-  let quiz;
-  if (type === "school") {
-    quiz = school.quiz.find((item) => item._id?.toString() == quizId);
-    quiz = [quiz];
-  } else {
-    return res
-      .status(422)
-      .send({ status: "failed", message: "Invalid type info" });
-  }
-
-  return res.send({ status: "success", data: quiz });
 });
 
 router.get("/announcements", auth, async (req, res) => {

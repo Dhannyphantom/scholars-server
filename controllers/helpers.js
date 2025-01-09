@@ -71,6 +71,10 @@ const capFirstLetter = (str) => {
   return str[0].toUpperCase() + str.slice(1);
 };
 
+const getUserPoint = (point) => {
+  return Math.max(0, point);
+};
+
 const capCapitalize = (str) => {
   let capitalized = capFirstLetter(str);
   for (let i = 0; i < str.length; i++) {
@@ -133,6 +137,7 @@ module.exports = {
   getCurrencyAmount,
   classEnums,
   getUploadUri,
+  getUserPoint,
   getClasses,
   userSelector,
   fullUserSelector,
