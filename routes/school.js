@@ -109,6 +109,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = true;
+      await instanceInfo.save();
     } else if (instance === "student") {
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
@@ -131,6 +133,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = true;
+      await instanceInfo.save();
     }
   } else if (type == "reject") {
     if (instance == "teacher") {
@@ -157,6 +161,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = true;
+      await instanceInfo.save();
     } else if (instance == "student") {
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
@@ -181,6 +187,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = false;
+      await instanceInfo.save();
     }
   } else if (type == "unverify") {
     if (instance == "teacher") {
@@ -207,6 +215,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = false;
+      await instanceInfo.save();
     } else if (instance === "student") {
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
@@ -231,6 +241,8 @@ router.post("/verify", auth, async (req, res) => {
           },
         }
       );
+      instanceInfo.verified = false;
+      await instanceInfo.save();
     }
   }
 
@@ -989,13 +1001,18 @@ router.get("/fetch", auth, async (req, res) => {
     // announcementCount = school.announcements?.filter()
     classCount = school.classes.length;
     quizCount = school.quiz.filter((item) => item.status == "active").length;
+    return res.send({
+      status: "success",
+      data: { ...school?._doc, classCount, assignmentCount, quizCount },
+      isVerified,
+    });
+  } else {
+    return res.send({
+      status: "success",
+      data: {},
+      isVerified,
+    });
   }
-
-  res.send({
-    status: "success",
-    data: { ...school._doc, classCount, assignmentCount, quizCount },
-    isVerified,
-  });
 });
 
 router.get("/classes", auth, async (req, res) => {

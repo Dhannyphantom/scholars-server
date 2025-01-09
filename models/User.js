@@ -270,8 +270,15 @@ const userSchema = new schema({
     },
   },
   class: {
-    type: String,
-    required: false,
+    level: {
+      type: String,
+      enum: classEnums,
+      required: false,
+    },
+    hasChanged: {
+      type: Boolean,
+      default: false,
+    },
   },
   schoolLevel: {
     type: String,

@@ -132,12 +132,17 @@ router.put("/updateProfile", auth, async (req, res) => {
     }
   }
 
-  await User.updateOne(
-    { _id: userId },
-    {
-      $set: update_object,
-    }
-  );
+  if (update_object["class"]) {
+    console.log(update_object["class"]);
+    update_object["class"] = {
+      hasChanged: true,
+      level: update_object["class"]?.name?.toLowerCase(),
+    };
+  }
+
+  if (update_object["gender"]) {
+    update_object["gender"] = update_object["gender"]?.name;
+  }
 
   const updatedUser = await User.findByIdAndUpdate(
     userId,
