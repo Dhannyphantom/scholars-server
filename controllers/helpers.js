@@ -105,15 +105,16 @@ const createDir = (path) => {
     if (error) {
       // If current directory does not exist
       // then create it
-      fs.mkdir(path, (error) => {
-        if (error) {
-          obj = { error, path: null };
-          console.log("Path Error", error);
-        } else {
-          console.log("New path created...");
-          obj = { path, error: null };
-        }
-      });
+      fs.mkdirSync(path, { recursive: true });
+      console.log("New path created...");
+      // fs.mkdirSync(path, (error) => {
+      //   if (error) {
+      //     obj = { error, path: null };
+      //     console.log("Path Error", error);
+      //   } else {
+      //     obj = { path, error: null };
+      //   }
+      // });
     } else {
       obj = { path, error: null };
       console.log("Path is found");
