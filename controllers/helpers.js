@@ -91,7 +91,8 @@ const capCapitalize = (str) => {
 };
 
 const createDir = (path) => {
-  return fs.access(path, (error) => {
+  let obj = null;
+  fs.access(path, (error) => {
     // To check if the given directory
     // already exists or not
     if (error) {
@@ -99,15 +100,17 @@ const createDir = (path) => {
       // then create it
       fs.mkdir(path, (error) => {
         if (error) {
-          return { error, path: null };
+          obj = { error, path: null };
         } else {
-          return { path, error: null };
+          obj = { path, error: null };
         }
       });
     } else {
-      return { path, error: null };
+      obj = { path, error: null };
     }
   });
+
+  return obj;
 };
 
 const getCurrencyAmount = (number) => {

@@ -3,6 +3,7 @@ const express = require("express");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
 // const getUploadMeta = require("../controllers/getUploadMeta");
+const dirr = require("../middlewares/dirCreator");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -91,7 +92,7 @@ router.get("/user", auth, async (req, res) => {
 
 router.post(
   "/updateAvatar",
-  [auth, uploader.single("upload"), mediaUploader],
+  [auth, dirr, uploader.single("upload"), mediaUploader],
   async (req, res) => {
     const user = await User.findById(req.user.userId);
     console.log({ user });

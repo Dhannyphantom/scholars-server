@@ -3,11 +3,11 @@ const { createDir } = require("./helpers");
 
 // const Fawn = require("fawn");
 
-const data = createDir("uploads/assets");
-const error = data?.error;
-if (error) {
-  console.log("Assets creation failed!");
-}
+// const data = createDir("uploads/assets");
+// const error = data?.error;
+// if (error) {
+//   console.log("Assets creation failed!");
+// }
 
 let connectUri = "";
 const currentIp = process.env.ADDRESS;
