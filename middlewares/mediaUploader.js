@@ -33,7 +33,6 @@ const uploadFile = async (buffer, filePath, mimetype) => {
 module.exports = async (req, res, next) => {
   const media = [];
   const mediaData = JSON.parse(req.body.data);
-  console.log(mediaData, "Mediaaa");
 
   req.data = mediaData;
   if (mediaData.hasOwnProperty("media") && mediaData.media === false) {
@@ -49,6 +48,7 @@ module.exports = async (req, res, next) => {
     const data = isFiles ? req.files : [req.file];
     const resizePromises = data.map(async (file) => {
       const filePath = path.resolve(outputFolder, file.filename);
+
       await sharp(file.path)
         .toFormat(file.mimetype?.split("/")[1], {
           mozjpeg: true,
@@ -64,7 +64,6 @@ module.exports = async (req, res, next) => {
       try {
         fs.unlinkSync(file.path);
       } catch (err) {
-        fs.unlink(file.path);
         console.log({ unlinkErr: err });
       }
       const imageObject = await sharp(filePath).metadata();

@@ -101,14 +101,14 @@ router.post(
   [auth, uploader.single("upload"), mediaUploader],
   async (req, res) => {
     const user = await User.findById(req.user.userId);
-    // console.log({ user });
+    console.log({ user });
     const imageData = req.media;
 
     if (!imageData) return res.status(400).json("Media data not found!");
 
     const userAvatarObj = getUploadUri(req.media, "avatars");
 
-    // console.log({ media: userAvatarObj, imageData });
+    console.log({ media: userAvatarObj, imageData });
 
     // return res.status(422).send({ status: "failed", message: "Testing" });
 
