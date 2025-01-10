@@ -12,7 +12,6 @@ const {
 const firebaseConfig = require("../controllers/firebase.config");
 // const { createDir } = require("../controllers/helpers");
 
-const SHARP_QUALITY = 100;
 // INITIALIZING FIREBASE SDK
 initializeApp(firebaseConfig);
 
@@ -20,18 +19,21 @@ initializeApp(firebaseConfig);
 const storage = getStorage();
 
 const uploadFile = async (buffer, filePath, mimetype) => {
+  console.log("Uploading...");
   const storageRef = ref(storage, filePath);
 
   const snapshot = await uploadBytesResumable(storageRef, buffer, {
     contentType: mimetype,
   });
   const mediaUrl = await getDownloadURL(snapshot.ref);
+  console.log({ uploaded: mediaUrl });
   return mediaUrl;
 };
 
 module.exports = async (req, res, next) => {
   const media = [];
   const mediaData = JSON.parse(req.body.data);
+  console.log(mediaData, "Mediaaa");
 
   req.data = mediaData;
   if (mediaData.hasOwnProperty("media") && mediaData.media === false) {
@@ -56,7 +58,7 @@ module.exports = async (req, res, next) => {
 
       await sharp(file.path)
         .resize(60)
-        .toFormat(file.mimetype?.split("/")[1], { mozjpeg: true, quality: 5 })
+        .toFormat(file.mimetype?.split("/")[1], { mozjpeg: true, quality: 15 })
         .toFile(path.resolve(outputThumb, file.filename));
 
       try {
@@ -75,17 +77,22 @@ module.exports = async (req, res, next) => {
     });
     await Promise.all([...resizePromises]);
   } else if (_NET === "online") {
-    const data = Boolean(req.file) ? [req.file] : req.files;
-    const resizePromises = data.map(async (file) => {
+    console.log("ONLINE");
+    const mediaArr = Boolean(req.file) ? [req.file] : req.files;
+    const resizePromises = mediaArr.map(async (file) => {
       const { data, info } = await sharp(file.path)
-        .resize(1000)
-        .toFormat("jpeg", { mozjpeg: true, quality: SHARP_QUALITY })
+        .toFormat(file.mimetype?.split("/")[1], {
+          mozjpeg: true,
+          quality: 65,
+        })
         .toBuffer({ resolveWithObject: true });
 
       const bufferThumb = await sharp(file.path)
-        .resize(100)
-        .jpeg({ quality: 30 })
+        .resize(60)
+        .toFormat(file.mimetype?.split("/")[1], { mozjpeg: true, quality: 15 })
         .toBuffer();
+
+      console.log({ data, bufferThumb });
 
       const mediaUrl = await uploadFile(
         data,
@@ -98,7 +105,19 @@ module.exports = async (req, res, next) => {
         file.mimetype
       );
 
-      fs.unlinkSync(file.path);
+      try {
+        fs.unlinkSync(file.path);
+      } catch (err) {
+        console.log({ unlinkErr: err });
+      }
+
+      console.log({
+        uri: mediaUrl,
+        thumb: thumbUrl,
+        width: info.width,
+        type: "image",
+        height: info.height,
+      });
 
       media.push({
         uri: mediaUrl,

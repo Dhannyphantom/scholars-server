@@ -1,5 +1,6 @@
 const _NET = process.env.NET_DEV;
 // const image_exts = ["jpg", "jpeg", "png", "gif"];
+const fs = require("fs");
 const User = require("../models/User.js");
 
 const ADDRESS = process.env.ADDRESS;
@@ -89,6 +90,26 @@ const capCapitalize = (str) => {
   return capitalized;
 };
 
+const createDir = (path) => {
+  return fs.access(path, (error) => {
+    // To check if the given directory
+    // already exists or not
+    if (error) {
+      // If current directory does not exist
+      // then create it
+      fs.mkdir(path, (error) => {
+        if (error) {
+          return { error, path: null };
+        } else {
+          return { path, error: null };
+        }
+      });
+    } else {
+      return { path, error: null };
+    }
+  });
+};
+
 const getCurrencyAmount = (number) => {
   if (number && typeof number == "number") {
     return `₦${Number(number).toLocaleString()}`;
@@ -142,5 +163,6 @@ module.exports = {
   userSelector,
   fullUserSelector,
   capFirstLetter,
+  createDir,
   capCapitalize,
 };
