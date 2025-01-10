@@ -19,14 +19,12 @@ initializeApp(firebaseConfig);
 const storage = getStorage();
 
 const uploadFile = async (buffer, filePath, mimetype) => {
-  console.log("Uploading...");
   const storageRef = ref(storage, filePath);
 
   const snapshot = await uploadBytesResumable(storageRef, buffer, {
     contentType: mimetype,
   });
   const mediaUrl = await getDownloadURL(snapshot.ref);
-  console.log({ uploaded: mediaUrl });
   return mediaUrl;
 };
 
@@ -77,7 +75,6 @@ module.exports = async (req, res, next) => {
     });
     await Promise.all([...resizePromises]);
   } else if (_NET === "online") {
-    console.log("ONLINE");
     const mediaArr = Boolean(req.file) ? [req.file] : req.files;
     const resizePromises = mediaArr.map(async (file) => {
       const { data, info } = await sharp(file.path)
@@ -91,8 +88,6 @@ module.exports = async (req, res, next) => {
         .resize(60)
         .toFormat(file.mimetype?.split("/")[1], { mozjpeg: true, quality: 15 })
         .toBuffer();
-
-      console.log({ data, bufferThumb });
 
       const mediaUrl = await uploadFile(
         data,
@@ -110,14 +105,6 @@ module.exports = async (req, res, next) => {
       } catch (err) {
         console.log({ unlinkErr: err });
       }
-
-      console.log({
-        uri: mediaUrl,
-        thumb: thumbUrl,
-        width: info.width,
-        type: "image",
-        height: info.height,
-      });
 
       media.push({
         uri: mediaUrl,
