@@ -64,6 +64,7 @@ module.exports = async (req, res, next) => {
       try {
         fs.unlinkSync(file.path);
       } catch (err) {
+        fs.unlink(file.path);
         console.log({ unlinkErr: err });
       }
       const imageObject = await sharp(filePath).metadata();

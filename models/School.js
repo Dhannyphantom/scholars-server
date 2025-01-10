@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const Joi = require("joi");
 const { txHistorySchema } = require("./User");
-const { classEnums } = require("../controllers/helpers");
+const { classsSchoolEnums } = require("../controllers/helpers");
 
 const schema = mongoose.Schema;
 
@@ -16,7 +16,7 @@ const classSchema = new schema({
     type: String,
     required: true,
     lowercase: true,
-    enum: classEnums,
+    enum: classsSchoolEnums,
   },
   teachers: {
     type: [schema.Types.ObjectId],
@@ -147,7 +147,7 @@ const quizSchema = new schema({
     type: String,
     required: false,
     lowercase: true,
-    enum: classEnums,
+    enum: classsSchoolEnums,
   },
   sessions: [sessionSchema],
 });
@@ -183,7 +183,7 @@ const announcementSchema = new schema({
   classes: {
     type: [String],
     lowercase: true,
-    enum: classEnums,
+    enum: classsSchoolEnums,
   },
   visibility: {
     type: String,
@@ -225,7 +225,7 @@ const submissionSchema = new schema({
 const assignmentSchema = new schema({
   classes: {
     type: [String],
-    enum: classEnums,
+    enum: classsSchoolEnums,
     lowercase: true,
   },
   question: {

@@ -2,24 +2,30 @@ const express = require("express");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
+const path = require("path");
+
 // const getUploadMeta = require("../controllers/getUploadMeta");
-const dirr = require("../middlewares/dirCreator");
+
+const bcrypt = require("bcrypt");
+const { User, validateLog, validateReg } = require("../models/User");
+const auth = require("../middlewares/authRoutes");
+const {
+  getUploadUri,
+  fullUserSelector,
+  createDir,
+} = require("../controllers/helpers");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    return cb(null, "./uploads/assets/");
+    const uploadPath = "uploads/assets";
+    createDir(uploadPath);
+    return cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
     return cb(null, `${file.originalname}`);
   },
 });
-
-const uploader = multer({ storage, limits: { fieldSize: 15 * 1024 * 1024 } }); // 15MB
-
-const bcrypt = require("bcrypt");
-const { User, validateLog, validateReg } = require("../models/User");
-const auth = require("../middlewares/authRoutes");
-const { getUploadUri, fullUserSelector } = require("../controllers/helpers");
+const uploader = multer({ storage, limits: { fieldSize: 5 * 1024 * 1024 } }); // 5MB
 
 const router = express.Router();
 
@@ -92,17 +98,17 @@ router.get("/user", auth, async (req, res) => {
 
 router.post(
   "/updateAvatar",
-  [auth, dirr, uploader.single("upload"), mediaUploader],
+  [auth, uploader.single("upload"), mediaUploader],
   async (req, res) => {
     const user = await User.findById(req.user.userId);
-    console.log({ user });
+    // console.log({ user });
     const imageData = req.media;
 
     if (!imageData) return res.status(400).json("Media data not found!");
 
     const userAvatarObj = getUploadUri(req.media, "avatars");
 
-    console.log({ media: userAvatarObj, imageData });
+    // console.log({ media: userAvatarObj, imageData });
 
     // return res.status(422).send({ status: "failed", message: "Testing" });
 

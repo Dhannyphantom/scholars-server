@@ -1,13 +1,20 @@
 const _NET = process.env.NET_DEV;
 // const image_exts = ["jpg", "jpeg", "png", "gif"];
 const fs = require("fs");
-const User = require("../models/User.js");
+const path = require("path");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
 const GT_VALUE = 1000;
 
-const classEnums = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
+const classsSchoolEnums = [
+  "jss 1",
+  "jss 2",
+  "jss 3",
+  "sss 1",
+  "sss 2",
+  "sss 3",
+];
 const userSelector =
   "avatar firstName lastName username gender preffix state lga points rank accountType";
 const fullUserSelector = "-password -__v";
@@ -101,16 +108,29 @@ const createDir = (path) => {
       fs.mkdir(path, (error) => {
         if (error) {
           obj = { error, path: null };
+          console.log("Path Error", error);
         } else {
+          console.log("New path created...");
           obj = { path, error: null };
         }
       });
     } else {
       obj = { path, error: null };
+      console.log("Path is found");
     }
   });
 
   return obj;
+};
+
+const ensureDirectory = (dir) => {
+  console.log({ dir });
+  if (!fs.existsSync(dir)) {
+    console.log("Does not exist");
+    fs.mkdir(dir, { recursive: true });
+  } else {
+    console.log("Exists");
+  }
 };
 
 const getCurrencyAmount = (number) => {
@@ -146,24 +166,19 @@ const calculatePointsAmount = (value) => {
 };
 
 const getClasses = () => {
-  return classEnums.map((item) => ({ level: item, alias: "Class" }));
-};
-
-module.exports.fetchUser = async (userId) => {
-  const userData = await User.findOne({ _id: userId }).select("-password -__v");
-
-  return userData ?? null;
+  return classsSchoolEnums.map((item) => ({ level: item, alias: "Class" }));
 };
 
 module.exports = {
   formatPoints,
   calculatePointsAmount,
   getCurrencyAmount,
-  classEnums,
+  classsSchoolEnums,
   getUploadUri,
   getUserPoint,
   getClasses,
   userSelector,
+  ensureDirectory,
   fullUserSelector,
   capFirstLetter,
   createDir,

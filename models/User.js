@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const Joi = require("joi");
 const jwt = require("jsonwebtoken");
-const { classEnums } = require("../controllers/helpers");
+const { classsSchoolEnums } = require("../controllers/helpers");
 
 const schema = mongoose.Schema;
 
@@ -272,7 +272,7 @@ const userSchema = new schema({
   class: {
     level: {
       type: String,
-      enum: classEnums,
+      enum: classsSchoolEnums,
       required: false,
     },
     hasChanged: {
