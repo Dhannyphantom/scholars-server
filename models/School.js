@@ -104,6 +104,10 @@ const sessionSchema = new schema({
     type: Number,
     default: 0,
   },
+  ended: {
+    type: Boolean,
+    default: false,
+  },
   total_score: {
     type: Number,
     default: 0,

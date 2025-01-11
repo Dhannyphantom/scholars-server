@@ -699,30 +699,40 @@ router.put("/quiz_status", auth, async (req, res) => {
         classes: [schoolClass],
       },
     };
-  } else if (status === "review") {
-    pusher.$push = {
-      announcements: {
-        teacher: userId,
-        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo?.firstName
-        )} ${capFirstLetter(
-          userInfo?.lastName
-        )} has closed the quiz session for your class\nWait for your scores to be released`,
-        classes: [schoolClass],
-      },
-    };
-  }
 
-  await School.updateOne(
-    { _id: schoolId, "quiz._id": quizId },
-    {
-      $set: {
-        "quiz.$.status": status,
-        "quiz.$.class": schoolClass,
-      },
-      ...pusher,
-    }
-  );
+    await School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $set: {
+          "quiz.$.status": status,
+          "quiz.$.class": schoolClass,
+        },
+        ...pusher,
+      }
+    );
+  } else if (status === "review") {
+    // Close quiz session
+    // set quiz obj to false
+    const quiz = school.quiz.find((item) => item._id === quizId);
+    const session = quiz.sessions.find(
+      (item) => item._id == quiz.currentSession
+    );
+
+    school.announcements.push({
+      teacher: userId,
+      message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo?.firstName
+      )} ${capFirstLetter(
+        userInfo?.lastName
+      )} has closed the quiz session for your class\nWait for your scores to be released`,
+      classes: [schoolClass],
+    });
+    quiz.currentSubmissions = [];
+    quiz.currentSession = quiz._id;
+    session.ended = true;
+
+    await school.save();
+  }
 
   res.send({ status: "success" });
 });
@@ -748,7 +758,7 @@ router.get("/quiz", auth, async (req, res) => {
     if (userInfo.accountType === "student") {
       school = await School.findById(schoolId)
         .select(
-          "quiz.title quiz.date quiz.currentSubmissions quiz.subject quiz._id quiz.status quiz.teacher"
+          "quiz.title quiz.date quiz.currentSession quiz.subject quiz._id quiz.status quiz.teacher"
         )
         .populate([
           {
@@ -786,7 +796,9 @@ router.get("/quiz", auth, async (req, res) => {
       return res.status(200).send({ status: "success", data: quizz });
     } else if (userInfo.accountType === "teacher") {
       school = await School.findById(schoolId)
-        .select("quiz.title quiz.subject quiz.status quiz._id")
+        .select(
+          "quiz.title quiz.currentSession quiz.subject quiz.status quiz._id"
+        )
         .populate([
           {
             path: "quiz.subject",
@@ -859,13 +871,15 @@ router.get("/quiz", auth, async (req, res) => {
           .send({ status: "failed", message: "School not found" });
 
       const getQuiz = school.quiz.find((item) => item._id == quizId);
-      const sessions = getQuiz.sessions.map((item) => {
-        return {
-          date: item.date,
-          average_score: item.average_score,
-          percentage: item.participants?.length,
-        };
-      });
+      const sessions = getQuiz.sessions
+        .filter((item) => item.ended == true)
+        .map((item) => {
+          return {
+            date: item.date,
+            average_score: item.average_score,
+            percentage: item.participants?.length,
+          };
+        });
       return res.status(200).send({
         status: "success",
         data: sessions,

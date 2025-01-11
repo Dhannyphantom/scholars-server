@@ -14,6 +14,7 @@ const classsSchoolEnums = [
   "sss 1",
   "sss 2",
   "sss 3",
+  "grad",
 ];
 const userSelector =
   "avatar firstName lastName username gender preffix state lga points rank accountType";
@@ -106,7 +107,6 @@ const createDir = (path) => {
       // If current directory does not exist
       // then create it
       fs.mkdirSync(path, { recursive: true });
-      console.log("New path created...");
       // fs.mkdirSync(path, (error) => {
       //   if (error) {
       //     obj = { error, path: null };
@@ -115,9 +115,6 @@ const createDir = (path) => {
       //     obj = { path, error: null };
       //   }
       // });
-    } else {
-      obj = { path, error: null };
-      console.log("Path is found");
     }
   });
 

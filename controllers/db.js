@@ -1,15 +1,6 @@
 const mongoose = require("mongoose");
 const { createDir } = require("./helpers");
 
-// const Fawn = require("fawn");
-// const fs = require("fs");
-const path = require("path");
-// const { ensureDirectory } = require("./helpers");
-
-// // Ensure the directory exists
-
-// ensureDirectory(uploadDir);
-
 createDir("uploads/assets");
 
 let connectUri = "";
@@ -27,10 +18,6 @@ module.exports = () => {
       console.log(`MONGODB CONNECTED ${process.env.NET_DEV} AT ${currentIp}`);
     })
     .catch((err) => console.error("ERROR CONNECTING TO DB", err));
-
-  //   createDir("uploads/");
-  //   createDir("uploads/assets");
-  //   createDir("uploads/thumbs");
 };
 
 // Fawn.init(mongoose);

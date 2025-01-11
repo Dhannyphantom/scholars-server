@@ -169,7 +169,7 @@ const userSchema = new schema({
   },
   accountType: {
     type: String,
-    enum: ["teacher", "student", "professional"],
+    enum: ["teacher", "student", "professional", "manager"],
     required: true,
   },
   birthday: {
