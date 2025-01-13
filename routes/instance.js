@@ -7,6 +7,7 @@ const auth = require("../middlewares/authRoutes");
 const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
+const { Question } = require("../models/Question");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -42,10 +43,56 @@ router.get("/category", auth, async (req, res) => {
   res.send({ status: "success", data: category });
 });
 
+router.put(
+  "/category",
+  [auth, uploader.array("media", 100), mediaUploader],
+  async (req, res) => {
+    const data = req.data;
+
+    if (data?.media) {
+      const media = getUploadUri(req.media, data?.bucket);
+
+      const asset = media.find((obj) => obj.key == data?.image?.assetId);
+      delete asset.key;
+
+      await Category.updateOne(
+        { _id: data?._id },
+        {
+          $set: {
+            name: data?.name,
+            image: asset,
+          },
+        }
+      );
+    } else {
+      await Category.updateOne(
+        { _id: data?._id },
+        {
+          $set: {
+            name: data?.name,
+          },
+        }
+      );
+    }
+
+    res.send({ status: "success", data });
+  }
+);
+
 router.get("/subjects", auth, async (req, res) => {
   const subjects = await Subject.find();
 
   res.send({ status: "success", data: subjects });
+});
+
+router.get("/questions", auth, async (req, res) => {
+  const { subjectId, topicId } = req.query;
+  const questions = await Question.find().or([
+    { subject: subjectId },
+    { topic: topicId },
+  ]);
+
+  res.send({ status: "success", data: questions });
 });
 
 module.exports = router;

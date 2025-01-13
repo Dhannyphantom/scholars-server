@@ -30,7 +30,11 @@ const uploadFile = async (buffer, filePath, mimetype) => {
 
 module.exports = async (req, res, next) => {
   const media = [];
-  const mediaData = JSON.parse(req.body.data);
+  const bodyData = req?.body?.data;
+  const mediaData =
+    Boolean(bodyData) && typeof bodyData == "string"
+      ? JSON.parse(req.body?.data)
+      : req.body;
 
   req.data = mediaData;
   if (mediaData.hasOwnProperty("media") && mediaData.media === false) {
