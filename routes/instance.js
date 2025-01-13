@@ -49,30 +49,34 @@ router.put(
   async (req, res) => {
     const data = req.data;
 
-    if (data?.media) {
-      const media = getUploadUri(req.media, data?.bucket);
-
-      const asset = media.find((obj) => obj.key == data?.image?.assetId);
-      delete asset.key;
-
-      await Category.updateOne(
-        { _id: data?._id },
-        {
-          $set: {
-            name: data?.name,
-            image: asset,
-          },
-        }
-      );
+    if (data?.delete) {
+      await Category.deleteOne({ _id: data?._id });
     } else {
-      await Category.updateOne(
-        { _id: data?._id },
-        {
-          $set: {
-            name: data?.name,
-          },
-        }
-      );
+      if (data?.media) {
+        const media = getUploadUri(req.media, data?.bucket);
+
+        const asset = media.find((obj) => obj.key == data?.image?.assetId);
+        delete asset.key;
+
+        await Category.updateOne(
+          { _id: data?._id },
+          {
+            $set: {
+              name: data?.name,
+              image: asset,
+            },
+          }
+        );
+      } else {
+        await Category.updateOne(
+          { _id: data?._id },
+          {
+            $set: {
+              name: data?.name,
+            },
+          }
+        );
+      }
     }
 
     res.send({ status: "success", data });
