@@ -44,6 +44,48 @@ router.get("/category", auth, async (req, res) => {
 });
 
 router.put(
+  "/subject",
+  [auth, uploader.array("media", 2), mediaUploader],
+  async (req, res) => {
+    const data = req.data;
+
+    if (data?.delete) {
+      await Subject.deleteOne({ _id: data?._id });
+    } else {
+      if (data?.media) {
+        const media = getUploadUri(req.media, data?.bucket);
+
+        const asset = media.find((obj) => obj.key == data?.image?.assetId);
+        delete asset.key;
+
+        await Subject.updateOne(
+          { _id: data?._id },
+          {
+            $set: {
+              name: data?.name,
+              categories: data?.categories?.map((item) => item._id),
+              image: asset,
+            },
+          }
+        );
+      } else {
+        await Subject.updateOne(
+          { _id: data?._id },
+          {
+            $set: {
+              name: data?.name,
+              categories: data?.categories?.map((item) => item._id),
+            },
+          }
+        );
+      }
+    }
+
+    res.send({ status: "success" });
+  }
+);
+
+router.put(
   "/category",
   [auth, uploader.array("media", 100), mediaUploader],
   async (req, res) => {
@@ -84,7 +126,30 @@ router.put(
 );
 
 router.get("/subjects", auth, async (req, res) => {
-  const subjects = await Subject.find();
+  // const subjects = await Subject.find();
+
+  const subjects = await Subject.aggregate([
+    {
+      $lookup: {
+        from: "questions", // The name of your questions collection
+        localField: "_id",
+        foreignField: "subject",
+        as: "questions",
+      },
+    },
+    {
+      $addFields: {
+        numberOfQuestions: { $size: "$questions" },
+        topicCount: { $size: "$topics" },
+      },
+    },
+    {
+      $project: {
+        questions: 0, // Remove the questions array from the result
+        topics: 0, // Remove the questions array from the result
+      },
+    },
+  ]);
 
   res.send({ status: "success", data: subjects });
 });
