@@ -91,10 +91,25 @@ router.get("/topic", auth, async (req, res) => {
 
 router.get("/questions", auth, async (req, res) => {
   const { subjectId, topicId } = req.query;
-  const questions = await Question.find().or([
-    { subject: subjectId },
-    { topic: topicId },
-  ]);
+  if (!subjectId)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Please select a subject" });
+
+  let questions;
+  if (Boolean(topicId) && topicId !== "null") {
+    console.log({ topicId, subjectId });
+    questions = await Question.find({
+      subject: subjectId,
+      topic: topicId,
+    })
+      .populate([{ path: "subject", model: "Subject", select: "name" }])
+      .select("-categories");
+  } else {
+    questions = await Question.find({ subject: subjectId })
+      .populate([{ path: "subject", model: "Subject", select: "name" }])
+      .select("-categories");
+  }
 
   res.send({ status: "success", data: questions });
 });
