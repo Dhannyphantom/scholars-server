@@ -63,7 +63,6 @@ router.put(
           {
             $set: {
               name: data?.name,
-              categories: data?.categories?.map((item) => item._id),
               image: asset,
             },
           }
@@ -74,11 +73,29 @@ router.put(
           {
             $set: {
               name: data?.name,
-              categories: data?.categories?.map((item) => item._id),
             },
           }
         );
       }
+      // update categories
+      const catIds = data.categories.map((item) => item._id);
+      console.log({ catIds });
+      await Category.updateMany(
+        { _id: { $nin: catIds } },
+        {
+          $pull: {
+            subjects: data?._id,
+          },
+        }
+      );
+      await Category.updateMany(
+        { _id: { $in: catIds } },
+        {
+          $addToSet: {
+            subjects: data?._id,
+          },
+        }
+      );
     }
 
     res.send({ status: "success" });
@@ -138,6 +155,14 @@ router.get("/subjects", auth, async (req, res) => {
       },
     },
     {
+      $lookup: {
+        from: "categories", // The name of your questions collection
+        localField: "_id",
+        foreignField: "subjects",
+        as: "categories",
+      },
+    },
+    {
       $addFields: {
         numberOfQuestions: { $size: "$questions" },
         topicCount: { $size: "$topics" },
@@ -147,6 +172,15 @@ router.get("/subjects", auth, async (req, res) => {
       $project: {
         questions: 0, // Remove the questions array from the result
         topics: 0, // Remove the questions array from the result
+      },
+    },
+    {
+      $project: {
+        categories: { name: 1, _id: 1 },
+        topicCount: 1,
+        numberOfQuestions: 1,
+        name: 1,
+        image: 1,
       },
     },
   ]);
