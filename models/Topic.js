@@ -16,6 +16,7 @@ const TopicSchema = new schema({
     ref: "User",
     required: true,
   },
+  edits: [{ type: schema.Types.ObjectId, ref: "User" }],
 });
 
 const Topic = mongoose.model("Topic", TopicSchema);
