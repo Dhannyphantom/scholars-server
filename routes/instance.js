@@ -102,13 +102,17 @@ router.get("/questions", auth, async (req, res) => {
     questions = await Question.find({
       subject: subjectId,
       topic: topicId,
-    })
-      .populate([{ path: "subject", model: "Subject", select: "name" }])
-      .select("-categories");
+    }).populate([
+      { path: "subject", model: "Subject", select: "name" },
+      { path: "topic", model: "Topic", select: "name" },
+      { path: "categories", model: "Category", select: "name" },
+    ]);
   } else {
-    questions = await Question.find({ subject: subjectId })
-      .populate([{ path: "subject", model: "Subject", select: "name" }])
-      .select("-categories");
+    questions = await Question.find({ subject: subjectId }).populate([
+      { path: "subject", model: "Subject", select: "name" },
+      { path: "topic", model: "Topic", select: "name" },
+      { path: "categories", model: "Category", select: "name" },
+    ]);
   }
 
   res.send({ status: "success", data: questions });
