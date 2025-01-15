@@ -285,6 +285,10 @@ const userSchema = new schema({
     required: false,
     enum: ["junior", "senior"],
   },
+  subjects: {
+    type: [schema.Types.ObjectId],
+    ref: "Subejct",
+  },
   gender: {
     type: String,
     enum: ["male", "Male", "female", "Female", "others", "Others"],

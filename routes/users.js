@@ -111,9 +111,60 @@ router.get("/professionals", auth, async (req, res) => {
     .select(
       "username firstName lastName state lga avatar verified address contact"
     )
-    .sort({ verified: -1 });
+    .sort({ verified: 1 });
 
   res.send({ status: "success", data: pros });
+});
+
+router.put("/professional", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { proId, subjects, action } = req.body;
+  // action = 'verify' | 'reject' | 'revoke'
+
+  const userInfo = await User.findById(userId).select("accountType");
+
+  if (userInfo.accountType !== "manager")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Unauthorized request" });
+
+  if (!action)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Missing action info!" });
+
+  switch (action) {
+    case "verify":
+      await User.updateOne(
+        { _id: proId },
+        {
+          $set: {
+            verified: true,
+            subjects: subjects?.map((item) => item?._id),
+          },
+        }
+      );
+      break;
+    case "revoke":
+      await User.updateOne(
+        { _id: proId },
+        {
+          $set: {
+            verified: false,
+            subjects: [],
+          },
+        }
+      );
+      break;
+    case "reject":
+      await User.deleteOne({ _id: proId });
+      break;
+
+    default:
+      break;
+  }
+
+  res.send({ status: "success" });
 });
 
 router.post(
