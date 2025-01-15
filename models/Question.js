@@ -57,6 +57,10 @@ const QuestionSchema = new schema({
     ref: "User",
     required: true,
   },
+  edits: {
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
 });
 
 const Question = mongoose.model("Question", QuestionSchema);

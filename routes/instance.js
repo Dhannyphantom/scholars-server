@@ -276,4 +276,61 @@ router.put("/topic", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.put("/question", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+
+  if (req?.body?.delete == true) {
+    await Topic.updateMany(
+      { questions: { $in: data?._id } },
+      {
+        $pull: {
+          questions: data?._id,
+        },
+      }
+    );
+    await Question.deleteOne({ _id: data?._id });
+  } else {
+    await Question.updateOne(
+      { _id: data?._id },
+      {
+        $set: {
+          question: data?.question,
+          point: data?.point,
+          timer: data?.timer,
+          answers: data?.answers,
+          topic: data?.topic?._id,
+          subject: data?.subject?._id,
+          categories: data?.categories?.map((item) => item._id),
+          isTheory: data?.isTheory,
+        },
+        $addToSet: {
+          edits: userId,
+        },
+      }
+    );
+
+    // Update Question Topic;
+    await Topic.updateMany(
+      { questions: { $in: data?._id }, _id: { $ne: data?.topic?._id } },
+      {
+        $pull: {
+          questions: data?._id,
+        },
+      }
+    );
+
+    await Topic.updateMany(
+      { questions: { $in: data?._id } },
+      {
+        $addToSet: {
+          questions: data?._id,
+        },
+      }
+    );
+  }
+
+  res.send({ status: "success" });
+});
+
 module.exports = router;
