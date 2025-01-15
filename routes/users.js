@@ -13,6 +13,7 @@ const {
   getUploadUri,
   fullUserSelector,
   createDir,
+  userSelector,
 } = require("../controllers/helpers");
 
 const storage = multer.diskStorage({
@@ -94,6 +95,25 @@ router.get("/user", auth, async (req, res) => {
     return res.status(422).json("User data not found. Please sign in again");
 
   res.json({ user: userData });
+});
+
+router.get("/professionals", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("accountType");
+
+  if (userInfo.accountType !== "manager")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Unauthorized request" });
+
+  const pros = await User.find({ accountType: "professional" })
+    .select(
+      "username firstName lastName state lga avatar verified address contact"
+    )
+    .sort({ verified: -1 });
+
+  res.send({ status: "success", data: pros });
 });
 
 router.post(
