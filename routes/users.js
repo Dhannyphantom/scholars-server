@@ -15,6 +15,7 @@ const {
   createDir,
   userSelector,
 } = require("../controllers/helpers");
+const { AppInfo } = require("../models/AppInfo");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -31,10 +32,20 @@ const uploader = multer({ storage, limits: { fieldSize: 5 * 1024 * 1024 } }); //
 const router = express.Router();
 
 router.post("/register", async (req, res) => {
-  const { username, email, password, accountType } = req.body;
+  const { username, email, password, accountType, token: proToken } = req.body;
+
+  const appInfo = await AppInfo.findOne({ ID: "APP" });
 
   const { error } = validateReg(req.body);
   if (error) return res.status(400).json(error.details[0].message);
+
+  const isPro = accountType == "professional";
+
+  if (isPro) {
+    if (appInfo.PRO_TOKEN !== proToken) {
+      return res.status(400).send("Invalid pro token");
+    }
+  }
 
   const aUser = await User.findOne({ username });
   if (aUser)
@@ -60,6 +71,19 @@ router.post("/register", async (req, res) => {
   await user.save();
 
   const userData = await User.findById(user._id).select(fullUserSelector);
+
+  if (isPro) {
+    // change PRO_TOKEN
+    const randInt = Math.floor(Math.random() * 10e9);
+    await AppInfo.updateOne(
+      { ID: "APP" },
+      {
+        $set: {
+          PRO_TOKEN: `mosdan@pro${randInt}`,
+        },
+      }
+    );
+  }
 
   res.header("x-auth-token", token).json({ token, user: userData });
 });
@@ -188,6 +212,14 @@ router.post(
     res.json({ avatar: user.avatar });
   }
 );
+
+router.post("/generate_appinfo", async (req, res) => {
+  const appInfo = new AppInfo({ ID: "APP" });
+
+  await appInfo.save();
+
+  res.send({ status: "success" });
+});
 
 router.put("/updateProfile", auth, async (req, res) => {
   const userId = req.user.userId;
