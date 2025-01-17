@@ -221,6 +221,17 @@ router.post("/generate_appinfo", async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.get("/app_info", async (req, res) => {
+  const appInfo = await AppInfo.findOne({ ID: "APP" });
+
+  if (!appInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "App info not found!" });
+
+  res.send({ status: "success", data: appInfo });
+});
+
 router.put("/updateProfile", auth, async (req, res) => {
   const userId = req.user.userId;
 
