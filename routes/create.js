@@ -23,6 +23,7 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 const router = express.Router();
 
 router.post("/question", auth, async (req, res) => {
+  const userId = req.user.userId;
   const data = req.body;
 
   data.forEach(async (item) => {
@@ -34,6 +35,7 @@ router.post("/question", auth, async (req, res) => {
       })),
       timer: item.timer,
       point: item.point,
+      user: userId,
       subject: item?.subject?._id,
       topic: item?.topic?._id,
       categories: item?.categories?.map((obj) => obj._id),
@@ -54,12 +56,15 @@ router.post("/question", auth, async (req, res) => {
 
   res.send({ status: "success" });
 });
+
 router.post("/topic", auth, async (req, res) => {
+  const userId = req.user.userId;
   const data = req.body;
 
   data.forEach(async (item) => {
     const topic = new Topic({
       name: item.name,
+      user: userId,
     });
 
     await topic.save();
@@ -81,6 +86,7 @@ router.post(
   "/subject",
   [auth, uploader.array("media", 100), mediaUploader],
   async (req, res) => {
+    const userId = req.user.userId;
     const reqData = req.data;
     const media = getUploadUri(req.media, reqData?.bucket);
 
@@ -91,6 +97,7 @@ router.post(
       const subject = new Subject({
         name: item.name,
         image: asset,
+        user: userId,
       });
 
       try {
@@ -118,6 +125,7 @@ router.post(
   "/category",
   [auth, uploader.array("media", 100), mediaUploader],
   async (req, res) => {
+    const userId = req.user.userId;
     const reqData = req.data;
     const media = getUploadUri(req.media, reqData?.bucket);
 
@@ -127,6 +135,7 @@ router.post(
       const category = new Category({
         name: item.name,
         image: asset,
+        user: userId,
       });
 
       try {

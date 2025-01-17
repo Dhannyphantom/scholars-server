@@ -132,8 +132,15 @@ router.get("/professionals", auth, async (req, res) => {
       .send({ status: "failed", message: "Unauthorized request" });
 
   const pros = await User.find({ accountType: "professional" })
+    .populate([
+      {
+        path: "subjects",
+        model: "Subject",
+        select: "name",
+      },
+    ])
     .select(
-      "username firstName lastName state lga avatar verified address contact"
+      "username firstName lastName state email subjects lga avatar verified address contact"
     )
     .sort({ verified: 1 });
 
