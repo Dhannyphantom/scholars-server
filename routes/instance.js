@@ -8,6 +8,7 @@ const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { Question } = require("../models/Question");
+const { User } = require("../models/User");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -29,9 +30,21 @@ router.get("/category", auth, async (req, res) => {
 });
 
 router.get("/subjects", auth, async (req, res) => {
-  // const subjects = await Subject.find();
+  const { type } = req.query;
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("subjects accountType");
+
+  let matchLookup = { $match: {} };
+
+  if (type == "pro_filter" && userInfo?.accountType == "professional") {
+    matchLookup = {
+      $match: { _id: { $in: userInfo.subjects } },
+    };
+  }
 
   const subjects = await Subject.aggregate([
+    matchLookup,
     {
       $lookup: {
         from: "questions", // The name of your questions collection
@@ -98,7 +111,6 @@ router.get("/questions", auth, async (req, res) => {
 
   let questions;
   if (Boolean(topicId) && topicId !== "null") {
-    console.log({ topicId, subjectId });
     questions = await Question.find({
       subject: subjectId,
       topic: topicId,
