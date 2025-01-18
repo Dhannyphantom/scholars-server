@@ -8,6 +8,7 @@ const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { Question } = require("../models/Question");
+const { User } = require("../models/User");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -43,6 +44,14 @@ router.post("/question", auth, async (req, res) => {
     });
 
     await question.save();
+    await User.updateOne(
+      { _id: userId },
+      {
+        $inc: {
+          totalPoints: 10,
+        },
+      }
+    );
     //  save question to topics
     await Topic.updateOne(
       { _id: item?.topic?._id },

@@ -44,7 +44,7 @@ db();
 // chat(http, app);
 
 app.get("/", (req, res) => {
-  res.send("<h1>Welcome to SCHOLARS server</h1>");
+  res.send("<h1>Welcome to Schola server</h1>");
 });
 
 const port = process.env.PORT;
