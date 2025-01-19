@@ -93,7 +93,7 @@ router.post("/topic", auth, async (req, res) => {
 
 router.post(
   "/subject",
-  [auth, uploader.array("media", 100), mediaUploader],
+  [auth, uploader.array("media", 500), mediaUploader],
   async (req, res) => {
     const userId = req.user.userId;
     const reqData = req.data;

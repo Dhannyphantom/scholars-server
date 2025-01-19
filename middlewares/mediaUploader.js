@@ -114,6 +114,7 @@ module.exports = async (req, res, next) => {
         uri: mediaUrl,
         thumb: thumbUrl,
         width: info.width,
+        key: file.filename,
         type: "image",
         height: info.height,
       });
