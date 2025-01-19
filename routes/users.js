@@ -121,6 +121,17 @@ router.get("/user", auth, async (req, res) => {
   res.json({ user: userData });
 });
 
+router.get("/userInfo", auth, async (req, res) => {
+  const { userId } = req.query;
+
+  const userData = await User.findById(userId).select(userSelector);
+
+  if (!userData)
+    return res.status(422).json("User data not found. Please sign in again");
+
+  res.json({ user: userData, status: "success" });
+});
+
 router.get("/professionals", auth, async (req, res) => {
   const userId = req.user.userId;
 
