@@ -24,11 +24,34 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 const router = express.Router();
 
 router.get("/category", auth, async (req, res) => {
-  const category = await Category.find();
+  const category = await Category.find().select("name image");
 
   res.send({ status: "success", data: category });
 });
 
+router.get("/subject_category", auth, async (req, res) => {
+  const { categoryId } = req.query;
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("subjects accountType");
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
+
+  const category = await Category.findById(categoryId)
+    .populate([
+      {
+        path: "subjects",
+        model: "Subject",
+        select: "name image",
+      },
+    ])
+    .select("subjects");
+
+  res.send({ status: "success", data: category.subjects });
+});
 router.get("/subjects", auth, async (req, res) => {
   const { type } = req.query;
   const userId = req.user.userId;
