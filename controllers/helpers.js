@@ -17,7 +17,7 @@ const classsSchoolEnums = [
   "grad",
 ];
 const userSelector =
-  "avatar firstName lastName username gender preffix state lga points rank verified accountType";
+  "avatar firstName lastName username class gender preffix state lga points rank verified accountType";
 const fullUserSelector = "-password -__v";
 
 const getUploadUri = (images, bucketName) => {

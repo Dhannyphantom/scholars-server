@@ -265,6 +265,10 @@ router.put("/updateProfile", auth, async (req, res) => {
 
   const preffix = update_object?.preffix;
 
+  if (update_object["gender"]) {
+    update_object["gender"] = update_object["gender"]?.name;
+  }
+
   if (Boolean(preffix)) {
     if (preffix == "mr.") {
       update_object["gender"] = "male";
@@ -278,10 +282,6 @@ router.put("/updateProfile", auth, async (req, res) => {
       hasChanged: true,
       level: update_object["class"]?.name?.toLowerCase(),
     };
-  }
-
-  if (update_object["gender"]) {
-    update_object["gender"] = update_object["gender"]?.name;
   }
 
   const updatedUser = await User.findByIdAndUpdate(

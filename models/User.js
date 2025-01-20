@@ -116,13 +116,18 @@ const rewardSchema = new schema({
     type: String,
     required: true,
   },
+  user: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+  },
   point: {
     type: Number,
     required: true,
   },
-  claimed: {
-    type: Boolean,
-    default: false,
+  status: {
+    type: String,
+    required: true,
+    enum: ["pending", "rewarded", "claimed"],
   },
 });
 
@@ -189,6 +194,17 @@ const userSchema = new schema({
     maxlength: 255,
     lowercase: true,
     trim: true,
+  },
+  class: {
+    level: {
+      type: String,
+      enum: classsSchoolEnums,
+      required: false,
+    },
+    hasChanged: {
+      type: Boolean,
+      default: false,
+    },
   },
   email: {
     type: String,
@@ -265,17 +281,6 @@ const userSchema = new schema({
       default: new Date(new Date().getTime() - DEFAULT_SUB_MILLI),
     },
     isActive: {
-      type: Boolean,
-      default: false,
-    },
-  },
-  class: {
-    level: {
-      type: String,
-      enum: classsSchoolEnums,
-      required: false,
-    },
-    hasChanged: {
       type: Boolean,
       default: false,
     },
