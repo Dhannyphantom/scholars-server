@@ -110,17 +110,97 @@ router.get("/subjects", auth, async (req, res) => {
   res.send({ status: "success", data: subjects });
 });
 
+router.post("/subject_topics", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { subjects } = req.body;
+
+  if (!subjects || (Boolean(subjects) && !subjects[0]))
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Provide subject data" });
+
+  const userInfo = await User.findById(userId).select("qBank").lean();
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
+
+  console.log({ userInfo });
+
+  const userQBank = userInfo.qBank.map((q) => q.toString());
+
+  let subjectList = await Subject.find({ _id: { $in: subjects } })
+    .populate([{ path: "topics", model: "Topic", select: "name questions" }])
+    .select("name topics")
+    .lean();
+
+  subjectList = subjectList.map((subject) => {
+    const topics = subject.topics.map((topic, idx) => {
+      // Calculate questions in the user's qBank
+      const totalQuestions = topic.questions.length;
+      const qBankQuestions = topic.questions.filter((question) =>
+        userQBank.includes(question._id.toString())
+      );
+
+      return {
+        _id: topic._id,
+        name: topic.name,
+        visible: idx === 0,
+        hasStudied: false,
+        totalQuestions,
+        qBankQuestions: qBankQuestions.length, // Count of matched questions
+        progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+      };
+    });
+
+    return {
+      _id: subject._id,
+      name: subject.name,
+      topics,
+    };
+  });
+
+  res.send({ status: "success", data: subjectList });
+});
+
 router.get("/topic", auth, async (req, res) => {
+  const userId = req.user.userId;
   const { subjectId } = req.query;
-  const subject = await Subject.findById(subjectId)
+
+  const userInfo = await User.findById(userId).select("qBank").lean();
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
+
+  const userQBank = userInfo.qBank.map((q) => q.toString());
+
+  let subject = await Subject.findById(subjectId)
     .populate([
       {
         path: "topics",
         model: "Topic",
-        select: "name",
+        select: "name questions",
       },
     ])
-    .select("-image -__v");
+    .select("-image -__v")
+    .lean();
+
+  subject.topics = subject.topics.map((topic) => {
+    // Calculate questions in the user's qBank
+    const totalQuestions = topic.questions.length;
+    const qBankQuestions = topic.questions.filter((question) =>
+      userQBank.includes(question._id.toString())
+    );
+
+    return {
+      _id: topic._id,
+      name: topic.name,
+      totalQuestions,
+      qBankQuestions: qBankQuestions.length, // Count of matched questions
+      progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+    };
+  });
 
   res.send({ status: "success", data: subject?.topics });
 });

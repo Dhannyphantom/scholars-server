@@ -358,6 +358,11 @@ const userSchema = new schema({
   },
   quota: quotaSchema,
   quotas: [quotaSchema],
+  qBank: {
+    type: [schema.Types.ObjectId],
+    ref: "Question",
+    default: [],
+  },
 });
 
 userSchema.methods.generateAuthToken = function () {

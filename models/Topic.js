@@ -8,7 +8,6 @@ const TopicSchema = new schema({
     type: String,
     required: true,
     trim: true,
-    lowercase: true,
   },
   questions: [{ type: schema.Types.ObjectId, ref: "Question" }],
   user: {
