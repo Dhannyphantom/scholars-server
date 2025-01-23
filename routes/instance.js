@@ -9,6 +9,7 @@ const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { Question } = require("../models/Question");
 const { User } = require("../models/User");
+const { default: mongoose } = require("mongoose");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -125,8 +126,6 @@ router.post("/subject_topics", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "User not found!" });
 
-  console.log({ userInfo });
-
   const userQBank = userInfo.qBank.map((q) => q.toString());
 
   let subjectList = await Subject.find({ _id: { $in: subjects } })
@@ -167,13 +166,13 @@ router.get("/topic", auth, async (req, res) => {
   const userId = req.user.userId;
   const { subjectId } = req.query;
 
-  const userInfo = await User.findById(userId).select("qBank").lean();
-  if (!userInfo)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "User not found!" });
+  // const userInfo = await User.findById(userId).select("qBank").lean();
+  // if (!userInfo)
+  //   return res
+  //     .status(422)
+  //     .send({ status: "failed", message: "User not found!" });
 
-  const userQBank = userInfo.qBank.map((q) => q.toString());
+  // const userQBank = userInfo.qBank.map((q) => q.toString());
 
   let subject = await Subject.findById(subjectId)
     .populate([
@@ -186,21 +185,21 @@ router.get("/topic", auth, async (req, res) => {
     .select("-image -__v")
     .lean();
 
-  subject.topics = subject.topics.map((topic) => {
-    // Calculate questions in the user's qBank
-    const totalQuestions = topic.questions.length;
-    const qBankQuestions = topic.questions.filter((question) =>
-      userQBank.includes(question._id.toString())
-    );
+  // subject.topics = subject.topics.map((topic) => {
+  //   // Calculate questions in the user's qBank
+  //   const totalQuestions = topic.questions.length;
+  //   const qBankQuestions = topic.questions.filter((question) =>
+  //     userQBank.includes(question._id.toString())
+  //   );
 
-    return {
-      _id: topic._id,
-      name: topic.name,
-      totalQuestions,
-      qBankQuestions: qBankQuestions.length, // Count of matched questions
-      progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
-    };
-  });
+  //   return {
+  //     _id: topic._id,
+  //     name: topic.name,
+  //     totalQuestions,
+  //     qBankQuestions: qBankQuestions.length, // Count of matched questions
+  //     progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+  //   };
+  // });
 
   res.send({ status: "success", data: subject?.topics });
 });
@@ -446,6 +445,94 @@ router.put("/question", auth, async (req, res) => {
   }
 
   res.send({ status: "success" });
+});
+
+router.post("/premium_quiz", auth, async (req, res) => {
+  const reqData = req.body;
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("qBank").lean();
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
+  const subjectIds = reqData?.subjects?.map(
+    (item) => new mongoose.Types.ObjectId(item._id)
+  );
+  const userQBank = userInfo?.qBank;
+  const topicIds = [];
+
+  reqData?.subjects?.forEach((subject) => {
+    subject?.topics?.forEach((topic) => {
+      topicIds.push(new mongoose.Types.ObjectId(topic));
+    });
+  });
+
+  console.log(reqData);
+
+  const questions = await Question.aggregate([
+    {
+      $match: {
+        categories: new mongoose.Types.ObjectId(reqData?.categoryId),
+        subject: { $in: subjectIds },
+        topic: { $in: topicIds },
+        isTheory: false,
+      },
+    },
+    {
+      $addFields: {
+        hasAnswered: { $in: ["$_id", userQBank] },
+      },
+    },
+    {
+      $addFields: {
+        randomSeed: { $rand: {} },
+      },
+    },
+    {
+      $sort: {
+        subject: 1,
+        randomSeed: 1,
+      },
+    },
+    {
+      $group: {
+        _id: "$subject",
+        questions: { $push: "$$ROOT" },
+      },
+    },
+
+    {
+      $project: {
+        questions: { $slice: ["$questions", 4] },
+      },
+    },
+    {
+      $lookup: {
+        from: "subjects",
+        localField: "_id",
+        foreignField: "_id",
+        as: "subjectDetails",
+      },
+    },
+    {
+      $unwind: "$subjectDetails",
+    },
+    {
+      $project: {
+        subject: "$subjectDetails",
+        questions: 1,
+      },
+    },
+    {
+      $project: {
+        subject: { name: 1, _id: 1 },
+        questions: 1,
+      },
+    },
+  ]);
+
+  res.send({ status: "success", data: questions });
 });
 
 module.exports = router;
