@@ -473,6 +473,8 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
   });
 
+  console.log({ topicIds });
+
   const questions = await Question.aggregate([
     {
       $match: {
