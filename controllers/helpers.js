@@ -80,6 +80,22 @@ const capFirstLetter = (str) => {
   return str[0].toUpperCase() + str.slice(1);
 };
 
+const writeToJSONConsole = (data) => {
+  if (!data) return;
+
+  // Convert to JSON string
+  const jsonString = JSON.stringify(data, null, 2); // Pretty-printed JSON
+
+  // Write JSON data to a file
+  fs.writeFile("console.json", jsonString, (err) => {
+    if (err) {
+      console.error("Error writing JSON to file:", err);
+    } else {
+      console.log("JSON data saved to data.json");
+    }
+  });
+};
+
 const getUserPoint = (point) => {
   return Math.max(0, point);
 };
@@ -178,6 +194,7 @@ module.exports = {
   userSelector,
   ensureDirectory,
   fullUserSelector,
+  writeToJSONConsole,
   capFirstLetter,
   createDir,
   capCapitalize,

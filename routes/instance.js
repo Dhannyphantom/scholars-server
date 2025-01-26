@@ -2,7 +2,7 @@ const express = require("express");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
-const { getUploadUri } = require("../controllers/helpers");
+const { getUploadUri, writeToJSONConsole } = require("../controllers/helpers");
 const auth = require("../middlewares/authRoutes");
 const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
@@ -10,6 +10,8 @@ const { Topic } = require("../models/Topic");
 const { Question } = require("../models/Question");
 const { User } = require("../models/User");
 const { default: mongoose } = require("mongoose");
+const { AppInfo } = require("../models/AppInfo");
+const { Quiz } = require("../models/Quiz");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -19,6 +21,9 @@ const storage = multer.diskStorage({
     return cb(null, `${file.originalname}`);
   },
 });
+
+const A_DAY = 1000 * 60 * 60 * 24; // A DAY
+const A_WEEK = 1000 * 60 * 60 * 24 * 7; // A WEEK
 
 const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); // 2MB
 
@@ -468,8 +473,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
   });
 
-  console.log(reqData);
-
   const questions = await Question.aggregate([
     {
       $match: {
@@ -533,6 +536,157 @@ router.post("/premium_quiz", auth, async (req, res) => {
   ]);
 
   res.send({ status: "success", data: questions });
+});
+
+router.post("/submit_premium", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+
+  // writeToJSONConsole(data);
+
+  const { questions, type, mode } = data;
+  // mode = 'solo' || 'friends'
+  // type = 'freemium' || 'premium'
+
+  const userInfo = await User.findById(userId).select(
+    "accountType quota quotas points totalPoints qBank"
+  );
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found" });
+  if (userInfo.accountType !== "student")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not authorized" });
+
+  // Get stats
+  const appInfo = await AppInfo.findOne({ ID: "APP" });
+
+  if (mode == "solo") {
+    let point = 0,
+      studentSubjects = [],
+      questionIds = [],
+      questionData = [],
+      subjectIds = [],
+      topicIds = [],
+      total = 0;
+
+    questions.forEach((quest) => {
+      studentSubjects.push({
+        subject: quest?.subject?._id,
+        questions: quest?.questions?.map((itemQ) => itemQ?._id),
+      });
+      subjectIds.push(quest?.subject?._id);
+      quest.questions.forEach((question) => {
+        questionIds.push(question?._id);
+        questionData.push({
+          question: question?.question,
+          answers: question?.answers,
+          answered: question?.answered,
+          timer: question?.timer,
+          point: question?.point,
+          subject: question?.subject,
+          topic: question?.topic,
+          categories: question?.categories,
+        });
+        if (!topicIds.includes(question?.topic)) {
+          topicIds.push(question?.topic);
+        }
+
+        if (question?.answered?.correct) {
+          point += question.point;
+          total += question.point;
+        } else {
+          total += question.point;
+          point -= appInfo.POINT_FAIL;
+        }
+      });
+    });
+
+    const currentQuota = userInfo.quota;
+    if (currentQuota) {
+      // User has practiced a quiz session before
+      // So Check if it's been a day since last practice;
+      if (new Date() - new Date(currentQuota.daily_update) > A_DAY) {
+        // then update the daily quotas
+
+        const userQuota = {
+          last_update: Date.now(),
+          daily_update: Date.now(),
+          weekly_update: currentQuota.weekly_update,
+          point_per_week: point + currentQuota.point_per_week,
+          subjects: currentQuota?.subjects?.concat(studentSubjects),
+          daily_questions: questionIds,
+        };
+
+        userInfo.quota = userQuota;
+      } else {
+        // Not up to a day yet,
+        // User is trying to practice more subjects for that day
+        const userQuota = {
+          last_update: Date.now(),
+          daily_update: currentQuota?.daily_update,
+          point_per_week: point + currentQuota.point_per_week,
+          subjects: currentQuota?.subjects?.concat(studentSubjects),
+          daily_questions: currentQuota?.daily_questions?.concat(questionIds),
+        };
+
+        userInfo.quota = userQuota;
+      }
+
+      if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
+        // update weekly qouta
+        const userQuota = {
+          last_update: Date.now(),
+          weekly_update: Date.now(),
+          daily_update: Date.now(),
+          point_per_week: point,
+          subjects: studentSubjects,
+          daily_questions: questionIds,
+        };
+
+        userInfo.quota = userQuota;
+        userInfo.quotas?.push(currentQuota);
+      } else {
+        // not up to a week
+      }
+    } else {
+      // NO current Quota; FIRST QUIZ session!!!!
+      const userQuota = {
+        last_update: Date.now(),
+        daily_update: Date.now(),
+        weekly_update: Date.now(),
+        point_per_week: point,
+        subjects: studentSubjects,
+        daily_questions: questionIds,
+      };
+
+      userInfo.quota = userQuota;
+      // await userInfo.save();
+    }
+
+    userInfo.points += point;
+    userInfo.totalPoints += point;
+    userInfo.qBank = userInfo.qBank.concat(questionIds);
+    await userInfo.save();
+
+    // Save quiz info;
+
+    const newQuiz = new Quiz({
+      user: userId,
+      mode,
+      type,
+      questions: questionData,
+      subjects: subjectIds,
+      topics: topicIds,
+    });
+
+    await newQuiz.save();
+    // mode === 'solo'
+  }
+
+  res.send({ status: "success" });
 });
 
 module.exports = router;

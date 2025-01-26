@@ -61,6 +61,18 @@ const cardSchema = new schema({
   },
 });
 
+const studentSubjectsSchema = new schema({
+  subject: {
+    type: mongoose.Types.ObjectId,
+    ref: "Subject",
+  },
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+  questions: [{ type: mongoose.Types.ObjectId, ref: "Question" }], //For the whole week
+});
+
 const txHistorySchema = new schema({
   type: {
     type: String,
@@ -133,28 +145,31 @@ const rewardSchema = new schema({
 
 const quotaSchema = new schema({
   last_update: {
+    // Per Quiz Done
     type: Date,
     default: Date.now,
   },
   daily_update: {
+    // Per Day
     type: Date,
     default: Date.now,
   },
+  weekly_update: {
+    // Per Week
+    type: Date,
+    default: Date.now,
+  },
+  point_per_week: {
+    // Points per week
+    type: Number,
+    default: 0,
+  },
   daily_questions: {
+    // For the whole week
     type: [schema.Types.ObjectId],
     ref: "Question",
   },
-  subjects: {
-    subject: {
-      type: [schema.Types.ObjectId],
-      ref: "Subject",
-    },
-
-    questions: {
-      type: [schema.Types.ObjectId],
-      ref: "Question",
-    },
-  },
+  subjects: [studentSubjectsSchema],
 });
 
 const userSchema = new schema({
@@ -291,6 +306,7 @@ const userSchema = new schema({
     enum: ["junior", "senior"],
   },
   subjects: {
+    // FOR PROFESSIONAL
     type: [schema.Types.ObjectId],
     ref: "Subejct",
   },

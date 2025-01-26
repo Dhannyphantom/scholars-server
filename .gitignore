@@ -1,6 +1,7 @@
 node_modules
 .env
 banks.txt
+console.json
 
 uploads
 uploads/*
