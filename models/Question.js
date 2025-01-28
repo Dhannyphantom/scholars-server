@@ -14,6 +14,34 @@ const answerSchema = new schema({
   },
 });
 
+const mediaSchema = {
+  uri: {
+    type: String,
+    maxlength: 1024,
+    required: false,
+  },
+  type: {
+    type: String,
+    // enum: ["image", "video", "text"],
+    default: "image",
+    maxlength: 255,
+    required: false,
+  },
+  thumb: {
+    type: String,
+    maxlength: 1024,
+    required: false,
+  },
+  width: {
+    type: Number,
+    required: false,
+  },
+  height: {
+    type: Number,
+    required: false,
+  },
+};
+
 const QuestionSchema = new schema({
   question: {
     type: String,
@@ -48,6 +76,7 @@ const QuestionSchema = new schema({
     type: Boolean,
     default: false,
   },
+  image: mediaSchema,
   timer: {
     type: Number,
     default: 40,
