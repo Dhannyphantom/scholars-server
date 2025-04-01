@@ -41,7 +41,9 @@ module.exports = async (req, res, next) => {
     next();
     return;
   }
+
   if (!mediaData) return res.status(422).json("No media data");
+
   const outputFolder = `uploads/${mediaData.bucket}`;
   const outputThumb = "uploads/thumbs";
   const isFiles = Boolean(req.files);

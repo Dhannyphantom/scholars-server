@@ -17,7 +17,10 @@ Joi.objectId = require("joi-objectid")(Joi);
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 
-app.use(cors());
+// app.use(cors());
+// const cors = require('cors');
+app.use(cors({ origin: "*" }));
+
 //ROUTES AND CONTROLLERS
 const db = require("./controllers/db");
 const users = require("./routes/users");
@@ -44,7 +47,7 @@ db();
 // chat(http, app);
 
 app.get("/", (req, res) => {
-  res.send("<h1>Welcome to Schola server</h1>");
+  res.send("<h1>Welcome to Guru server</h1>");
 });
 
 const port = process.env.PORT;

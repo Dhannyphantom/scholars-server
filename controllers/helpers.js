@@ -33,6 +33,7 @@ const getUploadUri = (images, bucketName) => {
             ADDRESS + ":" + PORT + "/uploads/" + bucketName + "/" + obj.uri
           }`,
           key: obj.uri,
+          assetId: obj.assetId ?? obj.uri,
           type: obj.type ?? "image/jpg",
           thumb: `${
             ADDRESS +

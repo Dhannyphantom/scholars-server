@@ -24,12 +24,14 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 const router = express.Router();
 
 router.post(
-  "/question",
-  [auth, uploader.array("media", 1000), mediaUploader],
+  "/questions",
+  [auth, uploader.array("media_file", 100), mediaUploader],
   async (req, res) => {
     const userId = req.user.userId;
     const reqData = req.data;
-    const media = getUploadUri(req.media, reqData?.bucket);
+    const media = reqData?.media
+      ? getUploadUri(req.media, reqData?.bucket)
+      : [];
 
     reqData?.data?.forEach(async (item) => {
       const asset = media.find((obj) => obj.key == item?.image?.assetId);
@@ -73,28 +75,25 @@ router.post(
         });
       }
 
-      try {
-        await question.save();
-        await Topic.updateOne(
-          { _id: item?.topic?._id },
-          {
-            $addToSet: {
-              questions: question._id,
-            },
-          }
-        );
+      await question.save();
+      await Topic.updateOne(
+        { _id: item?.topic?._id },
+        {
+          $addToSet: {
+            questions: question._id,
+          },
+        }
+      );
 
-        await User.updateOne(
-          { _id: userId },
-          {
-            $inc: {
-              totalPoints: 10,
-            },
-          }
-        );
-      } catch (error) {
-        // return res.status()
-      }
+      await User.updateOne(
+        { _id: userId },
+        {
+          $inc: {
+            totalPoints: 10,
+          },
+        }
+      );
+
       //  save question to topics
     });
 
@@ -129,7 +128,7 @@ router.post("/topic", auth, async (req, res) => {
 
 router.post(
   "/subject",
-  [auth, uploader.array("media", 500), mediaUploader],
+  [auth, uploader.array("media_file", 500), mediaUploader],
   async (req, res) => {
     const userId = req.user.userId;
     const reqData = req.data;
@@ -168,7 +167,7 @@ router.post(
 
 router.post(
   "/category",
-  [auth, uploader.array("media", 1000), mediaUploader],
+  [auth, uploader.array("media_file", 100), mediaUploader],
   async (req, res) => {
     const userId = req.user.userId;
     const reqData = req.data;
@@ -176,17 +175,23 @@ router.post(
 
     reqData.data.forEach(async (item) => {
       const asset = media.find((obj) => obj.key == item?.image?.assetId);
-      delete asset.key;
-      const category = new Category({
-        name: item.name,
-        image: asset,
-        user: userId,
-      });
+      if (Boolean(asset)) {
+        delete asset.key;
+        const category = new Category({
+          name: item.name,
+          image: asset,
+          user: userId,
+        });
 
-      try {
-        await category.save();
-      } catch (error) {
-        return res.status(422).send({ status: "failed", error });
+        try {
+          await category.save();
+        } catch (error) {
+          return res.status(422).send({ status: "failed", error });
+        }
+      } else {
+        return res
+          .status(422)
+          .send({ status: "failed", error: "Asset not found" });
       }
     });
 
