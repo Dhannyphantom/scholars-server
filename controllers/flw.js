@@ -38,7 +38,7 @@ const chargeCard = async (data) => {
     // expiry_year: "31",
     currency: "NGN",
     amount: sub_amount?.value,
-    redirect_url: `https://scholars-server.onrender.com/payments/subscription_redirect`,
+    redirect_url: `https://guru-server.onrender.com/payments/subscription_redirect`,
     fullname: fullName ?? "Jane Doe",
     email: email,
     phone_number: contact,
@@ -130,15 +130,15 @@ const initTrans = async (data = {}) => {
       account_bank: isOffline ? "044" : bank?.code, //This is the recipient bank code. Get list here :https://developer.flutterwave.com/v3.0/reference#get-all-banks
       account_number: isOffline ? "0690000040" : acct_number,
       amount: amount || 500,
-      narration: "Schola Points withdrawal. Enjoy!",
+      narration: "Guru Points withdrawal. Enjoy!",
       currency: "NGN",
       reference: tx_ref, //This is a merchant's unique reference for the transfer, it can be used to query for the status of the transfer
       callback_url: "https://www.flutterwave.com/ng/",
       beneficiary_name: fullName ?? "Dan Olojo",
       debit_currency: "NGN",
       meta: {
-        sender: "Schola App",
-        sender_email_address: "schola4u@gmail.com",
+        sender: "Guru App",
+        sender_email_address: "guru_ng@gmail.com",
       },
     };
 

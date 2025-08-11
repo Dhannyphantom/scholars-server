@@ -5,7 +5,7 @@ const schema = mongoose.Schema;
 const AppInfoSchema = new schema({
   NAME: {
     type: String,
-    default: "Schola",
+    default: "Guru",
     unique: true,
   },
   POINT_VALUE: {
