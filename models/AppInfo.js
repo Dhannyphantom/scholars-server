@@ -46,7 +46,7 @@ const AppInfoSchema = new schema({
   },
   PRO_TOKEN: {
     type: String,
-    default: "mosdan@pro1234567890",
+    default: "mosdan@gurupro1234567890",
   },
   ID: {
     type: String,

@@ -79,7 +79,7 @@ router.post("/register", async (req, res) => {
       { ID: "APP" },
       {
         $set: {
-          PRO_TOKEN: `mosdan@pro${randInt}`,
+          PRO_TOKEN: `mosdan@gurupro${randInt}`,
         },
       }
     );
