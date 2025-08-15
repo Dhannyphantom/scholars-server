@@ -142,18 +142,66 @@ router.get("/professionals", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "Unauthorized request" });
 
-  const pros = await User.find({ accountType: "professional" })
-    .populate([
-      {
-        path: "subjects",
-        model: "Subject",
-        select: "name",
+  const pros = await User.aggregate([
+    {
+      $match: { accountType: "professional" },
+    },
+    {
+      $lookup: {
+        from: "subjects",
+        localField: "subjects",
+        foreignField: "_id",
+        as: "subjects",
+        pipeline: [
+          {
+            $project: { name: 1 },
+          },
+        ],
       },
-    ])
-    .select(
-      "username firstName lastName state email subjects lga avatar verified address contact"
-    )
-    .sort({ verified: 1 });
+    },
+    {
+      $lookup: {
+        from: "questions",
+        localField: "_id",
+        foreignField: "user",
+        as: "questionsCreated",
+      },
+    },
+    {
+      $lookup: {
+        from: "topics",
+        localField: "_id",
+        foreignField: "user",
+        as: "topicsCreated",
+      },
+    },
+    {
+      $addFields: {
+        questionsCount: { $size: "$questionsCreated" },
+        topicsCount: { $size: "$topicsCreated" },
+      },
+    },
+    {
+      $project: {
+        username: 1,
+        firstName: 1,
+        lastName: 1,
+        state: 1,
+        email: 1,
+        subjects: 1,
+        lga: 1,
+        avatar: 1,
+        verified: 1,
+        address: 1,
+        contact: 1,
+        questionsCount: 1,
+        topicsCount: 1,
+      },
+    },
+    {
+      $sort: { verified: 1 },
+    },
+  ]);
 
   res.send({ status: "success", data: pros });
 });

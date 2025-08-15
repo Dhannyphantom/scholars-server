@@ -401,7 +401,7 @@ const validateReg = (user) => {
     referral: Joi.string().optional().max(255).alphanum(),
     email: Joi.string().required().min(4).max(255).email().trim(),
     password: Joi.string().required().min(8).max(255).trim(),
-    token: Joi.string().optional().min(4).max(20).trim(),
+    token: Joi.string().optional().min(4).max(25).trim(),
   });
 
   return schema.validate(user);
