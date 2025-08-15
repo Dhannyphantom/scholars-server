@@ -3,6 +3,7 @@ const express = require("express");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
 const path = require("path");
+const mongoose = require("mongoose");
 
 // const getUploadMeta = require("../controllers/getUploadMeta");
 
@@ -204,6 +205,179 @@ router.get("/professionals", auth, async (req, res) => {
   ]);
 
   res.send({ status: "success", data: pros });
+});
+
+router.get("/pro_leaderboard", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const proAcct = { $in: ["professional", "manager"] };
+
+    // Get leaderboard with question counts and rankings
+    const leaderboard = await User.aggregate([
+      {
+        $match: {
+          accountType: proAcct,
+          verified: true, // Only include verified professionals
+        },
+      },
+      {
+        $lookup: {
+          from: "questions", // Change to your actual collection name if different
+          localField: "_id",
+          foreignField: "user",
+          as: "questionsCreated",
+        },
+      },
+      {
+        $addFields: {
+          questionsCount: {
+            $cond: {
+              if: { $isArray: "$questionsCreated" },
+              then: { $size: "$questionsCreated" },
+              else: 0,
+            },
+          },
+        },
+      },
+      {
+        $sort: {
+          questionsCount: -1,
+          _id: 1, // Secondary sort for consistent ordering when counts are equal
+        },
+      },
+      {
+        $project: {
+          username: 1,
+          firstName: 1,
+          lastName: 1,
+          avatar: 1,
+          questionsCount: 1,
+          state: 1,
+          lga: 1,
+        },
+      },
+    ]);
+
+    // Add proper ranking
+    const rankedLeaderboard = leaderboard.map((user, index) => ({
+      ...user,
+      rank: index + 1,
+    }));
+
+    // Find current user's position
+    const currentUserPosition = rankedLeaderboard.findIndex(
+      (user) => user._id.toString() === userId.toString()
+    );
+
+    let userRank = null;
+    let userStats = null;
+
+    if (currentUserPosition !== -1) {
+      userRank = currentUserPosition + 1;
+      userStats = rankedLeaderboard[currentUserPosition];
+    } else {
+      // If user is not in the main leaderboard (unverified or no questions), get their stats
+      const userInfo = await User.aggregate([
+        {
+          $match: {
+            _id: new mongoose.Types.ObjectId(userId),
+            accountType: proAcct,
+          },
+        },
+        {
+          $lookup: {
+            from: "questions", // Change to your actual collection name if different
+            localField: "_id",
+            foreignField: "user",
+            as: "questionsCreated",
+          },
+        },
+        {
+          $addFields: {
+            questionsCount: {
+              $cond: {
+                if: { $isArray: "$questionsCreated" },
+                then: { $size: "$questionsCreated" },
+                else: 0,
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            username: 1,
+            firstName: 1,
+            lastName: 1,
+            avatar: 1,
+            questionsCount: 1,
+            state: 1,
+            lga: 1,
+            verified: 1,
+          },
+        },
+      ]);
+
+      if (userInfo.length > 0) {
+        userStats = userInfo[0];
+
+        // Calculate rank among all professionals (including unverified)
+        const totalProfessionals = await User.aggregate([
+          {
+            $match: { accountType: proAcct },
+          },
+          {
+            $lookup: {
+              from: "questions", // Change to your actual collection name if different
+              localField: "_id",
+              foreignField: "user",
+              as: "questionsCreated",
+            },
+          },
+          {
+            $addFields: {
+              questionsCount: {
+                $cond: {
+                  if: { $isArray: "$questionsCreated" },
+                  then: { $size: "$questionsCreated" },
+                  else: 0,
+                },
+              },
+            },
+          },
+          {
+            $match: {
+              questionsCount: { $gt: userStats.questionsCount },
+            },
+          },
+          {
+            $count: "count",
+          },
+        ]);
+
+        userRank =
+          totalProfessionals.length > 0 ? totalProfessionals[0].count + 1 : 1;
+      }
+    }
+
+    res.send({
+      status: "success",
+      data: {
+        leaderboard: rankedLeaderboard,
+        currentUser: {
+          rank: userRank,
+          stats: userStats,
+        },
+        totalProfessionals: rankedLeaderboard.length,
+      },
+    });
+  } catch (error) {
+    console.error("Leaderboard error:", error);
+    res.status(500).send({
+      status: "failed",
+      message: "Error fetching leaderboard",
+    });
+  }
 });
 
 router.put("/professional", auth, async (req, res) => {
