@@ -50,8 +50,10 @@ app.get("/", (req, res) => {
   res.send("<h1>Welcome to Guru server</h1>");
 });
 
-const port = process.env.PORT;
-http.listen(port, () => console.log(`Server running on port ${port}....`));
+const port = process.env.PORT || 3000;
+http.listen(port, "0.0.0.0", () =>
+  console.log(`Server running on port ${port}....`)
+);
 
 // Global Error Handlers
 process.on("uncaughtException", (err) => {
