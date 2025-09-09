@@ -461,6 +461,31 @@ router.post("/generate_appinfo", async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.post("/pro_reset", async (req, res) => {
+  const { key, email } = req.body;
+  console.log({ key });
+  if (key !== "mosdan@reset")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Unauthorized request!" });
+  const userInfo = await User.findOne({ email, accountType: "professional" });
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Email not found!" });
+
+  const newPass = "Gurupro1234";
+
+  const salt = await bcrypt.genSalt(10);
+  const hash = await bcrypt.hash(newPass, salt);
+
+  userInfo.password = hash;
+
+  await userInfo.save();
+
+  res.send({ status: "success", message: `Password reset successful` });
+});
+
 router.get("/app_info", async (req, res) => {
   const appInfo = await AppInfo.findOne({ ID: "APP" });
 
