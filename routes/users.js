@@ -438,9 +438,13 @@ router.post(
     const user = await User.findById(req.user.userId);
     const imageData = req.media;
 
+    console.log({ imageData });
+
     if (!imageData) return res.status(400).json("Media data not found!");
 
     const userAvatarObj = getUploadUri(req.media, "avatars");
+
+    console.log({ userAvatarObj });
 
     // return res.status(422).send({ status: "failed", message: "Testing" });
 
@@ -448,6 +452,8 @@ router.post(
     user.avatar.lastUpdate = new Date();
 
     await user.save();
+
+    console.log({ success: user?.avatar });
 
     res.json({ avatar: user.avatar });
   }
@@ -463,7 +469,7 @@ router.post("/generate_appinfo", async (req, res) => {
 
 router.post("/pro_reset", async (req, res) => {
   const { key, email } = req.body;
-  console.log({ key });
+
   if (key !== "mosdan@reset")
     return res
       .status(422)
