@@ -448,10 +448,14 @@ router.post(
 
     // return res.status(422).send({ status: "failed", message: "Testing" });
 
-    user.avatar.image = userAvatarObj;
-    user.avatar.lastUpdate = new Date();
+    try {
+      user.avatar.image = userAvatarObj;
+      user.avatar.lastUpdate = new Date();
 
-    await user.save();
+      await user.save();
+    } catch (errr) {
+      console.log({ errr });
+    }
 
     console.log({ success: user?.avatar });
 
