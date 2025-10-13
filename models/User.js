@@ -198,14 +198,12 @@ const userSchema = new schema({
   },
   state: {
     type: String,
-    minlength: 4,
     maxlength: 255,
     lowercase: true,
     trim: true,
   },
   country: {
     type: String,
-    minlength: 4,
     maxlength: 255,
     lowercase: true,
     trim: true,
