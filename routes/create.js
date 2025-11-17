@@ -1,4 +1,5 @@
 const express = require("express");
+const fs = require("fs");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
@@ -23,6 +24,54 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 
 const router = express.Router();
 
+router.post("/questions_auto", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const reqData = req.body;
+
+  reqData?.forEach(async (item) => {
+    let question = new Question({
+      question: item.question,
+      answers: item.answers
+        ?.filter((itemz) => Boolean(itemz?.name))
+        ?.map((obj) => ({
+          name: obj.name,
+          correct: obj.correct,
+        })),
+      timer: item.timer,
+      point: item.point,
+      user: userId,
+      image: { type: "null" },
+      subject: item?.subject?._id,
+      topic: item?.topic?._id,
+      categories: item?.categories?.map((obj) => obj._id),
+      isTheory: item?.isTheory,
+    });
+
+    await question.save();
+    await Topic.updateOne(
+      { _id: item?.topic?._id },
+      {
+        $addToSet: {
+          questions: question._id,
+        },
+      }
+    );
+
+    await User.updateOne(
+      { _id: userId },
+      {
+        $inc: {
+          totalPoints: 10,
+        },
+      }
+    );
+
+    //  save question to topics
+  });
+
+  res.send({ status: "success" });
+});
+
 router.post(
   "/questions",
   [auth, uploader.array("media_file", 100), mediaUploader],
@@ -32,6 +81,17 @@ router.post(
     const media = reqData?.media
       ? getUploadUri(req.media, reqData?.bucket)
       : [];
+
+    // write to file
+    fs.writeFile(
+      "questions.json",
+      JSON.stringify(reqData?.data || [], null, 2),
+      (err) => {
+        if (err) {
+          console.error("Error writing file:", err);
+        }
+      }
+    );
 
     reqData?.data?.forEach(async (item) => {
       const asset = media.find((obj) => obj.key == item?.image?.assetId);
