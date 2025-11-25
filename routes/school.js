@@ -1004,6 +1004,7 @@ router.get("/fetch", auth, async (req, res) => {
     }
   }
   let assignmentCount, announcementCount, classCount, quizCount;
+
   if (school) {
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
