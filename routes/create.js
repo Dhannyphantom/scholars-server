@@ -25,10 +25,31 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 const router = express.Router();
 
 router.post("/questions_auto", auth, async (req, res) => {
-  const userId = req.user.userId;
+  let userId = req.user.userId;
   const reqData = req.body;
 
-  reqData?.forEach(async (item) => {
+  const { questions, username } = reqData;
+
+  if (!questions || !Boolean(questions[0])) {
+    return res
+      .status(422)
+      .send({ message: "No questions provided!", status: "failed" });
+  }
+
+  if (username) {
+    const userInfo = await User.findOne({
+      username: username?.toLowerCase(),
+    }).select("_id");
+    if (userInfo) {
+      userId = userInfo._id;
+    } else {
+      return res
+        .status(422)
+        .send({ message: "Username not registered", status: "failed" });
+    }
+  }
+
+  questions?.forEach(async (item) => {
     let question = new Question({
       question: item.question,
       answers: item.answers
@@ -69,7 +90,7 @@ router.post("/questions_auto", auth, async (req, res) => {
     //  save question to topics
   });
 
-  res.send({ status: "success" });
+  res.send({ status: "success", message: "Questions uploaded successfully" });
 });
 
 router.post(

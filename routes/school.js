@@ -253,7 +253,9 @@ router.post("/join", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.body;
 
-  const userInfo = await User.findById(userId).select("accountType");
+  const userInfo = await User.findById(userId).select(
+    "accountType preffix firstName lastName username"
+  );
   if (!userInfo)
     return res
       .status(422)
@@ -283,6 +285,7 @@ router.post("/join", auth, async (req, res) => {
     });
 
     if (teachSchool) {
+      // remove teacher from other school previously joined
       teachSchool.teachers = teachSchool.teachers.filter(
         (item) => item?.user?.toString() != userId
       );
@@ -295,6 +298,15 @@ router.post("/join", auth, async (req, res) => {
     );
     if (checker < 0) {
       school.teachers.push({ user: userId });
+      school.announcements.push({
+        type: "system",
+        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+          userInfo.firstName
+        )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
+          school.name
+        } as a teacher, you may verify or decline this request`,
+        visibility: "all",
+      });
       await school.save();
     }
   } else if (isStudent) {
@@ -373,6 +385,10 @@ router.post("/announcement", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
   const { title, classes, schoolId } = data;
+
+  if (!schoolId) {
+    return res.status(422).send({ status: "failed", message: "No school ID" });
+  }
 
   try {
     await School.updateOne(
@@ -900,6 +916,11 @@ router.get("/quiz", auth, async (req, res) => {
 router.get("/announcements", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.query;
+
+  console.log({ schoolId });
+  if (!Boolean(schoolId) || schoolId == "undefined") {
+    return res.status(422).send({ status: "failed", message: "No school ID" });
+  }
 
   const userInfo = await User.findById(userId).select("accountType");
 
