@@ -131,7 +131,9 @@ router.post("/subject_topics", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "User not found!" });
 
-  const userQBank = userInfo.qBank.map((q) => q.toString());
+  const banks = userInfo?.qBank || [];
+
+  const userQBank = banks.map((q) => q.toString());
 
   let subjectList = await Subject.find({ _id: { $in: subjects } })
     .populate([{ path: "topics", model: "Topic", select: "name questions" }])
@@ -464,7 +466,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
   const subjectIds = reqData?.subjects?.map(
     (item) => new mongoose.Types.ObjectId(item._id)
   );
-  const userQBank = userInfo?.qBank;
+  const userQBank = userInfo?.qBank || [];
   const topicIds = [];
 
   reqData?.subjects?.forEach((subject) => {
@@ -473,7 +475,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
   });
 
-  console.log({ topicIds });
+  // console.log({ topicIds, subjectIds, reqData });
 
   const questions = await Question.aggregate([
     {

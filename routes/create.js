@@ -280,4 +280,23 @@ router.post(
   }
 );
 
+// router.get("/mod_questions", async (req, res) => {
+//   console.log("Modifying questions....");
+//   await Question.updateMany(
+//     { user: "68e2fb9b1fe9852f691949e6" },
+//     {
+//       $set: {
+//         categories: [
+//           "678d59448f4a1d454f2ce813",
+//           "678d59448f4a1d454f2ce811",
+//           "678d59448f4a1d454f2ce80d",
+//           "678d59448f4a1d454f2ce80f",
+//         ],
+//       },
+//     }
+//   );
+
+//   res.send("Task completed!");
+// });
+
 module.exports = router;
