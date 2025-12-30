@@ -516,20 +516,92 @@ router.get("/search_students", auth, async (req, res) => {
     // 6. Clean up output
     {
       $project: {
-        followers: 0,
-        following: 0,
-        isFollowing: 0,
-        isFollower: 0,
-        __v: 0,
-        password: 0,
-        tokens: 0,
-        tx_history: 0,
-        accountType: 0,
+        // followers: 0,
+        // following: 0,
+        // isFollowing: 0,
+        // isFollower: 0,
+        // __v: 0,
+        // password: 0,
+        // tokens: 0,
+        // tx_history: 0,
+        // accountType: 0,
+        // qBank: 0,
+        // address: 0,
+        username: 1,
+        firstName: 1,
+        lastName: 1,
+        followersCount: 1,
+        followingCount: 1,
+        mutualsCount: 1,
+        school: 1,
+        avatar: 1,
+        verified: 1,
+        points: 1,
+        status: 1,
       },
     },
   ]);
 
   res.send({ status: "success", data: result });
+});
+
+router.put("/students", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { type, user } = req.body;
+  try {
+    const currentUserId = new mongoose.Types.ObjectId(userId);
+    const targetUserId = new mongoose.Types.ObjectId(user);
+
+    if (!["follow", "unfollow"].includes(type)) {
+      return res.status(400).json({ message: "Invalid action type" });
+    }
+
+    if (currentUserId.equals(targetUserId)) {
+      return res.status(400).json({ message: "You cannot follow yourself" });
+    }
+
+    // const session = await mongoose.startSession();
+    // session.startTransaction();
+
+    if (type === "follow") {
+      // Add target to my following
+      await User.updateOne(
+        { _id: currentUserId },
+        { $addToSet: { following: targetUserId } }
+      );
+
+      // Add me to target's followers
+      await User.updateOne(
+        { _id: targetUserId },
+        { $addToSet: { followers: currentUserId } }
+      );
+    }
+
+    if (type === "unfollow") {
+      // Remove target from my following
+      await User.updateOne(
+        { _id: currentUserId },
+        { $pull: { following: targetUserId } }
+      );
+
+      // Remove me from target's followers
+      await User.updateOne(
+        { _id: targetUserId },
+        { $pull: { followers: currentUserId } }
+      );
+    }
+
+    // await session.commitTransaction();
+    // session.endSession();
+
+    return res.status(200).json({
+      success: true,
+      action: type,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Something went wrong" });
+  }
 });
 
 router.put("/professional", auth, async (req, res) => {
