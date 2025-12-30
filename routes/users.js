@@ -399,7 +399,66 @@ router.get("/search_students", auth, async (req, res) => {
   const result = await User.aggregate([
     // 1. Only students
     {
-      $match: { accountType: "student", ...searchStage },
+      $match: {
+        accountType: "student",
+        ...searchStage,
+        _id: { $ne: currentUserId },
+      },
+    },
+    /* ===========================
+     2. SCHOOL LOOKUP
+  ============================ */
+    {
+      $lookup: {
+        from: "schools",
+        let: { userId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $in: ["$$userId", "$students.user"],
+              },
+            },
+          },
+          {
+            $project: {
+              _id: 1,
+              name: 1,
+              studentRecord: {
+                $arrayElemAt: [
+                  {
+                    $filter: {
+                      input: "$students",
+                      as: "s",
+                      cond: { $eq: ["$$s.user", "$$userId"] },
+                    },
+                  },
+                  0,
+                ],
+              },
+            },
+          },
+        ],
+        as: "school",
+      },
+    },
+
+    {
+      $addFields: {
+        school: {
+          $cond: [
+            { $gt: [{ $size: "$school" }, 0] },
+            {
+              _id: { $arrayElemAt: ["$school._id", 0] },
+              name: { $arrayElemAt: ["$school.name", 0] },
+              verified: {
+                $arrayElemAt: ["$school.studentRecord.verified", 0],
+              },
+            },
+            null,
+          ],
+        },
+      },
     },
 
     // 2. Normalize arrays (safety)
@@ -436,7 +495,7 @@ router.get("/search_students", auth, async (req, res) => {
     // 5. Friend status
     {
       $addFields: {
-        friend_status: {
+        status: {
           $cond: [
             { $and: ["$isFollowing", "$isFollower"] },
             "mutual",
