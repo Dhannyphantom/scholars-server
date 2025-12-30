@@ -308,6 +308,16 @@ const userSchema = new schema({
     type: [schema.Types.ObjectId],
     ref: "Subejct",
   },
+  following: {
+    // FOR PROFESSIONAL
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
+  followers: {
+    // FOR PROFESSIONAL
+    type: [schema.Types.ObjectId],
+    ref: "User",
+  },
   gender: {
     type: String,
     enum: ["male", "Male", "female", "Female", "others", "Others"],

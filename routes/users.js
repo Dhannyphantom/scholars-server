@@ -380,6 +380,99 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
   }
 });
 
+router.get("/search_students", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { q } = req.query;
+
+  const searchStage = q
+    ? {
+        $or: [
+          { firstName: { $regex: q, $options: "i" } },
+          { lastName: { $regex: q, $options: "i" } },
+          { username: { $regex: q, $options: "i" } },
+        ],
+      }
+    : {};
+
+  const currentUserId = new mongoose.Types.ObjectId(userId);
+
+  const result = await User.aggregate([
+    // 1. Only students
+    {
+      $match: { accountType: "student", ...searchStage },
+    },
+
+    // 2. Normalize arrays (safety)
+    {
+      $addFields: {
+        followers: { $ifNull: ["$followers", []] },
+        following: { $ifNull: ["$following", []] },
+      },
+    },
+
+    // 3. Compute counts
+    {
+      $addFields: {
+        followersCount: { $size: "$followers" },
+        followingCount: { $size: "$following" },
+
+        // mutuals = users present in both followers & following
+        mutualsCount: {
+          $size: {
+            $setIntersection: ["$followers", "$following"],
+          },
+        },
+      },
+    },
+
+    // 4. Relationship flags relative to requester
+    {
+      $addFields: {
+        isFollowing: { $in: [currentUserId, "$followers"] },
+        isFollower: { $in: [currentUserId, "$following"] },
+      },
+    },
+
+    // 5. Friend status
+    {
+      $addFields: {
+        friend_status: {
+          $cond: [
+            { $and: ["$isFollowing", "$isFollower"] },
+            "mutual",
+            {
+              $cond: [
+                "$isFollowing",
+                "following",
+                {
+                  $cond: ["$isFollower", "follower", null],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+
+    // 6. Clean up output
+    {
+      $project: {
+        followers: 0,
+        following: 0,
+        isFollowing: 0,
+        isFollower: 0,
+        __v: 0,
+        password: 0,
+        tokens: 0,
+        tx_history: 0,
+        accountType: 0,
+      },
+    },
+  ]);
+
+  res.send({ status: "success", data: result });
+});
+
 router.put("/professional", auth, async (req, res) => {
   const userId = req.user.userId;
   const { proId, subjects, action } = req.body;

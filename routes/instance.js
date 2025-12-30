@@ -475,8 +475,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
   });
 
-  // console.log({ topicIds, subjectIds, reqData });
-
   const questions = await Question.aggregate([
     {
       $match: {
@@ -565,129 +563,142 @@ router.post("/submit_premium", auth, async (req, res) => {
       .send({ status: "failed", message: "User not authorized" });
 
   // Get stats
-  const appInfo = await AppInfo.findOne({ ID: "APP" });
+  try {
+    const appInfo = await AppInfo.findOne({ ID: "APP" });
 
-  if (mode == "solo") {
-    let point = 0,
-      studentSubjects = [],
-      questionIds = [],
-      questionData = [],
-      subjectIds = [],
-      topicIds = [],
-      total = 0;
+    if (mode === "solo") {
+      let point = 0,
+        studentSubjects = [],
+        questionIds = [],
+        questionData = [],
+        subjectIds = [],
+        topicIds = [],
+        total = 0;
 
-    questions.forEach((quest) => {
-      studentSubjects.push({
-        subject: quest?.subject?._id,
-        questions: quest?.questions?.map((itemQ) => itemQ?._id),
-      });
-      subjectIds.push(quest?.subject?._id);
-      quest.questions.forEach((question) => {
-        questionIds.push(question?._id);
-        questionData.push({
-          question: question?.question,
-          answers: question?.answers,
-          answered: question?.answered,
-          timer: question?.timer,
-          point: question?.point,
-          subject: question?.subject,
-          topic: question?.topic,
-          categories: question?.categories,
+      questions.forEach((quest) => {
+        studentSubjects.push({
+          subject: quest?.subject?._id,
+          questions: quest?.questions?.map((itemQ) => itemQ?._id),
         });
-        if (!topicIds.includes(question?.topic)) {
-          topicIds.push(question?.topic);
-        }
+        subjectIds.push(quest?.subject?._id);
+        quest.questions.forEach((question) => {
+          questionIds.push(question?._id);
+          questionData.push({
+            question: question?.question,
+            answers: question?.answers,
+            answered: question?.answered,
+            timer: question?.timer,
+            point: question?.point,
+            subject: question?.subject,
+            topic: question?.topic,
+            categories: question?.categories,
+          });
+          if (!topicIds.includes(question?.topic)) {
+            topicIds.push(question?.topic);
+          }
 
-        if (question?.answered?.correct) {
-          point += question.point;
-          total += question.point;
-        } else {
-          total += question.point;
-          point -= appInfo.POINT_FAIL;
-        }
+          if (question?.answered?.correct) {
+            point += question.point;
+            total += question.point;
+          } else {
+            total += question.point;
+            point -= appInfo.POINT_FAIL;
+          }
+        });
       });
-    });
 
-    const currentQuota = userInfo.quota;
-    if (currentQuota) {
-      // User has practiced a quiz session before
-      // So Check if it's been a day since last practice;
-      if (new Date() - new Date(currentQuota.daily_update) > A_DAY) {
-        // then update the daily quotas
+      point = Math.max(0, point);
 
-        const userQuota = {
-          last_update: Date.now(),
-          daily_update: Date.now(),
-          weekly_update: currentQuota.weekly_update,
-          point_per_week: point + currentQuota.point_per_week,
-          subjects: currentQuota?.subjects?.concat(studentSubjects),
-          daily_questions: questionIds,
-        };
+      const currentQuota = userInfo.quota;
+      if (currentQuota) {
+        // User has practiced a quiz session before
+        // So Check if it's been a day since last practice;
+        if (new Date() - new Date(currentQuota.daily_update) > A_DAY) {
+          // then update the daily quotas
 
-        userInfo.quota = userQuota;
+          const userQuota = {
+            last_update: Date.now(),
+            daily_update: Date.now(),
+            weekly_update: currentQuota.weekly_update,
+            point_per_week: point + currentQuota.point_per_week,
+            subjects: currentQuota?.subjects?.concat(studentSubjects),
+            daily_questions: questionIds,
+          };
+
+          userInfo.quota = userQuota;
+        } else {
+          // Not up to a day yet,
+          // User is trying to practice more subjects for that day
+          const userQuota = {
+            last_update: Date.now(),
+            daily_update: currentQuota?.daily_update,
+            point_per_week: point + currentQuota.point_per_week,
+            subjects: currentQuota?.subjects?.concat(studentSubjects),
+            daily_questions: currentQuota?.daily_questions?.concat(questionIds),
+          };
+
+          userInfo.quota = userQuota;
+        }
+
+        if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
+          // update weekly qouta
+          const userQuota = {
+            last_update: Date.now(),
+            weekly_update: Date.now(),
+            daily_update: Date.now(),
+            point_per_week: point,
+            subjects: studentSubjects,
+            daily_questions: questionIds,
+          };
+
+          userInfo.quota = userQuota;
+          userInfo.quotas?.push(currentQuota);
+        } else {
+          // not up to a week
+        }
       } else {
-        // Not up to a day yet,
-        // User is trying to practice more subjects for that day
+        // NO current Quota; FIRST QUIZ session!!!!
         const userQuota = {
           last_update: Date.now(),
-          daily_update: currentQuota?.daily_update,
-          point_per_week: point + currentQuota.point_per_week,
-          subjects: currentQuota?.subjects?.concat(studentSubjects),
-          daily_questions: currentQuota?.daily_questions?.concat(questionIds),
-        };
-
-        userInfo.quota = userQuota;
-      }
-
-      if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
-        // update weekly qouta
-        const userQuota = {
-          last_update: Date.now(),
-          weekly_update: Date.now(),
           daily_update: Date.now(),
+          weekly_update: Date.now(),
           point_per_week: point,
           subjects: studentSubjects,
           daily_questions: questionIds,
         };
 
         userInfo.quota = userQuota;
-        userInfo.quotas?.push(currentQuota);
-      } else {
-        // not up to a week
+        // await userInfo.save();
       }
+
+      userInfo.points += point;
+      userInfo.totalPoints += point;
+      userInfo.qBank = userInfo.qBank.concat(questionIds);
+      await userInfo.save();
+
+      // Save quiz info;
+
+      const newQuiz = new Quiz({
+        user: userId,
+        mode,
+        type,
+        questions: questionData,
+        subjects: subjectIds,
+        topics: topicIds,
+      });
+
+      await newQuiz.save();
+      // mode === 'solo'
     } else {
-      // NO current Quota; FIRST QUIZ session!!!!
-      const userQuota = {
-        last_update: Date.now(),
-        daily_update: Date.now(),
-        weekly_update: Date.now(),
-        point_per_week: point,
-        subjects: studentSubjects,
-        daily_questions: questionIds,
-      };
-
-      userInfo.quota = userQuota;
-      // await userInfo.save();
+      return res.status(422).send({
+        status: "failed",
+        message: "Only solo mode is currently allowed!",
+      });
     }
-
-    userInfo.points += point;
-    userInfo.totalPoints += point;
-    userInfo.qBank = userInfo.qBank.concat(questionIds);
-    await userInfo.save();
-
-    // Save quiz info;
-
-    const newQuiz = new Quiz({
-      user: userId,
-      mode,
-      type,
-      questions: questionData,
-      subjects: subjectIds,
-      topics: topicIds,
-    });
-
-    await newQuiz.save();
-    // mode === 'solo'
+  } catch (errr) {
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Something went wrong", data: errr });
   }
 
   res.send({ status: "success" });
