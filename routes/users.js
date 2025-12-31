@@ -380,6 +380,342 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
   }
 });
 
+router.get("/friends", auth, async (req, res) => {
+  const profileUserId = new mongoose.Types.ObjectId(req.user.userId);
+
+  const [result] = await User.aggregate([
+    /* ===========================
+     1. TARGET USER
+  ============================ */
+    { $match: { _id: profileUserId } },
+
+    /* ===========================
+     2. NORMALIZE
+  ============================ */
+    {
+      $addFields: {
+        followers: { $ifNull: ["$followers", []] },
+        following: { $ifNull: ["$following", []] },
+      },
+    },
+
+    /* ===========================
+     3. IDS + COUNTS
+  ============================ */
+    {
+      $addFields: {
+        mutualIds: { $setIntersection: ["$followers", "$following"] },
+        followersCount: { $size: "$followers" },
+        followingCount: { $size: "$following" },
+      },
+    },
+    {
+      $addFields: {
+        mutualsCount: { $size: "$mutualIds" },
+      },
+    },
+
+    /* ===========================
+     4. FOLLOWERS
+  ============================ */
+    {
+      $lookup: {
+        from: "users",
+        let: {
+          ids: "$followers",
+          myFollowing: "$following",
+          myFollowers: "$followers",
+        },
+        pipeline: [
+          { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+
+          /* school */
+          {
+            $lookup: {
+              from: "schools",
+              let: { uid: "$_id" },
+              pipeline: [
+                { $match: { $expr: { $in: ["$$uid", "$students.user"] } } },
+                {
+                  $project: {
+                    _id: 1,
+                    name: 1,
+                    studentRecord: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$students",
+                            as: "s",
+                            cond: { $eq: ["$$s.user", "$$uid"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "school",
+            },
+          },
+
+          {
+            $addFields: {
+              school: {
+                $cond: [
+                  { $gt: [{ $size: "$school" }, 0] },
+                  {
+                    _id: { $arrayElemAt: ["$school._id", 0] },
+                    name: { $arrayElemAt: ["$school.name", 0] },
+                    verified: {
+                      $arrayElemAt: ["$school.studentRecord.verified", 0],
+                    },
+                  },
+                  null,
+                ],
+              },
+
+              status: {
+                $switch: {
+                  branches: [
+                    {
+                      case: {
+                        $and: [
+                          { $in: ["$_id", "$$myFollowing"] },
+                          { $in: ["$_id", "$$myFollowers"] },
+                        ],
+                      },
+                      then: "accepted",
+                    },
+                    {
+                      case: { $in: ["$_id", "$$myFollowing"] },
+                      then: "pending",
+                    },
+                    {
+                      case: { $in: ["$_id", "$$myFollowers"] },
+                      then: "follower",
+                    },
+                  ],
+                  default: "none",
+                },
+              },
+            },
+          },
+
+          {
+            $project: {
+              username: 1,
+              firstName: 1,
+              lastName: 1,
+              avatar: 1,
+              school: 1,
+              status: 1,
+            },
+          },
+        ],
+        as: "followers",
+      },
+    },
+
+    /* ===========================
+     5. FOLLOWING
+  ============================ */
+    {
+      $lookup: {
+        from: "users",
+        let: {
+          ids: "$following",
+          myFollowing: "$following",
+          myFollowers: "$followers",
+        },
+        pipeline: [
+          { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+
+          /* school */
+          {
+            $lookup: {
+              from: "schools",
+              let: { uid: "$_id" },
+              pipeline: [
+                { $match: { $expr: { $in: ["$$uid", "$students.user"] } } },
+                {
+                  $project: {
+                    _id: 1,
+                    name: 1,
+                    studentRecord: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$students",
+                            as: "s",
+                            cond: { $eq: ["$$s.user", "$$uid"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "school",
+            },
+          },
+
+          {
+            $addFields: {
+              school: {
+                $cond: [
+                  { $gt: [{ $size: "$school" }, 0] },
+                  {
+                    _id: { $arrayElemAt: ["$school._id", 0] },
+                    name: { $arrayElemAt: ["$school.name", 0] },
+                    verified: {
+                      $arrayElemAt: ["$school.studentRecord.verified", 0],
+                    },
+                  },
+                  null,
+                ],
+              },
+              status: {
+                $switch: {
+                  branches: [
+                    {
+                      case: {
+                        $and: [
+                          { $in: ["$_id", "$$myFollowing"] },
+                          { $in: ["$_id", "$$myFollowers"] },
+                        ],
+                      },
+                      then: "accepted",
+                    },
+                    {
+                      case: { $in: ["$_id", "$$myFollowers"] },
+                      then: "follower",
+                    },
+                    {
+                      case: { $in: ["$_id", "$$myFollowing"] },
+                      then: "pending",
+                    },
+                  ],
+                  default: "none",
+                },
+              },
+            },
+          },
+
+          {
+            $project: {
+              username: 1,
+              firstName: 1,
+              lastName: 1,
+              avatar: 1,
+              school: 1,
+              status: 1,
+            },
+          },
+        ],
+        as: "following",
+      },
+    },
+
+    /* ===========================
+     6. MUTUALS
+  ============================ */
+    {
+      $lookup: {
+        from: "users",
+        let: {
+          ids: "$mutualIds",
+          myFollowing: "$following",
+          myFollowers: "$followers",
+        },
+        pipeline: [
+          { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+
+          /* school */
+          {
+            $lookup: {
+              from: "schools",
+              let: { uid: "$_id" },
+              pipeline: [
+                { $match: { $expr: { $in: ["$$uid", "$students.user"] } } },
+                {
+                  $project: {
+                    _id: 1,
+                    name: 1,
+                    studentRecord: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$students",
+                            as: "s",
+                            cond: { $eq: ["$$s.user", "$$uid"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "school",
+            },
+          },
+
+          {
+            $addFields: {
+              school: {
+                $cond: [
+                  { $gt: [{ $size: "$school" }, 0] },
+                  {
+                    _id: { $arrayElemAt: ["$school._id", 0] },
+                    name: { $arrayElemAt: ["$school.name", 0] },
+                    verified: {
+                      $arrayElemAt: ["$school.studentRecord.verified", 0],
+                    },
+                  },
+                  null,
+                ],
+              },
+              status: "accepted",
+            },
+          },
+
+          {
+            $project: {
+              username: 1,
+              firstName: 1,
+              lastName: 1,
+              avatar: 1,
+              school: 1,
+              status: 1,
+            },
+          },
+        ],
+        as: "mutuals",
+      },
+    },
+
+    /* ===========================
+     7. CLEANUP
+  ============================ */
+    {
+      $project: {
+        followers: 1,
+        following: 1,
+        mutuals: 1,
+        followersCount: 1,
+        mutualsCount: 1,
+        followingCount: 1,
+        // mutualIds: 0,
+        // password: 0,
+        // __v: 0,
+      },
+    },
+  ]);
+
+  res.send({ status: "success", data: result });
+});
 router.get("/search_students", auth, async (req, res) => {
   const userId = req.user.userId;
   const { q } = req.query;
