@@ -989,6 +989,37 @@ router.get("/search_students", auth, async (req, res) => {
   res.send({ status: "success", data: result });
 });
 
+router.put("/rewards", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const { rewardId, point } = req.body;
+
+  if (!rewardId || !point)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Incomplete reward data" });
+
+  await User.updateOne(
+    {
+      _id: userId,
+      "rewards.history._id": rewardId,
+      "rewards.history.status": "pending",
+    },
+    {
+      $set: {
+        "rewards.history.$.status": "rewarded",
+      },
+      $inc: {
+        points: point,
+        totalPoints: point,
+        "rewards.point": point,
+      },
+    }
+  );
+
+  res.send({ status: "success" });
+});
+
 router.put("/students", auth, async (req, res) => {
   const userId = req.user.userId;
   const { type, user } = req.body;
