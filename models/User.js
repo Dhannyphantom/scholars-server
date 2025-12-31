@@ -139,7 +139,7 @@ const rewardSchema = new schema({
   status: {
     type: String,
     required: true,
-    enum: ["pending", "rewarded", "claimed"],
+    enum: ["pending", "rewarded"],
   },
 });
 

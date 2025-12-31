@@ -32,6 +32,25 @@ const uploader = multer({ storage, limits: { fieldSize: 5 * 1024 * 1024 } }); //
 
 const router = express.Router();
 
+function generateReferralToken(username) {
+  if (!username) return "";
+
+  const clean = username.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // first 4 chars from username
+  const base = clean.slice(0, 4);
+
+  // simple numeric signature from username length + char codes
+  let sum = 0;
+  for (let char of clean) {
+    sum += char.charCodeAt(0);
+  }
+
+  const suffix = (sum % 10000).toString().padStart(4, "0");
+
+  return (base + suffix).slice(0, 8);
+}
+
 router.post("/register", async (req, res) => {
   const { username, email, password, accountType, token: proToken } = req.body;
 
@@ -68,6 +87,32 @@ router.post("/register", async (req, res) => {
   user.password = hash;
 
   const token = user.generateAuthToken();
+
+  let referalToken = generateReferralToken(user.username);
+  let checker = await User.findOne({
+    _id: { $ne: user._id },
+    "rewards.code": referalToken,
+  });
+
+  while (Boolean(checker)) {
+    referalToken = generateReferralToken(user.username);
+    checker = await User.findOne({
+      _id: { $ne: user._id },
+      "rewards.code": referalToken,
+    });
+  }
+
+  user.rewards = {
+    code: referalToken,
+    history: [
+      {
+        title: "Account Creation",
+        point: 50,
+        status: "pending",
+      },
+    ],
+    point: 0,
+  };
 
   await user.save();
 
@@ -118,6 +163,32 @@ router.get("/user", auth, async (req, res) => {
 
   if (!userData)
     return res.status(422).json("User data not found. Please sign in again");
+  // let referalToken = generateReferralToken(userData.username);
+  // let checker = await User.findOne({
+  //   _id: { $ne: userData._id },
+  //   "rewards.code": referalToken,
+  // });
+
+  // while (Boolean(checker)) {
+  //   referalToken = generateReferralToken(userData.username);
+  //   checker = await User.findOne({
+  //     _id: { $ne: userData._id },
+  //     "rewards.code": referalToken,
+  //   });
+  // }
+
+  // userData.rewards = {
+  //   code: referalToken,
+  //   history: [
+  //     {
+  //       title: "Account Creation",
+  //       point: 50,
+  //       status: "pending",
+  //     },
+  //   ],
+  //   point: 0,
+  // };
+  // await userData.save();
 
   res.json({ user: userData });
 });
@@ -716,6 +787,43 @@ router.get("/friends", auth, async (req, res) => {
 
   res.send({ status: "success", data: result });
 });
+
+router.get("/rewards", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const userInfo = await User.findById(userId).select("rewards username");
+
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
+
+  if (!userInfo?.rewards) {
+    let referalToken = generateReferralToken(userInfo.username);
+    let checker = await User.findOne({
+      _id: { $ne: userInfo._id },
+      "rewards.code": referalToken,
+    });
+
+    while (Boolean(checker)) {
+      referalToken = generateReferralToken(userInfo.username);
+      checker = await User.findOne({
+        _id: { $ne: userInfo._id },
+        "rewards.code": referalToken,
+      });
+    }
+
+    userInfo.rewards = {
+      code: referalToken,
+      history: [],
+      point: 0,
+    };
+    await userInfo.save();
+  }
+
+  res.send({ status: "success", data: userInfo.rewards });
+});
+
 router.get("/search_students", auth, async (req, res) => {
   const userId = req.user.userId;
   const { q } = req.query;
