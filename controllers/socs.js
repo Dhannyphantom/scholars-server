@@ -43,7 +43,7 @@ module.exports = (io) => {
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
       const session = sessions[sessionId];
-      if (!session) return;
+      if (!session) return console.log("No session", sessions, sessionId);
 
       session.users = session.users.map((u) =>
         u._id === user._id ? { ...u, status } : u
