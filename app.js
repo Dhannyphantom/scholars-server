@@ -1,5 +1,6 @@
 require("dotenv").config();
 require("express-async-errors");
+const { Server } = require("socket.io");
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -8,6 +9,12 @@ const error = require("./middlewares/error");
 
 const app = express();
 const http = require("http").createServer(app);
+
+const io = new Server(http, {
+  cors: {
+    origin: "*",
+  },
+});
 
 const bodyParser = require("body-parser");
 const Joi = require("joi");
@@ -28,6 +35,7 @@ const payments = require("./routes/payments");
 const create = require("./routes/create");
 const instance = require("./routes/instance");
 const school = require("./routes/school");
+const socs = require("./controllers/socs");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -44,6 +52,7 @@ app.use(error);
 
 /// FUNCTION EXPORTS
 db();
+socs(io);
 // chat(http, app);
 
 app.get("/", (req, res) => {
