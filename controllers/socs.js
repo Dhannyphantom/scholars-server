@@ -1,8 +1,7 @@
+const sessions = {};
 module.exports = (io) => {
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
-
-    const sessions = {};
 
     socket.on("register_user", (userId) => {
       socket.join(userId);
@@ -27,7 +26,7 @@ module.exports = (io) => {
       }
 
       // send full lobby to the joiner
-      socket.emit("session_snapshot", sessions[sessionId].users);
+      socket.emit("session_snapshot", sessions[sessionId]);
 
       // notify others
       socket.to(sessionId).emit("user_joined", {
@@ -47,11 +46,22 @@ module.exports = (io) => {
     });
 
     socket.on("mode_category", ({ category, sessionId }) => {
+      sessions[sessionId].category = category;
+      socket.emit("session_snapshot", sessions[sessionId]);
       io.to(sessionId).emit("set_category", category);
     });
 
     socket.on("mode_subjects", ({ subjects, sessionId }) => {
+      sessions[sessionId].subjects = subjects;
+      socket.emit("session_snapshot", sessions[sessionId]);
       io.to(sessionId).emit("set_subjects", subjects);
+    });
+
+    socket.on("mode_topics", ({ subjects, quizData, sessionId }) => {
+      sessions[sessionId].subjects = subjects;
+      sessions[sessionId].quizData = quizData;
+      socket.emit("session_snapshot", sessions[sessionId]);
+      io.to(sessionId).emit("set_topics", { subjects, quizData });
     });
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
