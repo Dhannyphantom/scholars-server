@@ -46,6 +46,10 @@ module.exports = (io) => {
       io.to(session?.sessionId).emit("remove_invited", session);
     });
 
+    socket.on("mode_category", ({ category, sessionId }) => {
+      io.to(sessionId).emit("set_category", category);
+    });
+
     socket.on("invite_response", ({ sessionId, user, status }) => {
       const session = sessions[sessionId];
       if (!session) return console.log("No session", sessions, sessionId);
