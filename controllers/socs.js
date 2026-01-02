@@ -50,6 +50,10 @@ module.exports = (io) => {
       io.to(sessionId).emit("set_category", category);
     });
 
+    socket.on("mode_subjects", ({ subjects, sessionId }) => {
+      io.to(sessionId).emit("set_subjects", subjects);
+    });
+
     socket.on("invite_response", ({ sessionId, user, status }) => {
       const session = sessions[sessionId];
       if (!session) return console.log("No session", sessions, sessionId);
