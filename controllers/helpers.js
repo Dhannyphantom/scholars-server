@@ -2,6 +2,7 @@ const _NET = process.env.NET_DEV;
 // const image_exts = ["jpg", "jpeg", "png", "gif"];
 const fs = require("fs");
 const path = require("path");
+const expoNotifications = require("./expoNotifications");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
@@ -182,6 +183,33 @@ const calculatePointsAmount = (value) => {
 
 const getClasses = () => {
   return classsSchoolEnums.map((item) => ({ level: item, alias: "Class" }));
+};
+
+module.exports.sendPushInBatches = async (
+  userFilter,
+  { title, message, image }
+) => {
+  const cursor = User.find(userFilter)
+    .select("_id expoPushToken")
+    .lean()
+    .cursor();
+
+  let batch = [];
+
+  for await (const user of cursor) {
+    if (user.expoPushToken) {
+      batch.push(user.expoPushToken);
+    }
+
+    if (batch.length === 100) {
+      await expoNotifications(batch, { title, message, image });
+      batch = [];
+    }
+  }
+
+  if (batch.length) {
+    await expoNotifications(batch, { title, message, image });
+  }
 };
 
 module.exports = {

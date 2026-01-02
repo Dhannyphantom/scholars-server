@@ -219,6 +219,9 @@ const userSchema = new schema({
       default: false,
     },
   },
+  expoPushToken: {
+    type: String,
+  }, // store user's device push token here
   email: {
     type: String,
     required: true,

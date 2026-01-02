@@ -1242,7 +1242,7 @@ router.put("/updateProfile", auth, async (req, res) => {
     {
       new: true,
     }
-  );
+  ).select(fullUserSelector);
 
   res.json({ user: updatedUser });
 });
