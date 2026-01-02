@@ -6,7 +6,6 @@ module.exports = (io) => {
 
     socket.on("register_user", (userId) => {
       socket.join(userId);
-      console.log("User joined private room:", userId);
     });
 
     socket.on("join_session", ({ sessionId, user }) => {
@@ -39,6 +38,7 @@ module.exports = (io) => {
 
     socket.on("send_invite", ({ toUserId, session }) => {
       io.to(toUserId).emit("receive_invite", session);
+      io.to(session?.sessionId).emit("new_invite", session);
     });
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
