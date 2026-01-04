@@ -5,8 +5,6 @@ const nanoid = uuid.v4;
 
 module.exports = (io) => {
   io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
     socket.on("register_user", (userId) => {
       socket.join(userId);
     });
@@ -83,15 +81,15 @@ module.exports = (io) => {
 
     socket.on("ready_player", ({ sessionId, user }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("bad session", sessionId);
+      if (!session) return console.log("No session", sessionId);
 
       const idx = session.users.findIndex((u) => u._id === user._id);
       if (idx >= 0) {
         session.users[idx].isReady = true;
       }
 
-      io.to(sessionId).emit("player_ready", user);
-      io.to(sessionId).emit("session_snapshot", session);
+      io.to(user?._id).emit("player_ready", user);
+      io.to(sessionId).emit("session_snapshots", session);
     });
 
     socket.on("remove_invite", ({ toUserId, session }) => {
@@ -100,23 +98,19 @@ module.exports = (io) => {
     });
 
     socket.on("mode_category", ({ category, sessionId }) => {
-      console.log({ sessionId, category });
       sessions[sessionId].category = category;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
-      io.to(sessionId).emit("set_category", category);
     });
 
     socket.on("mode_subjects", ({ subjects, sessionId }) => {
       sessions[sessionId].subjects = subjects;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
-      io.to(sessionId).emit("set_subjects", subjects);
     });
 
     socket.on("mode_topics", ({ subjects, quizData, sessionId }) => {
       sessions[sessionId].subjects = subjects;
       sessions[sessionId].quizData = quizData;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
-      io.to(sessionId).emit("set_topics", { subjects, quizData });
     });
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
