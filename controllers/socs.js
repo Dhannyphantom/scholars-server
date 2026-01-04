@@ -3,6 +3,10 @@ const uuid = require("uuid");
 const sessions = {};
 const nanoid = uuid.v4;
 
+const areAllNonHostReady = (session) => {
+  return session?.users?.every((u) => u.isReady === true);
+};
+
 module.exports = (io) => {
   io.on("connection", (socket) => {
     socket.on("register_user", (userId) => {
@@ -90,6 +94,16 @@ module.exports = (io) => {
 
       io.to(user?._id).emit("player_ready", user);
       io.to(sessionId).emit("session_snapshots", session);
+
+      if (session.hasStarted) return;
+
+      if (areAllNonHostReady(session)) {
+        session.hasStarted = true;
+        io.to(sessionId).emit("quiz_start", {
+          sessionId,
+          qBank: session.quizData,
+        });
+      }
     });
 
     socket.on("remove_invite", ({ toUserId, session }) => {
