@@ -83,6 +83,35 @@ module.exports = (io) => {
       // io.to(session?.sessionId).emit("new_invite", session);
     });
 
+    socket.on("answer_question", ({ sessionId, answer, user, row, point }) => {
+      const session = sessions[sessionId];
+      if (!session) return console.log("No session", sessionId);
+
+      let message;
+
+      const idx = session.users.findIndex((u) => u._id === user._id);
+      if (idx >= 0) {
+        session.users[idx].score = (session.users[idx].score || 0) + point;
+        if (answer?.correct) {
+          session.users[idx].correctCount =
+            (session.users[idx].correctCount || 0) + 1;
+          message = `${user?.username} got ${point}GT`;
+        } else {
+          message = `${user?.username} lost ${point}GT`;
+        }
+      } else if (user?._id === session.host?._id) {
+        session.host.score = (session.host.score || 0) + point;
+        if (answer?.correct) {
+          session.host.correctCount = (session.host.correctCount || 0) + 1;
+          message = `Host@${user?.username} got ${point}GT`;
+        } else {
+          message = `Host@${user?.username} lost ${point}GT`;
+        }
+      }
+
+      io.to(sessionId).emit("session_answers", { message, userId: user?._id });
+    });
+
     socket.on("ready_player", ({ sessionId, user }) => {
       const session = sessions[sessionId];
       if (!session) return console.log("No session", sessionId);
@@ -112,16 +141,25 @@ module.exports = (io) => {
     });
 
     socket.on("mode_category", ({ category, sessionId }) => {
+      const session = sessions[sessionId];
+      if (!session) return console.log("No session", sessionId);
+
       sessions[sessionId].category = category;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
     });
 
     socket.on("mode_subjects", ({ subjects, sessionId }) => {
+      const session = sessions[sessionId];
+      if (!session) return console.log("No session", sessionId);
+
       sessions[sessionId].subjects = subjects;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
     });
 
     socket.on("mode_topics", ({ subjects, quizData, sessionId }) => {
+      const session = sessions[sessionId];
+      if (!session) return console.log("No session", sessionId);
+
       sessions[sessionId].subjects = subjects;
       sessions[sessionId].quizData = quizData;
       io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
@@ -129,7 +167,7 @@ module.exports = (io) => {
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessions, sessionId);
+      if (!session) return console.log("No session", sessionId);
 
       session.users = session.users.map((u) =>
         u._id === user._id ? { ...u, status } : u

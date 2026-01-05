@@ -212,6 +212,20 @@ module.exports.sendPushInBatches = async (
   }
 };
 
+module.exports.checkUserSub = async (userInfo) => {
+  console.log("eh");
+  const today = new Date();
+  const expiryDate = new Date(userInfo?.subscription?.expiry);
+  console.log({ today, expiryDate });
+
+  if (expiryDate < today && userInfo?.subscription?.isActive) {
+    // subscription expired
+    userInfo.subscription.isActive = false;
+    await userInfo.save();
+    console.log("SUb Updated!!!");
+  }
+};
+
 module.exports = {
   formatPoints,
   calculatePointsAmount,

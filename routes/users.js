@@ -15,6 +15,7 @@ const {
   fullUserSelector,
   createDir,
   userSelector,
+  checkUserSub,
 } = require("../controllers/helpers");
 const { AppInfo } = require("../models/AppInfo");
 
@@ -163,32 +164,15 @@ router.get("/user", auth, async (req, res) => {
 
   if (!userData)
     return res.status(422).json("User data not found. Please sign in again");
-  // let referalToken = generateReferralToken(userData.username);
-  // let checker = await User.findOne({
-  //   _id: { $ne: userData._id },
-  //   "rewards.code": referalToken,
-  // });
 
-  // while (Boolean(checker)) {
-  //   referalToken = generateReferralToken(userData.username);
-  //   checker = await User.findOne({
-  //     _id: { $ne: userData._id },
-  //     "rewards.code": referalToken,
-  //   });
-  // }
+  const today = new Date();
+  const expiryDate = new Date(userData?.subscription?.expiry);
 
-  // userData.rewards = {
-  //   code: referalToken,
-  //   history: [
-  //     {
-  //       title: "Account Creation",
-  //       point: 50,
-  //       status: "pending",
-  //     },
-  //   ],
-  //   point: 0,
-  // };
-  // await userData.save();
+  if (expiryDate < today && userData?.subscription?.isActive) {
+    // subscription expired
+    userData.subscription.isActive = false;
+    await userData.save();
+  }
 
   res.json({ user: userData });
 });
@@ -200,6 +184,15 @@ router.get("/userInfo", auth, async (req, res) => {
 
   if (!userData)
     return res.status(422).json("User data not found. Please sign in again");
+
+  const today = new Date();
+  const expiryDate = new Date(userData?.subscription?.expiry);
+
+  if (expiryDate < today && userData?.subscription?.isActive) {
+    // subscription expired
+    userData.subscription.isActive = false;
+    await userData.save();
+  }
 
   res.json({ user: userData, status: "success" });
 });

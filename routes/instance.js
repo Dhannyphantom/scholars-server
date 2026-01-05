@@ -509,7 +509,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
 
     {
       $project: {
-        questions: { $slice: ["$questions", 4] },
+        questions: { $slice: ["$questions", 10] },
       },
     },
     {
