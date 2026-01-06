@@ -458,11 +458,14 @@ router.post("/premium_quiz", auth, async (req, res) => {
   const reqData = req.body;
   const userId = req.user.userId;
 
+  console.log(reqData);
+
   const userInfo = await User.findById(userId).select("qBank").lean();
   if (!userInfo)
     return res
       .status(422)
       .send({ status: "failed", message: "User not found!" });
+
   const subjectIds = reqData?.subjects?.map(
     (item) => new mongoose.Types.ObjectId(item._id)
   );
@@ -487,16 +490,12 @@ router.post("/premium_quiz", auth, async (req, res) => {
     {
       $addFields: {
         hasAnswered: { $in: ["$_id", userQBank] },
+        randomSeed: { $rand: {} }, // Move randomSeed here
       },
     },
-    {
-      $addFields: {
-        randomSeed: { $rand: {} },
-      },
-    },
+    // Sort by random FIRST, before grouping
     {
       $sort: {
-        subject: 1,
         randomSeed: 1,
       },
     },
@@ -506,10 +505,9 @@ router.post("/premium_quiz", auth, async (req, res) => {
         questions: { $push: "$$ROOT" },
       },
     },
-
     {
       $project: {
-        questions: { $slice: ["$questions", 10] },
+        questions: { $slice: ["$questions", 3] },
       },
     },
     {
@@ -525,17 +523,16 @@ router.post("/premium_quiz", auth, async (req, res) => {
     },
     {
       $project: {
-        subject: "$subjectDetails",
-        questions: 1,
-      },
-    },
-    {
-      $project: {
-        subject: { name: 1, _id: 1 },
+        subject: {
+          _id: "$subjectDetails._id",
+          name: "$subjectDetails.name",
+        },
         questions: 1,
       },
     },
   ]);
+
+  console.log(questions);
 
   res.send({ status: "success", data: questions });
 });

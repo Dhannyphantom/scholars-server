@@ -114,7 +114,7 @@ module.exports = (io) => {
         const idx = session.users.findIndex((u) => u._id === user._id);
         if (idx >= 0) {
           session.users[idx].points = (session.users[idx].points || 0) + point;
-          session.users[idx].points = Boolean(nextQuestion);
+          session.users[idx].nextQuestion = Boolean(nextQuestion);
           if (answer?.correct) {
             session.users[idx].correctCount =
               (session.users[idx].correctCount || 0) + 1;
@@ -144,13 +144,31 @@ module.exports = (io) => {
       }
     );
 
-    socket.on("quiz_end", ({ sessionId }) => {
+    socket.on("quiz_end", ({ sessionId, answer, point, user }) => {
       const session = sessions[sessionId];
       if (!session) return;
 
+      const idx = session.users.findIndex((u) => u._id === user._id);
+      if (idx >= 0) {
+        session.users[idx].points = (session.users[idx].points || 0) + point;
+        session.users[idx].nextQuestion = false;
+        if (answer?.correct) {
+          session.users[idx].correctCount =
+            (session.users[idx].correctCount || 0) + 1;
+        }
+      } else if (user?._id === session.host?._id) {
+        session.host.points = (session.host.points || 0) + point;
+        session.host.nextQuestion = false;
+        if (answer?.correct) {
+          session.host.correctCount = (session.host.correctCount || 0) + 1;
+        }
+      }
+
       const leaderboard = buildLeaderboard(session);
 
-      io.to(sessionId).emit("quiz_finished", {
+      console.log("Quiz Ended!!!!");
+
+      io.to(sessionId).emit("leaderboard_update", {
         leaderboard,
         endedAt: Date.now(),
       });
