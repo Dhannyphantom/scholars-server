@@ -7,6 +7,26 @@ const areAllNonHostReady = (session) => {
   return session?.users?.every((u) => u.isReady === true);
 };
 
+const buildLeaderboard = (session) => {
+  const players = [];
+
+  if (session.host) {
+    players.push({
+      ...session.host,
+      isHost: true,
+    });
+  }
+
+  session.users.forEach((u) => {
+    players.push({
+      ...u,
+      isHost: false,
+    });
+  });
+
+  return players.sort((a, b) => (b.points || 0) - (a.points || 0));
+};
+
 module.exports = (io) => {
   io.on("connection", (socket) => {
     socket.on("register_user", (userId) => {
@@ -83,33 +103,57 @@ module.exports = (io) => {
       // io.to(session?.sessionId).emit("new_invite", session);
     });
 
-    socket.on("answer_question", ({ sessionId, answer, user, row, point }) => {
-      const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+    socket.on(
+      "answer_question",
+      ({ sessionId, answer, user, nextQuestion, row, point }) => {
+        const session = sessions[sessionId];
+        if (!session) return console.log("No session", sessionId);
 
-      let message;
+        let message;
 
-      const idx = session.users.findIndex((u) => u._id === user._id);
-      if (idx >= 0) {
-        session.users[idx].score = (session.users[idx].score || 0) + point;
-        if (answer?.correct) {
-          session.users[idx].correctCount =
-            (session.users[idx].correctCount || 0) + 1;
-          message = `${user?.username} got ${point}GT`;
-        } else {
-          message = `${user?.username} lost ${point}GT`;
+        const idx = session.users.findIndex((u) => u._id === user._id);
+        if (idx >= 0) {
+          session.users[idx].points = (session.users[idx].points || 0) + point;
+          session.users[idx].points = Boolean(nextQuestion);
+          if (answer?.correct) {
+            session.users[idx].correctCount =
+              (session.users[idx].correctCount || 0) + 1;
+            message = `${user?.username} got ${point}GT`;
+          } else {
+            message = `${user?.username} lost ${point}GT`;
+          }
+        } else if (user?._id === session.host?._id) {
+          session.host.points = (session.host.points || 0) + point;
+          session.host.nextQuestion = Boolean(nextQuestion);
+          if (answer?.correct) {
+            session.host.correctCount = (session.host.correctCount || 0) + 1;
+            message = `Host@${user?.username} got ${point}GT`;
+          } else {
+            message = `Host@${user?.username} lost ${point}GT`;
+          }
         }
-      } else if (user?._id === session.host?._id) {
-        session.host.score = (session.host.score || 0) + point;
-        if (answer?.correct) {
-          session.host.correctCount = (session.host.correctCount || 0) + 1;
-          message = `Host@${user?.username} got ${point}GT`;
-        } else {
-          message = `Host@${user?.username} lost ${point}GT`;
-        }
+
+        io.to(sessionId).emit("session_answers", {
+          message,
+          userId: user?._id,
+        });
+        const leaderboard = buildLeaderboard(session);
+        io.to(sessionId).emit("leaderboard_update", {
+          leaderboard,
+        });
       }
+    );
 
-      io.to(sessionId).emit("session_answers", { message, userId: user?._id });
+    socket.on("quiz_end", ({ sessionId }) => {
+      const session = sessions[sessionId];
+      if (!session) return;
+
+      const leaderboard = buildLeaderboard(session);
+
+      io.to(sessionId).emit("quiz_finished", {
+        leaderboard,
+        endedAt: Date.now(),
+      });
     });
 
     socket.on("ready_player", ({ sessionId, user }) => {
