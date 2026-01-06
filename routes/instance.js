@@ -458,8 +458,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
   const reqData = req.body;
   const userId = req.user.userId;
 
-  console.log(reqData);
-
   const userInfo = await User.findById(userId).select("qBank").lean();
   if (!userInfo)
     return res
@@ -490,10 +488,9 @@ router.post("/premium_quiz", auth, async (req, res) => {
     {
       $addFields: {
         hasAnswered: { $in: ["$_id", userQBank] },
-        randomSeed: { $rand: {} }, // Move randomSeed here
+        randomSeed: { $rand: {} },
       },
     },
-    // Sort by random FIRST, before grouping
     {
       $sort: {
         randomSeed: 1,
@@ -531,8 +528,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
       },
     },
   ]);
-
-  console.log(questions);
 
   res.send({ status: "success", data: questions });
 });
