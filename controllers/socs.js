@@ -334,6 +334,21 @@ module.exports = (io) => {
         return;
       }
 
+      if (session.host._id === user?._id && status === "rejected") {
+        // Host is tryna leave session
+        // Pass host to next user
+        const nextUser = session.users[0];
+        if (nextUser) {
+          session.host = { ...nextUser, status: "host" };
+          session.users = session.users.filter((u) => u._id !== nextUser._id);
+          io.to(sessionId).emit("session_snapshots", session);
+
+          return;
+        } else {
+          return;
+        }
+      }
+
       session.users = session.users.map((u) =>
         u._id === user._id ? { ...u, status } : u
       );
