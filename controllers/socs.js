@@ -10,25 +10,62 @@ const areAllNonHostReady = (session) => {
 const buildLeaderboard = (session) => {
   const players = [];
 
+  // Include host in the players array consistently
   if (session.host) {
     players.push({
       ...session.host,
       isHost: true,
+      points: session.host.points || 0,
+      correctCount: session.host.correctCount || 0,
     });
   }
 
+  // Include all users
   session.users.forEach((u) => {
-    players.push({
-      ...u,
-      isHost: false,
-    });
+    // Only include accepted users in leaderboard
+    if (u.status === "accepted") {
+      players.push({
+        ...u,
+        isHost: false,
+        points: u.points || 0,
+        correctCount: u.correctCount || 0,
+      });
+    }
   });
 
   return players.sort((a, b) => (b.points || 0) - (a.points || 0));
 };
 
+const updatePlayerPoints = (session, user, point, isCorrect) => {
+  // Try to find in users array first
+  const userIdx = session.users.findIndex((u) => u._id === user._id);
+
+  if (userIdx >= 0) {
+    session.users[userIdx].points =
+      (session.users[userIdx].points || 0) + point;
+    if (isCorrect) {
+      session.users[userIdx].correctCount =
+        (session.users[userIdx].correctCount || 0) + 1;
+    }
+    return session.users[userIdx];
+  }
+
+  // Check if it's the host
+  if (session.host && user._id === session.host._id) {
+    session.host.points = (session.host.points || 0) + point;
+    if (isCorrect) {
+      session.host.correctCount = (session.host.correctCount || 0) + 1;
+    }
+    return session.host;
+  }
+
+  return null;
+};
+
 module.exports = (io) => {
   io.on("connection", (socket) => {
+    console.log("User connected:", socket.id);
+
     socket.on("register_user", (userId) => {
       socket.join(userId);
     });
@@ -38,9 +75,15 @@ module.exports = (io) => {
 
       sessions[sessionId] = {
         sessionId,
-        host: host,
+        host: {
+          ...host,
+          points: 0,
+          correctCount: 0,
+          isReady: false,
+        },
         users: [],
         mode: {},
+        hasStarted: false,
         createdAt: Date.now(),
       };
 
@@ -54,7 +97,9 @@ module.exports = (io) => {
 
       if (!sessions[sessionId]) {
         sessions[sessionId] = {
+          sessionId,
           users: [],
+          mode: {},
         };
       }
 
@@ -64,13 +109,19 @@ module.exports = (io) => {
         sessions[sessionId].users.push({
           ...user,
           status: "pending",
+          points: 0,
+          correctCount: 0,
+          isReady: false,
         });
       }
 
-      // send full lobby to the joiner
-      io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
+      // Send full session snapshot including current leaderboard
+      const leaderboard = buildLeaderboard(sessions[sessionId]);
+      io.to(sessionId).emit("session_snapshot", {
+        ...sessions[sessionId],
+        leaderboard,
+      });
 
-      // notify others
       socket.to(sessionId).emit("user_joined", {
         ...user,
         status: "pending",
@@ -84,7 +135,9 @@ module.exports = (io) => {
 
       if (!sessions[sessionId]) {
         sessions[sessionId] = {
+          sessionId,
           users: [],
+          mode: {},
         };
       }
 
@@ -94,98 +147,126 @@ module.exports = (io) => {
         sessions[sessionId].users.push({
           ...user,
           status: "pending",
+          points: 0,
+          correctCount: 0,
+          isReady: false,
         });
       }
 
-      // send full lobby to the joiner
-      io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
-
-      // io.to(session?.sessionId).emit("new_invite", session);
+      const leaderboard = buildLeaderboard(sessions[sessionId]);
+      io.to(sessionId).emit("session_snapshot", {
+        ...sessions[sessionId],
+        leaderboard,
+      });
     });
 
     socket.on(
       "answer_question",
       ({ sessionId, answer, user, nextQuestion, row, point }) => {
         const session = sessions[sessionId];
-        if (!session) return console.log("No session", sessionId);
-
-        let message;
-
-        const idx = session.users.findIndex((u) => u._id === user._id);
-        if (idx >= 0) {
-          session.users[idx].points = (session.users[idx].points || 0) + point;
-          session.users[idx].nextQuestion = Boolean(nextQuestion);
-          if (answer?.correct) {
-            session.users[idx].correctCount =
-              (session.users[idx].correctCount || 0) + 1;
-            message = `${user?.username} got ${point}GT`;
-          } else {
-            message = `${user?.username} lost ${point}GT`;
-          }
-        } else if (user?._id === session.host?._id) {
-          session.host.points = (session.host.points || 0) + point;
-          session.host.nextQuestion = Boolean(nextQuestion);
-          if (answer?.correct) {
-            session.host.correctCount = (session.host.correctCount || 0) + 1;
-            message = `Host@${user?.username} got ${point}GT`;
-          } else {
-            message = `Host@${user?.username} lost ${point}GT`;
-          }
+        if (!session) {
+          console.log("No session found:", sessionId);
+          return;
         }
 
+        const isCorrect = answer?.correct === true;
+
+        // Update player points consistently
+        const updatedPlayer = updatePlayerPoints(
+          session,
+          user,
+          point,
+          isCorrect
+        );
+
+        if (!updatedPlayer) {
+          console.log("Player not found in session:", user._id);
+          return;
+        }
+
+        // Build message
+        const message = isCorrect
+          ? `${user?.username} got ${point}GT`
+          : `${user?.username} lost ${Math.abs(point)}GT`;
+
+        // Emit answer notification
         io.to(sessionId).emit("session_answers", {
           message,
-          userId: user?._id,
+          userId: user._id,
         });
+
+        // Build and emit consistent leaderboard to all clients
         const leaderboard = buildLeaderboard(session);
         io.to(sessionId).emit("leaderboard_update", {
           leaderboard,
+          timestamp: Date.now(), // Add timestamp for debugging
         });
+
+        // Emit session snapshot for state sync
+        io.to(sessionId).emit("session_snapshots", session);
       }
     );
 
     socket.on("quiz_end", ({ sessionId, answer, point, user }) => {
       const session = sessions[sessionId];
-      if (!session) return;
-
-      const idx = session.users.findIndex((u) => u._id === user._id);
-      if (idx >= 0) {
-        session.users[idx].points = (session.users[idx].points || 0) + point;
-        session.users[idx].nextQuestion = false;
-        if (answer?.correct) {
-          session.users[idx].correctCount =
-            (session.users[idx].correctCount || 0) + 1;
-        }
-      } else if (user?._id === session.host?._id) {
-        session.host.points = (session.host.points || 0) + point;
-        session.host.nextQuestion = false;
-        if (answer?.correct) {
-          session.host.correctCount = (session.host.correctCount || 0) + 1;
-        }
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
       }
 
+      const isCorrect = answer?.correct === true;
+
+      // Update final points
+      updatePlayerPoints(session, user, point, isCorrect);
+
+      // Mark quiz as ended
+      session.hasEnded = true;
+      session.endedAt = Date.now();
+
+      // Build final leaderboard
       const leaderboard = buildLeaderboard(session);
 
-      console.log("Quiz Ended!!!!");
+      console.log("Quiz Ended - Final Leaderboard:", leaderboard);
 
+      // Emit final leaderboard to all players
       io.to(sessionId).emit("leaderboard_update", {
         leaderboard,
-        endedAt: Date.now(),
+        endedAt: session.endedAt,
+        isFinal: true, // Flag to indicate this is the final leaderboard
       });
+
+      // Clean up session after delay (optional)
+      setTimeout(() => {
+        delete sessions[sessionId];
+        console.log("Session cleaned up:", sessionId);
+      }, 300000); // 5 minutes
     });
 
     socket.on("ready_player", ({ sessionId, user }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
 
+      // Update ready status
       const idx = session.users.findIndex((u) => u._id === user._id);
       if (idx >= 0) {
         session.users[idx].isReady = true;
+      } else if (session.host && user._id === session.host._id) {
+        session.host.isReady = true;
       }
 
-      io.to(user?._id).emit("player_ready", user);
-      io.to(sessionId).emit("session_snapshots", session);
+      io.to(user._id).emit("player_ready", user);
 
+      // Send updated session to all
+      const leaderboard = buildLeaderboard(session);
+      io.to(sessionId).emit("session_snapshots", {
+        ...session,
+        leaderboard,
+      });
+
+      // Start quiz if everyone is ready
       if (session.hasStarted) return;
 
       if (areAllNonHostReady(session)) {
@@ -198,47 +279,92 @@ module.exports = (io) => {
     });
 
     socket.on("remove_invite", ({ toUserId, session }) => {
+      const sessionData = sessions[session.sessionId];
+      if (sessionData) {
+        sessionData.users = sessionData.users.filter((u) => u._id !== toUserId);
+      }
+
       io.to(toUserId).emit("un_invite", session);
-      io.to(session?.sessionId).emit("remove_invited", session);
+      io.to(session.sessionId).emit("remove_invited", session);
+
+      // Update leaderboard after removal
+      if (sessionData) {
+        const leaderboard = buildLeaderboard(sessionData);
+        io.to(session.sessionId).emit("session_snapshot", {
+          ...sessionData,
+          leaderboard,
+        });
+      }
     });
 
     socket.on("mode_category", ({ category, sessionId }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
 
-      sessions[sessionId].category = category;
-      io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
+      session.category = category;
+      const leaderboard = buildLeaderboard(session);
+      io.to(sessionId).emit("session_snapshot", {
+        ...session,
+        leaderboard,
+      });
     });
 
     socket.on("mode_subjects", ({ subjects, sessionId }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
 
-      sessions[sessionId].subjects = subjects;
-      io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
+      session.subjects = subjects;
+      const leaderboard = buildLeaderboard(session);
+      io.to(sessionId).emit("session_snapshot", {
+        ...session,
+        leaderboard,
+      });
     });
 
     socket.on("mode_topics", ({ subjects, quizData, sessionId }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
 
-      sessions[sessionId].subjects = subjects;
-      sessions[sessionId].quizData = quizData;
-      io.to(sessionId).emit("session_snapshot", sessions[sessionId]);
+      session.subjects = subjects;
+      session.quizData = quizData;
+      const leaderboard = buildLeaderboard(session);
+      io.to(sessionId).emit("session_snapshot", {
+        ...session,
+        leaderboard,
+      });
     });
 
     socket.on("invite_response", ({ sessionId, user, status }) => {
       const session = sessions[sessionId];
-      if (!session) return console.log("No session", sessionId);
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
 
       session.users = session.users.map((u) =>
         u._id === user._id ? { ...u, status } : u
       );
 
+      const leaderboard = buildLeaderboard(session);
       io.to(sessionId).emit("invite_status_update", {
         user,
         status,
         sessionId,
+      });
+
+      // Send updated session
+      io.to(sessionId).emit("session_snapshot", {
+        ...session,
+        leaderboard,
       });
     });
 
