@@ -696,4 +696,17 @@ router.post("/submit_premium", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+// router.get("/mod_data", async (req, res) => {
+//   await Question.updateMany(
+//     {},
+//     {
+//       $set: {
+//         point: 5,
+//       },
+//     }
+//   );
+
+//   res.send({ status: "success" });
+// });
+
 module.exports = router;

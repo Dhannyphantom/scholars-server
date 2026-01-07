@@ -79,7 +79,8 @@ module.exports = (io) => {
           ...host,
           points: 0,
           correctCount: 0,
-          isReady: false,
+          isReady: true,
+          hasFinished: false,
         },
         users: [],
         mode: {},
@@ -112,6 +113,7 @@ module.exports = (io) => {
           points: 0,
           correctCount: 0,
           isReady: false,
+          hasFinished: false,
         });
       }
 
@@ -150,6 +152,7 @@ module.exports = (io) => {
           points: 0,
           correctCount: 0,
           isReady: false,
+          hasFinished: false,
         });
       }
 
@@ -160,54 +163,7 @@ module.exports = (io) => {
       });
     });
 
-    socket.on(
-      "answer_question",
-      ({ sessionId, answer, user, nextQuestion, row, point }) => {
-        const session = sessions[sessionId];
-        if (!session) {
-          console.log("No session found:", sessionId);
-          return;
-        }
-
-        const isCorrect = answer?.correct === true;
-
-        // Update player points consistently
-        const updatedPlayer = updatePlayerPoints(
-          session,
-          user,
-          point,
-          isCorrect
-        );
-
-        if (!updatedPlayer) {
-          console.log("Player not found in session:", user._id);
-          return;
-        }
-
-        // Build message
-        const message = isCorrect
-          ? `${user?.username} got ${point}GT`
-          : `${user?.username} lost ${Math.abs(point)}GT`;
-
-        // Emit answer notification
-        io.to(sessionId).emit("session_answers", {
-          message,
-          userId: user._id,
-        });
-
-        // Build and emit consistent leaderboard to all clients
-        const leaderboard = buildLeaderboard(session);
-        io.to(sessionId).emit("leaderboard_update", {
-          leaderboard,
-          timestamp: Date.now(), // Add timestamp for debugging
-        });
-
-        // Emit session snapshot for state sync
-        io.to(sessionId).emit("session_snapshots", session);
-      }
-    );
-
-    socket.on("quiz_end", ({ sessionId, answer, point, user }) => {
+    socket.on("answer_question", ({ sessionId, answer, user, row, point }) => {
       const session = sessions[sessionId];
       if (!session) {
         console.log("No session found:", sessionId);
@@ -216,30 +172,58 @@ module.exports = (io) => {
 
       const isCorrect = answer?.correct === true;
 
-      // Update final points
-      updatePlayerPoints(session, user, point, isCorrect);
+      // Update player points consistently
+      const updatedPlayer = updatePlayerPoints(session, user, point, isCorrect);
 
-      // Mark quiz as ended
-      session.hasEnded = true;
-      session.endedAt = Date.now();
+      if (!updatedPlayer) {
+        console.log("Player not found in session:", user._id);
+        return;
+      }
+
+      // Build message
+      const message = isCorrect
+        ? `${user?.username} got ${point}GT`
+        : `${user?.username} lost ${Math.abs(point)}GT`;
+
+      // Emit answer notification
+      io.to(sessionId).emit("session_answers", {
+        message,
+        userId: user._id,
+      });
+
+      // Build and emit consistent leaderboard to all clients
+      // const leaderboard = buildLeaderboard(session);
+      // io.to(sessionId).emit("leaderboard_update", {
+      //   leaderboard,
+      //   timestamp: Date.now(), // Add timestamp for debugging
+      // });
+
+      // Emit session snapshot for state sync
+      io.to(sessionId).emit("session_snapshots", session);
+    });
+
+    socket.on("quiz_end", ({ sessionId, user }) => {
+      const session = sessions[sessionId];
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
+
+      const userIdx = session.users.findIndex((u) => u._id === user._id);
+
+      if (userIdx >= 0) {
+        session.users[userIdx].hasFinished = true;
+      } else if (user?._id === session.host?._id) {
+        session.host.hasFinished = true;
+      }
 
       // Build final leaderboard
       const leaderboard = buildLeaderboard(session);
 
-      console.log("Quiz Ended - Final Leaderboard:", leaderboard);
-
       // Emit final leaderboard to all players
       io.to(sessionId).emit("leaderboard_update", {
         leaderboard,
-        endedAt: session.endedAt,
-        isFinal: true, // Flag to indicate this is the final leaderboard
       });
-
-      // Clean up session after delay (optional)
-      setTimeout(() => {
-        delete sessions[sessionId];
-        console.log("Session cleaned up:", sessionId);
-      }, 300000); // 5 minutes
     });
 
     socket.on("ready_player", ({ sessionId, user }) => {
