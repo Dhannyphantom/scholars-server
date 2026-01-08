@@ -83,7 +83,7 @@ const extractMetadata = (quizData) => {
 
   if (Array.isArray(quizData)) {
     quizData.forEach((item) => {
-      if (item.subject) subjects.add(item.subject.toString());
+      if (item.subject) subjects.add(item.subject?._id.toString());
 
       if (item.questions && Array.isArray(item.questions)) {
         item.questions.forEach((q) => {
@@ -207,10 +207,78 @@ module.exports = (io) => {
         leaderboard,
       });
 
-      // Save invite to both host and invited user's database
-      saveInviteToDatabase(session, toUserId).catch((err) => {
-        console.error("Failed to save invite:", err);
+      // update DB
+      updateUserInvite({
+        userId: user?._id,
+        sessionId,
+        startedAt: new Date(),
+        status: "pending",
+      }).catch((err) => console.log(err));
+    });
+
+    socket.on("invite_response", ({ sessionId, user, status }) => {
+      const session = sessions[sessionId];
+      if (!session) {
+        console.log("No session found:", sessionId);
+        return;
+      }
+
+      console.log(`${user.username} responded to invite: ${status}`);
+
+      // Handle host leaving
+      if (session.host._id === user?._id && status === "rejected") {
+        console.log("Host is leaving session - transferring to next user");
+
+        const nextUser = session.users.find((u) => u.status === "accepted");
+        if (nextUser) {
+          session.host = {
+            ...nextUser,
+            status: "host",
+            points: nextUser.points || 0,
+            correctCount: nextUser.correctCount || 0,
+            isReady: nextUser.isReady || false,
+          };
+          session.users = session.users.filter((u) => u._id !== nextUser._id);
+
+          console.log(`New host: ${nextUser.username}`);
+
+          const leaderboard = buildLeaderboard(session);
+          io.to(sessionId).emit("session_snapshots", {
+            ...session,
+            leaderboard,
+          });
+          return;
+        } else {
+          console.log("No users to transfer host to - session ending");
+          delete sessions[sessionId];
+          return;
+        }
+      }
+
+      // Update user status
+      session.users = session.users.map((u) =>
+        u._id === user._id ? { ...u, status } : u
+      );
+
+      const leaderboard = buildLeaderboard(session);
+      io.to(sessionId).emit("invite_status_update", {
+        user,
+        status,
+        sessionId,
       });
+
+      // Send updated session
+      io.to(sessionId).emit("session_snapshot", {
+        ...session,
+        leaderboard,
+      });
+
+      // update DB
+      updateUserInvite({
+        userId: user?._id,
+        sessionId,
+        status,
+      }).catch((err) => console.log(err));
     });
 
     socket.on("answer_question", ({ sessionId, answer, user, row, point }) => {
@@ -474,69 +542,6 @@ module.exports = (io) => {
       });
     });
 
-    socket.on("invite_response", ({ sessionId, user, status }) => {
-      const session = sessions[sessionId];
-      if (!session) {
-        console.log("No session found:", sessionId);
-        return;
-      }
-
-      console.log(`${user.username} responded to invite: ${status}`);
-
-      // Handle host leaving
-      if (session.host._id === user?._id && status === "rejected") {
-        console.log("Host is leaving session - transferring to next user");
-
-        const nextUser = session.users.find((u) => u.status === "accepted");
-        if (nextUser) {
-          session.host = {
-            ...nextUser,
-            status: "host",
-            points: nextUser.points || 0,
-            correctCount: nextUser.correctCount || 0,
-            isReady: nextUser.isReady || false,
-          };
-          session.users = session.users.filter((u) => u._id !== nextUser._id);
-
-          console.log(`New host: ${nextUser.username}`);
-
-          const leaderboard = buildLeaderboard(session);
-          io.to(sessionId).emit("session_snapshots", {
-            ...session,
-            leaderboard,
-          });
-          return;
-        } else {
-          console.log("No users to transfer host to - session ending");
-          delete sessions[sessionId];
-          return;
-        }
-      }
-
-      // Update user status
-      session.users = session.users.map((u) =>
-        u._id === user._id ? { ...u, status } : u
-      );
-
-      const leaderboard = buildLeaderboard(session);
-      io.to(sessionId).emit("invite_status_update", {
-        user,
-        status,
-        sessionId,
-      });
-
-      // Send updated session
-      io.to(sessionId).emit("session_snapshot", {
-        ...session,
-        leaderboard,
-      });
-
-      // Update invite status in database
-      updateInviteStatusInDatabase(sessionId, user._id, status).catch((err) => {
-        console.error("Failed to update invite status:", err);
-      });
-    });
-
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
     });
@@ -544,128 +549,9 @@ module.exports = (io) => {
 };
 
 /**
- * Save invite to database for both host and invited users
+ * Persist quiz results to database using existing Quiz model
+ * This is called when ALL players finish the quiz
  */
-async function saveInviteToDatabase(session, toUserId) {
-  try {
-    const { sessionId, host, user } = session;
-
-    // Create invite object
-    const inviteData = {
-      sessionId,
-      host: {
-        _id: host._id,
-        username: host.username,
-        avatar: host.avatar,
-      },
-      invitedUsers: [
-        {
-          _id: user._id,
-          username: user.username,
-          avatar: user.avatar,
-          status: "pending",
-        },
-      ],
-      status: "pending",
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-    };
-
-    // Add to host's invites if not already there
-    await User.updateOne(
-      {
-        _id: host._id,
-        "invites.sessionId": { $ne: sessionId },
-      },
-      {
-        $push: { invites: inviteData },
-      }
-    );
-
-    // Add to invited user's invites
-    await User.updateOne(
-      {
-        _id: toUserId,
-        "invites.sessionId": { $ne: sessionId },
-      },
-      {
-        $push: { invites: inviteData },
-      }
-    );
-
-    // Update host's invite with new invited user if session already exists
-    await User.updateOne(
-      {
-        _id: host._id,
-        "invites.sessionId": sessionId,
-      },
-      {
-        $addToSet: {
-          "invites.$.invitedUsers": {
-            _id: user._id,
-            username: user.username,
-            avatar: user.avatar,
-            status: "pending",
-          },
-        },
-      }
-    );
-
-    console.log(`Invite saved to database for session ${sessionId}`);
-  } catch (error) {
-    console.error("Error saving invite to database:", error);
-    throw error;
-  }
-}
-
-/**
- * Update invite status in database when user responds
- */
-async function updateInviteStatusInDatabase(sessionId, userId, status) {
-  try {
-    // Update the invited user's status in all users who have this session
-    await User.updateMany(
-      {
-        "invites.sessionId": sessionId,
-      },
-      {
-        $set: {
-          "invites.$[invite].invitedUsers.$[user].status": status,
-          "invites.$[invite].invitedUsers.$[user].respondedAt": new Date(),
-        },
-      },
-      {
-        arrayFilters: [
-          { "invite.sessionId": sessionId },
-          { "user._id": userId },
-        ],
-      }
-    );
-
-    // Update overall invite status
-    const inviteStatus =
-      status === "accepted"
-        ? "active"
-        : status === "rejected"
-        ? "cancelled"
-        : "pending";
-
-    await User.updateMany(
-      { "invites.sessionId": sessionId },
-      {
-        $set: {
-          "invites.$.status": inviteStatus,
-        },
-      }
-    );
-
-    console.log(`Invite status updated for session ${sessionId}: ${status}`);
-  } catch (error) {
-    console.error("Error updating invite status:", error);
-    throw error;
-  }
-}
-
 async function persistQuizResults(session, leaderboard) {
   try {
     console.log("💾 Persisting quiz results to database...");
@@ -925,5 +811,49 @@ async function persistQuizResults(session, leaderboard) {
   } catch (error) {
     console.error("❌ Error persisting quiz results:", error);
     throw error;
+  }
+}
+
+async function updateUserInvite({
+  userId,
+  sessionId,
+  startedAt,
+  quizCompleted,
+  status,
+}) {
+  const updateObj = { status };
+
+  if (startedAt) updateObj.startedAt = startedAt;
+  if (quizCompleted !== undefined) updateObj.quizCompleted = quizCompleted;
+
+  // 1️⃣ Try to update existing invite
+  const result = await User.updateOne(
+    {
+      _id: userId,
+      "invites.sessionId": sessionId,
+    },
+    {
+      $set: {
+        "invites.$": {
+          sessionId,
+          ...updateObj,
+        },
+      },
+    }
+  );
+
+  // 2️⃣ If no invite matched, push a new one
+  if (result.matchedCount === 0) {
+    await User.updateOne(
+      { _id: userId },
+      {
+        $push: {
+          invites: {
+            sessionId,
+            ...updateObj,
+          },
+        },
+      }
+    );
   }
 }

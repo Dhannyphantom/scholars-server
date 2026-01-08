@@ -177,7 +177,7 @@ const inviteSchema = new schema({
   ],
   status: {
     type: String,
-    enum: ["pending", "active", "completed", "cancelled"],
+    enum: ["pending", "accepted", "completed", "rejected"],
     default: "pending",
   },
   category: {
