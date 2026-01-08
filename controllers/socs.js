@@ -1,6 +1,6 @@
 const uuid = require("uuid");
-const { Quiz } = require("../models/Quiz");
 const { User } = require("../models/User");
+const { Quiz } = require("../models/Quiz");
 
 const sessions = {};
 const nanoid = uuid.v4;
@@ -205,6 +205,11 @@ module.exports = (io) => {
       io.to(sessionId).emit("session_snapshot", {
         ...sessions[sessionId],
         leaderboard,
+      });
+
+      // Save invite to both host and invited user's database
+      saveInviteToDatabase(session, toUserId).catch((err) => {
+        console.error("Failed to save invite:", err);
       });
     });
 
@@ -525,6 +530,11 @@ module.exports = (io) => {
         ...session,
         leaderboard,
       });
+
+      // Update invite status in database
+      updateInviteStatusInDatabase(sessionId, user._id, status).catch((err) => {
+        console.error("Failed to update invite status:", err);
+      });
     });
 
     socket.on("disconnect", () => {
@@ -534,9 +544,128 @@ module.exports = (io) => {
 };
 
 /**
- * Persist quiz results to database using existing Quiz model
- * This is called when ALL players finish the quiz
+ * Save invite to database for both host and invited users
  */
+async function saveInviteToDatabase(session, toUserId) {
+  try {
+    const { sessionId, host, user } = session;
+
+    // Create invite object
+    const inviteData = {
+      sessionId,
+      host: {
+        _id: host._id,
+        username: host.username,
+        avatar: host.avatar,
+      },
+      invitedUsers: [
+        {
+          _id: user._id,
+          username: user.username,
+          avatar: user.avatar,
+          status: "pending",
+        },
+      ],
+      status: "pending",
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+    };
+
+    // Add to host's invites if not already there
+    await User.updateOne(
+      {
+        _id: host._id,
+        "invites.sessionId": { $ne: sessionId },
+      },
+      {
+        $push: { invites: inviteData },
+      }
+    );
+
+    // Add to invited user's invites
+    await User.updateOne(
+      {
+        _id: toUserId,
+        "invites.sessionId": { $ne: sessionId },
+      },
+      {
+        $push: { invites: inviteData },
+      }
+    );
+
+    // Update host's invite with new invited user if session already exists
+    await User.updateOne(
+      {
+        _id: host._id,
+        "invites.sessionId": sessionId,
+      },
+      {
+        $addToSet: {
+          "invites.$.invitedUsers": {
+            _id: user._id,
+            username: user.username,
+            avatar: user.avatar,
+            status: "pending",
+          },
+        },
+      }
+    );
+
+    console.log(`Invite saved to database for session ${sessionId}`);
+  } catch (error) {
+    console.error("Error saving invite to database:", error);
+    throw error;
+  }
+}
+
+/**
+ * Update invite status in database when user responds
+ */
+async function updateInviteStatusInDatabase(sessionId, userId, status) {
+  try {
+    // Update the invited user's status in all users who have this session
+    await User.updateMany(
+      {
+        "invites.sessionId": sessionId,
+      },
+      {
+        $set: {
+          "invites.$[invite].invitedUsers.$[user].status": status,
+          "invites.$[invite].invitedUsers.$[user].respondedAt": new Date(),
+        },
+      },
+      {
+        arrayFilters: [
+          { "invite.sessionId": sessionId },
+          { "user._id": userId },
+        ],
+      }
+    );
+
+    // Update overall invite status
+    const inviteStatus =
+      status === "accepted"
+        ? "active"
+        : status === "rejected"
+        ? "cancelled"
+        : "pending";
+
+    await User.updateMany(
+      { "invites.sessionId": sessionId },
+      {
+        $set: {
+          "invites.$.status": inviteStatus,
+        },
+      }
+    );
+
+    console.log(`Invite status updated for session ${sessionId}: ${status}`);
+  } catch (error) {
+    console.error("Error updating invite status:", error);
+    throw error;
+  }
+}
+
 async function persistQuizResults(session, leaderboard) {
   try {
     console.log("💾 Persisting quiz results to database...");
@@ -565,7 +694,12 @@ async function persistQuizResults(session, leaderboard) {
       });
     }
 
+    const totalQuestions = allQuestions.length;
+    const quizDuration = session.endedAt - session.startedAt;
+    const winner = leaderboard[0];
+
     // Create Quiz document for each participant
+    const quizDocs = [];
     for (const player of leaderboard) {
       try {
         const quizDoc = await Quiz.create({
@@ -582,6 +716,7 @@ async function persistQuizResults(session, leaderboard) {
           })),
         });
 
+        quizDocs.push({ playerId: player._id, quizId: quizDoc._id });
         console.log(`Quiz saved for ${player.username}: ${quizDoc._id}`);
       } catch (quizErr) {
         console.error(
@@ -591,26 +726,192 @@ async function persistQuizResults(session, leaderboard) {
       }
     }
 
-    // Update User points and stats
-    for (const player of leaderboard) {
+    // Update User points, stats, history, and invites
+    for (const [index, player] of leaderboard.entries()) {
       const pointsEarned = player.points || 0;
+      const correctAnswers = player.correctCount || 0;
+      const rank = index + 1;
+      const isWinner = player._id.toString() === winner._id.toString();
 
       try {
-        await User.findByIdAndUpdate(
-          player._id,
-          {
-            $inc: {
-              points: pointsEarned, // Add to current points
-              totalPoints: pointsEarned, // Add to lifetime total
-            },
-          },
-          { new: true }
+        const user = await User.findById(player._id);
+        if (!user) continue;
+
+        // Find the quiz doc for this player
+        const playerQuiz = quizDocs.find(
+          (q) => q.playerId.toString() === player._id.toString()
         );
 
+        // Calculate new stats
+        const totalQuizzes = (user.quizStats?.totalQuizzes || 0) + 1;
+        const totalSoloQuizzes = user.quizStats?.totalSoloQuizzes || 0;
+        const totalMultiplayerQuizzes =
+          (user.quizStats?.totalMultiplayerQuizzes || 0) + 1;
+        const totalCorrect =
+          (user.quizStats?.totalCorrectAnswers || 0) + correctAnswers;
+        const totalAnswered =
+          (user.quizStats?.totalQuestionsAnswered || 0) + totalQuestions;
+        const newAverageScore =
+          ((user.quizStats?.averageScore || 0) * (totalQuizzes - 1) +
+            pointsEarned) /
+          totalQuizzes;
+        const newAccuracyRate =
+          totalAnswered > 0 ? (totalCorrect / totalAnswered) * 100 : 0;
+
+        // Multiplayer stats
+        const multiplayerWins =
+          (user.quizStats?.multiplayerStats?.wins || 0) + (isWinner ? 1 : 0);
+        const multiplayerGames = totalMultiplayerQuizzes;
+        const winRate =
+          multiplayerGames > 0 ? (multiplayerWins / multiplayerGames) * 100 : 0;
+
+        // Build quiz history entry
+        const historyEntry = {
+          quizId: playerQuiz?.quizId,
+          sessionId: session.sessionId,
+          mode: session.mode || "friends",
+          type: "premium",
+          pointsEarned,
+          correctAnswers,
+          totalQuestions,
+          rank,
+          isWinner,
+          participantCount: leaderboard.length,
+          category: session.category
+            ? {
+                _id: session.category._id,
+                name: session.category.name,
+              }
+            : undefined,
+          subjects: session.subjects?.map((s) => ({
+            _id: s._id,
+            name: s.name,
+          })),
+          date: new Date(),
+          duration: quizDuration,
+        };
+
+        // Update operations
+        const updateOps = {
+          $inc: {
+            points: pointsEarned,
+            totalPoints: pointsEarned,
+            "quizStats.totalQuizzes": 1,
+            "quizStats.totalMultiplayerQuizzes": 1,
+            "quizStats.totalCorrectAnswers": correctAnswers,
+            "quizStats.totalQuestionsAnswered": totalQuestions,
+            "quizStats.multiplayerStats.totalGames": 1,
+          },
+          $set: {
+            "quizStats.averageScore": newAverageScore,
+            "quizStats.accuracyRate": newAccuracyRate,
+            "quizStats.lastQuizDate": new Date(),
+            "quizStats.multiplayerStats.winRate": winRate,
+          },
+          $push: {
+            quizHistory: {
+              $each: [historyEntry],
+              $position: 0, // Add to beginning
+              $slice: 50, // Keep only last 50 quizzes
+            },
+          },
+        };
+
+        // Conditionally increment win counters
+        if (isWinner) {
+          updateOps.$inc["quizStats.multiplayerStats.wins"] = 1;
+          updateOps.$inc["quizStats.totalWins"] = 1;
+        } else if (rank === 2) {
+          updateOps.$inc["quizStats.multiplayerStats.secondPlace"] = 1;
+        } else if (rank === 3) {
+          updateOps.$inc["quizStats.multiplayerStats.thirdPlace"] = 1;
+        }
+
+        // Update best score if this is better
+        if (pointsEarned > (user.quizStats?.bestScore?.points || 0)) {
+          updateOps.$set["quizStats.bestScore"] = {
+            points: pointsEarned,
+            quizId: playerQuiz?.quizId,
+            sessionId: session.sessionId,
+            date: new Date(),
+          };
+        }
+
+        // Update fastest completion if applicable
+        if (
+          !user.quizStats?.fastestCompletion?.duration ||
+          quizDuration < user.quizStats.fastestCompletion.duration
+        ) {
+          updateOps.$set["quizStats.fastestCompletion"] = {
+            duration: quizDuration,
+            quizId: playerQuiz?.quizId,
+            date: new Date(),
+          };
+        }
+
+        // Update category stats
+        if (session.category) {
+          const categoryIndex = user.quizStats?.categoryStats?.findIndex(
+            (cs) =>
+              cs.category._id.toString() === session.category._id.toString()
+          );
+
+          if (categoryIndex >= 0) {
+            // Update existing category stats
+            const catStats = user.quizStats.categoryStats[categoryIndex];
+            const newCatAvg =
+              (catStats.averageScore * catStats.quizzesCompleted +
+                pointsEarned) /
+              (catStats.quizzesCompleted + 1);
+
+            updateOps.$inc[
+              `quizStats.categoryStats.${categoryIndex}.quizzesCompleted`
+            ] = 1;
+            updateOps.$set[
+              `quizStats.categoryStats.${categoryIndex}.averageScore`
+            ] = newCatAvg;
+
+            if (pointsEarned > catStats.bestScore) {
+              updateOps.$set[
+                `quizStats.categoryStats.${categoryIndex}.bestScore`
+              ] = pointsEarned;
+            }
+          } else {
+            // Add new category stats
+            updateOps.$push = updateOps.$push || {};
+            updateOps.$push["quizStats.categoryStats"] = {
+              category: {
+                _id: session.category._id,
+                name: session.category.name,
+              },
+              quizzesCompleted: 1,
+              averageScore: pointsEarned,
+              bestScore: pointsEarned,
+            };
+          }
+        }
+
+        // Update invite status to completed
+        await User.updateOne(
+          {
+            _id: player._id,
+            "invites.sessionId": session.sessionId,
+          },
+          {
+            $set: {
+              "invites.$.status": "completed",
+              "invites.$.quizCompleted": true,
+              "invites.$.quizId": playerQuiz?.quizId,
+              "invites.$.completedAt": new Date(),
+            },
+          }
+        );
+
+        // Apply all updates
+        await User.findByIdAndUpdate(player._id, updateOps, { new: true });
+
         console.log(
-          `✅ Updated ${player.username}: +${pointsEarned} points (Total: ${
-            player.totalPoints || 0
-          })`
+          `✅ Updated ${player.username}: Rank #${rank}, +${pointsEarned} points, ${correctAnswers}/${totalQuestions} correct`
         );
       } catch (userErr) {
         console.error(

@@ -73,12 +73,291 @@ const studentSubjectsSchema = new schema({
   questions: [{ type: mongoose.Types.ObjectId, ref: "Question" }], //For the whole week
 });
 
+// Add these schemas to your user.js model file
+// Schema for individual quiz session in history
+const quizSessionSchema = new schema({
+  quizId: {
+    type: schema.Types.ObjectId,
+    ref: "Quiz",
+    required: true,
+  },
+  sessionId: {
+    type: String,
+    required: true,
+  },
+  mode: {
+    type: String,
+    enum: ["solo", "friends"],
+    required: true,
+  },
+  type: {
+    type: String,
+    enum: ["premium", "freemium", "school"],
+    required: true,
+  },
+  pointsEarned: {
+    type: Number,
+    default: 0,
+  },
+  correctAnswers: {
+    type: Number,
+    default: 0,
+  },
+  totalQuestions: {
+    type: Number,
+    default: 0,
+  },
+  rank: {
+    type: Number, // 1st, 2nd, 3rd place etc.
+  },
+  isWinner: {
+    type: Boolean,
+    default: false,
+  },
+  participantCount: {
+    type: Number,
+    default: 1,
+  },
+  category: {
+    _id: {
+      type: schema.Types.ObjectId,
+      ref: "Category",
+    },
+    name: String,
+  },
+  subjects: [
+    {
+      _id: {
+        type: schema.Types.ObjectId,
+        ref: "Subject",
+      },
+      name: String,
+    },
+  ],
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+  duration: {
+    type: Number, // in milliseconds
+  },
+});
+
+// Schema for active/pending invites
+const inviteSchema = new schema({
+  sessionId: {
+    type: String,
+    required: true,
+    index: true,
+  },
+  host: {
+    _id: {
+      type: schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    username: String,
+    avatar: Object,
+  },
+  invitedUsers: [
+    {
+      _id: {
+        type: schema.Types.ObjectId,
+        ref: "User",
+      },
+      username: String,
+      avatar: Object,
+      status: {
+        type: String,
+        enum: ["pending", "accepted", "rejected"],
+        default: "pending",
+      },
+      respondedAt: Date,
+    },
+  ],
+  status: {
+    type: String,
+    enum: ["pending", "active", "completed", "cancelled"],
+    default: "pending",
+  },
+  category: {
+    _id: {
+      type: schema.Types.ObjectId,
+      ref: "Category",
+    },
+    name: String,
+  },
+  subjects: [
+    {
+      _id: {
+        type: schema.Types.ObjectId,
+        ref: "Subject",
+      },
+      name: String,
+    },
+  ],
+  quizCompleted: {
+    type: Boolean,
+    default: false,
+  },
+  quizId: {
+    type: schema.Types.ObjectId,
+    ref: "Quiz",
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+  startedAt: {
+    type: Date,
+  },
+  completedAt: {
+    type: Date,
+  },
+  expiresAt: {
+    type: Date,
+    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+  },
+});
+
+// Schema for quiz statistics
+const quizStatsSchema = new schema({
+  // Overall statistics
+  totalQuizzes: {
+    type: Number,
+    default: 0,
+  },
+  totalSoloQuizzes: {
+    type: Number,
+    default: 0,
+  },
+  totalMultiplayerQuizzes: {
+    type: Number,
+    default: 0,
+  },
+  totalWins: {
+    type: Number,
+    default: 0,
+  },
+  totalCorrectAnswers: {
+    type: Number,
+    default: 0,
+  },
+  totalQuestionsAnswered: {
+    type: Number,
+    default: 0,
+  },
+  averageScore: {
+    type: Number,
+    default: 0,
+  },
+  accuracyRate: {
+    type: Number, // percentage: (correctAnswers / totalQuestions) * 100
+    default: 0,
+  },
+
+  // Best performances
+  bestScore: {
+    points: {
+      type: Number,
+      default: 0,
+    },
+    quizId: {
+      type: schema.Types.ObjectId,
+      ref: "Quiz",
+    },
+    sessionId: String,
+    date: Date,
+  },
+  highestStreak: {
+    count: {
+      type: Number,
+      default: 0,
+    },
+    date: Date,
+  },
+  fastestCompletion: {
+    duration: Number, // in milliseconds
+    quizId: {
+      type: schema.Types.ObjectId,
+      ref: "Quiz",
+    },
+    date: Date,
+  },
+
+  // Multiplayer stats
+  multiplayerStats: {
+    totalGames: {
+      type: Number,
+      default: 0,
+    },
+    wins: {
+      type: Number,
+      default: 0,
+    },
+    secondPlace: {
+      type: Number,
+      default: 0,
+    },
+    thirdPlace: {
+      type: Number,
+      default: 0,
+    },
+    winRate: {
+      type: Number, // percentage
+      default: 0,
+    },
+  },
+
+  // Category performance
+  categoryStats: [
+    {
+      category: {
+        _id: {
+          type: schema.Types.ObjectId,
+          ref: "Category",
+        },
+        name: String,
+      },
+      quizzesCompleted: {
+        type: Number,
+        default: 0,
+      },
+      averageScore: {
+        type: Number,
+        default: 0,
+      },
+      bestScore: {
+        type: Number,
+        default: 0,
+      },
+    },
+  ],
+
+  // Recent activity
+  lastQuizDate: {
+    type: Date,
+  },
+  currentStreak: {
+    type: Number,
+    default: 0,
+  },
+  longestStreak: {
+    type: Number,
+    default: 0,
+  },
+  lastStreakDate: {
+    type: Date,
+  },
+});
+
 const txHistorySchema = new schema({
   type: {
     type: String,
     enum: ["withdrawal", "subscription"],
     required: false,
   },
+
   user: {
     type: schema.Types.ObjectId,
     ref: "User",
@@ -390,6 +669,17 @@ const userSchema = new schema({
     ref: "Question",
     default: [],
   },
+  quizStats: quizStatsSchema,
+
+  quizHistory: {
+    type: [quizSessionSchema],
+    default: [],
+  },
+
+  invites: {
+    type: [inviteSchema],
+    default: [],
+  },
 });
 
 userSchema.methods.generateAuthToken = function () {
@@ -404,6 +694,7 @@ userSchema.virtual("fullName").get(function () {
 
 userSchema.set("toJSON", { virtuals: true });
 userSchema.set("toObject", { virtuals: true });
+userSchema.index({ "invites.expiresAt": 1 }, { expireAfterSeconds: 0 });
 
 const validateReg = (user) => {
   const schema = Joi.object({
@@ -428,6 +719,12 @@ const validateLog = (user) => {
 };
 
 const User = mongoose.model("User", userSchema);
+
+module.exports = {
+  quizStatsSchema,
+  quizSessionSchema,
+  inviteSchema,
+};
 
 module.exports.User = User;
 module.exports.validateReg = validateReg;
