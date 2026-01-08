@@ -434,7 +434,7 @@ router.get("/history", authMiddleware, async (req, res) => {
 
 // Webhook handler for Flutterwave
 router.post("/webhooks/flutterwave", async (req, res) => {
-  const secretHash = process.env.FLW_SECRET_KEY;
+  const secretHash = process.env.FLW_SECRET_HASH;
   const signature = req.headers["verif-hash"];
 
   if (!signature || signature !== secretHash) {

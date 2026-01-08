@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { createDir } = require("./helpers");
 const { AppInfo } = require("../models/AppInfo");
+const walletService = require("./walletService");
 
 createDir("uploads/assets");
 
@@ -46,6 +47,7 @@ module.exports = () => {
       // Fawn.init(mongoose);
       console.log(`MONGODB CONNECTED ${process.env.NET_DEV} AT ${currentIp}`);
       await initAppInfo();
+      await walletService.initializeWallets();
     })
     .catch((err) => console.error("ERROR CONNECTING TO DB", err));
 };

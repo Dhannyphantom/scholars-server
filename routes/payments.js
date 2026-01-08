@@ -17,6 +17,7 @@ const {
 const { User } = require("../models/User");
 const { calculatePointsAmount } = require("../controllers/helpers");
 const { School } = require("../models/School");
+const walletService = require("../controllers/walletService");
 
 const THIRTY_DAYS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
@@ -258,6 +259,43 @@ router.get("/subscription_redirect", async (req, res) => {
   console.log("Route Redirected!");
   console.log("Route Redirected!");
   res.send("Redirected");
+});
+
+// When school pays subscription
+router.post("/school-subscription-webhook", async (req, res) => {
+  try {
+    const { reference, amount, status } = req.body;
+
+    if (status === "successful") {
+      await walletService.credit("school", amount, "subscription", reference, {
+        description: "School subscription payment",
+        flutterwaveReference: reference,
+      });
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false });
+  }
+});
+
+// When student pays subscription
+router.post("/student-subscription-webhook", async (req, res) => {
+  try {
+    const { reference, amount, status, userId } = req.body;
+
+    if (status === "successful") {
+      await walletService.credit("student", amount, "subscription", reference, {
+        userId,
+        description: "Student subscription payment",
+        flutterwaveReference: reference,
+      });
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false });
+  }
 });
 
 module.exports = router;
