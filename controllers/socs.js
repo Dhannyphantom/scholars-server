@@ -1,6 +1,7 @@
 const uuid = require("uuid");
 const { User } = require("../models/User");
 const { Quiz } = require("../models/Quiz");
+const expoNotifications = require("./expoNotifications");
 
 const sessions = {};
 const nanoid = uuid.v4;
@@ -822,6 +823,7 @@ async function updateUserInvite({
   status,
 }) {
   const updateObj = { status };
+  const session = sessions[sessionId];
 
   if (startedAt) updateObj.startedAt = startedAt;
   if (quizCompleted !== undefined) updateObj.quizCompleted = quizCompleted;
@@ -855,5 +857,16 @@ async function updateUserInvite({
         },
       }
     );
+  }
+
+  if (status === "pending") {
+    const userInfo = await User.findById(userId).select("expoPushToken");
+    if (userInfo) {
+      await expoNotifications([userInfo.expoPushToken], {
+        title: "New Quiz Invite",
+        message: `${session.host.username} is inviting you for a quiz session`,
+        data: updateObj,
+      });
+    }
   }
 }
