@@ -6,11 +6,11 @@ const router = express.Router();
 const walletService = require("../controllers/walletService");
 const flutterwaveService = require("../controllers/flutterwaveService");
 const PayoutRequest = require("../models/PayoutRequest");
-const User = require("../models/User"); // Your user model
 
 // Middleware to verify user authentication
 const authMiddleware = require("../middlewares/authRoutes");
 const adminMiddleware = require("../middlewares/adminRoutes");
+const { User } = require("../models/User");
 
 // Helper function to convert points to amount
 const pointsToAmount = (points) => {
@@ -124,7 +124,7 @@ router.post("/withdraw", authMiddleware, async (req, res) => {
       amount,
       reference,
       narration: `Guru EduTech Withdrawal - ${user.name || userId}`,
-      callbackUrl: `${process.env.ADDRESS}/payouts/webhooks/flutterwave`,
+      callbackUrl: `${process.env.BASE_URL}/payouts/webhooks/flutterwave`,
     });
 
     if (!transfer.success) {

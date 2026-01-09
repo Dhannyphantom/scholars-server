@@ -103,11 +103,8 @@ const extractMetadata = (quizData) => {
 
 module.exports = (io) => {
   io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
     socket.on("register_user", (userId) => {
       socket.join(userId);
-      console.log(`User ${userId} registered to room`);
     });
 
     socket.on("create_session", ({ host }) => {
@@ -131,7 +128,6 @@ module.exports = (io) => {
 
       socket.join(sessionId);
 
-      console.log(`Session created: ${sessionId} by host: ${host.username}`);
       io.to(host._id).emit("session_created", sessions[sessionId]);
     });
 
@@ -180,7 +176,6 @@ module.exports = (io) => {
       io.to(toUserId).emit("receive_invite", session);
 
       if (!sessions[sessionId]) {
-        console.log(`Session ${sessionId} not found for send_invite`);
         sessions[sessionId] = {
           sessionId,
           users: [],
@@ -199,7 +194,6 @@ module.exports = (io) => {
           isReady: false,
           hasFinished: false,
         });
-        console.log(`Invite sent to ${user.username} for session ${sessionId}`);
       }
 
       const leaderboard = buildLeaderboard(sessions[sessionId]);
@@ -224,8 +218,6 @@ module.exports = (io) => {
         return;
       }
 
-      console.log(`${user.username} responded to invite: ${status}`);
-
       // Handle host leaving
       if (session.host._id === user?._id && status === "rejected") {
         console.log("Host is leaving session - transferring to next user");
@@ -241,8 +233,6 @@ module.exports = (io) => {
           };
           session.users = session.users.filter((u) => u._id !== nextUser._id);
 
-          console.log(`New host: ${nextUser.username}`);
-
           const leaderboard = buildLeaderboard(session);
           io.to(sessionId).emit("session_snapshots", {
             ...session,
@@ -250,7 +240,6 @@ module.exports = (io) => {
           });
           return;
         } else {
-          console.log("No users to transfer host to - session ending");
           delete sessions[sessionId];
           return;
         }
@@ -295,15 +284,8 @@ module.exports = (io) => {
       const updatedPlayer = updatePlayerPoints(session, user, point, isCorrect);
 
       if (!updatedPlayer) {
-        console.log("Player not found in session:", user._id);
         return;
       }
-
-      console.log(
-        `${user.username} answered: ${isCorrect ? "Correct" : "Wrong"} (${
-          point >= 0 ? "+" : ""
-        }${point}GT)`
-      );
 
       // Build message
       const message = isCorrect
@@ -339,14 +321,8 @@ module.exports = (io) => {
 
       if (userIdx >= 0) {
         session.users[userIdx].hasFinished = true;
-        console.log(
-          `User ${user.username} finished quiz (${session.users[userIdx].points} points)`
-        );
       } else if (user?._id === session.host?._id) {
         session.host.hasFinished = true;
-        console.log(
-          `Host ${user.username} finished quiz (${session.host.points} points)`
-        );
       }
 
       // Check if ALL players have finished
@@ -358,12 +334,6 @@ module.exports = (io) => {
       if (allFinished && !session.hasEnded) {
         session.hasEnded = true;
         session.endedAt = Date.now();
-
-        console.log(`🏁 Quiz completely ended for session ${sessionId}`);
-        console.log(
-          "Final Leaderboard:",
-          leaderboard.map((p) => `${p.username}: ${p.points}pts`).join(", ")
-        );
 
         // Emit FINAL leaderboard
         io.to(sessionId).emit("leaderboard_update", {
@@ -380,15 +350,9 @@ module.exports = (io) => {
         // Clean up session after 5 minutes
         setTimeout(() => {
           delete sessions[sessionId];
-          console.log(`Session ${sessionId} cleaned up`);
         }, 300000);
       } else {
         // Just update leaderboard - not everyone finished yet
-        console.log(
-          `Waiting for other players... (${
-            leaderboard.filter((p) => p.hasFinished).length
-          }/${leaderboard.length} finished)`
-        );
 
         io.to(sessionId).emit("leaderboard_update", {
           leaderboard,
@@ -408,10 +372,8 @@ module.exports = (io) => {
       const idx = session.users.findIndex((u) => u._id === user._id);
       if (idx >= 0) {
         session.users[idx].isReady = true;
-        console.log(`User ${user.username} is ready`);
       } else if (session.host && user._id === session.host._id) {
         session.host.isReady = true;
-        console.log(`Host ${user.username} is ready`);
       }
 
       io.to(user._id).emit("player_ready", user);
@@ -544,7 +506,7 @@ module.exports = (io) => {
     });
 
     socket.on("disconnect", () => {
-      console.log("User disconnected:", socket.id);
+      // console.log("User disconnected:", socket.id);
     });
   });
 };
@@ -796,10 +758,6 @@ async function persistQuizResults(session, leaderboard) {
 
         // Apply all updates
         await User.findByIdAndUpdate(player._id, updateOps, { new: true });
-
-        console.log(
-          `✅ Updated ${player.username}: Rank #${rank}, +${pointsEarned} points, ${correctAnswers}/${totalQuestions} correct`
-        );
       } catch (userErr) {
         console.error(
           `Failed to update user ${player.username}:`,
@@ -807,10 +765,7 @@ async function persistQuizResults(session, leaderboard) {
         );
       }
     }
-
-    console.log("✅ All quiz results persisted successfully");
   } catch (error) {
-    console.error("❌ Error persisting quiz results:", error);
     throw error;
   }
 }

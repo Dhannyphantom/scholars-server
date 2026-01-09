@@ -161,6 +161,20 @@ class FlutterwaveService {
       };
     }
   }
+
+  async getTransferFee(amount) {
+    const response = await axios.get(`${this.baseUrl}/transfers/fee`, {
+      params: {
+        amount,
+        currency: "NGN",
+      },
+      headers: {
+        Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+      },
+    });
+
+    return response.data.data.fee;
+  }
 }
 
 module.exports = new FlutterwaveService();

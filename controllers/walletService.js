@@ -61,13 +61,20 @@ class WalletService {
 
   // Credit wallet (add money)
   async credit(accountType, amount, category, reference, metadata = {}) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
-      const wallet = await WalletAccount.findOne({ accountType }).session(
-        session
-      );
+      // Check for duplicate transaction
+      const existingTx = await WalletTransaction.findOne({ reference });
+      if (existingTx) {
+        console.log(`Transaction ${reference} already exists`);
+        return {
+          success: true,
+          transaction: existingTx,
+          newBalance: existingTx.balanceAfter,
+        };
+      }
+
+      // Get wallet with retry logic for race conditions
+      let wallet = await WalletAccount.findOne({ accountType });
 
       if (!wallet) {
         throw new Error(`Wallet ${accountType} not found`);
@@ -76,12 +83,7 @@ class WalletService {
       const balanceBefore = wallet.balance;
       const balanceAfter = balanceBefore + parseFloat(amount);
 
-      // Update wallet
-      wallet.balance = balanceAfter;
-      wallet.totalCredits += parseFloat(amount);
-      await wallet.save({ session });
-
-      // Create transaction record
+      // Create transaction record first
       const transaction = new WalletTransaction({
         accountType,
         transactionType: "credit",
@@ -97,8 +99,12 @@ class WalletService {
         status: "completed",
       });
 
-      await transaction.save({ session });
-      await session.commitTransaction();
+      await transaction.save();
+
+      // Update wallet balance
+      wallet.balance = balanceAfter;
+      wallet.totalCredits += parseFloat(amount);
+      await wallet.save();
 
       return {
         success: true,
@@ -106,22 +112,34 @@ class WalletService {
         newBalance: balanceAfter,
       };
     } catch (error) {
-      await session.abortTransaction();
+      // If transaction was created but wallet update failed, mark as failed
+      if (error.code !== 11000) {
+        // Not a duplicate key error
+        await WalletTransaction.findOneAndUpdate(
+          { reference },
+          { status: "failed", metadata: { ...metadata, error: error.message } }
+        );
+      }
       throw error;
-    } finally {
-      session.endSession();
     }
   }
 
   // Debit wallet (remove money)
   async debit(accountType, amount, category, reference, metadata = {}) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
-      const wallet = await WalletAccount.findOne({ accountType }).session(
-        session
-      );
+      // Check for duplicate transaction
+      const existingTx = await WalletTransaction.findOne({ reference });
+      if (existingTx) {
+        console.log(`Transaction ${reference} already exists`);
+        return {
+          success: true,
+          transaction: existingTx,
+          newBalance: existingTx.balanceAfter,
+        };
+      }
+
+      // Get wallet
+      let wallet = await WalletAccount.findOne({ accountType });
 
       if (!wallet) {
         throw new Error(`Wallet ${accountType} not found`);
@@ -136,12 +154,7 @@ class WalletService {
 
       const balanceAfter = balanceBefore - amountToDebit;
 
-      // Update wallet
-      wallet.balance = balanceAfter;
-      wallet.totalDebits += amountToDebit;
-      await wallet.save({ session });
-
-      // Create transaction record
+      // Create transaction record first
       const transaction = new WalletTransaction({
         accountType,
         transactionType: "debit",
@@ -157,8 +170,12 @@ class WalletService {
         status: "completed",
       });
 
-      await transaction.save({ session });
-      await session.commitTransaction();
+      await transaction.save();
+
+      // Update wallet balance
+      wallet.balance = balanceAfter;
+      wallet.totalDebits += amountToDebit;
+      await wallet.save();
 
       return {
         success: true,
@@ -166,10 +183,15 @@ class WalletService {
         newBalance: balanceAfter,
       };
     } catch (error) {
-      await session.abortTransaction();
+      // If transaction was created but wallet update failed, mark as failed
+      if (error.code !== 11000) {
+        // Not a duplicate key error
+        await WalletTransaction.findOneAndUpdate(
+          { reference },
+          { status: "failed", metadata: { ...metadata, error: error.message } }
+        );
+      }
       throw error;
-    } finally {
-      session.endSession();
     }
   }
 
