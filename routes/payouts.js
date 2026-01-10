@@ -12,6 +12,7 @@ const authMiddleware = require("../middlewares/authRoutes");
 const adminMiddleware = require("../middlewares/adminRoutes");
 const { User } = require("../models/User");
 const { getFullName } = require("../controllers/helpers");
+const PhoneValidator = require("../controllers/phoneValidation");
 
 // Helper function to convert points to amount
 const pointsToAmount = (points) => {
@@ -183,7 +184,7 @@ router.post("/recharge", authMiddleware, async (req, res) => {
     const { pointsToConvert, phoneNumber, network } = req.body;
     const userId = req.user.userId;
 
-    // Validate
+    // Validate input
     if (!pointsToConvert || !phoneNumber || !network) {
       return res.status(400).json({
         success: false,
@@ -191,11 +192,20 @@ router.post("/recharge", authMiddleware, async (req, res) => {
       });
     }
 
-    // Validate phone number
-    if (!/^(\+234|0)[789]\d{9}$/.test(phoneNumber)) {
+    // ✅ VALIDATE PHONE NUMBER AND NETWORK MATCH
+    const validation = PhoneValidator.validatePhoneNetwork(
+      phoneNumber,
+      network
+    );
+
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
-        message: "Invalid Nigerian phone number",
+        message: validation.error,
+        detectedNetwork: validation.detectedNetwork,
+        suggestion: validation.detectedNetwork
+          ? `Did you mean to select ${validation.detectedNetwork}?`
+          : null,
       });
     }
 
@@ -225,18 +235,18 @@ router.post("/recharge", authMiddleware, async (req, res) => {
       pointsConverted: pointsToConvert,
       amount,
       payoutType: "airtime",
-      phoneNumber,
-      network,
+      phoneNumber: validation.normalizedPhone, // Use normalized phone
+      network: network.toUpperCase(),
       reference,
       status: "processing",
     });
 
     await payoutRequest.save();
 
-    // Send airtime
+    // Send airtime with normalized phone number
     const airtime = await flutterwaveService.sendAirtime({
-      phoneNumber,
-      network,
+      phoneNumber: validation.normalizedPhone,
+      network: network.toUpperCase(),
       amount,
       reference,
     });
@@ -260,7 +270,7 @@ router.post("/recharge", authMiddleware, async (req, res) => {
     await walletService.debit("student", amount, "payout", reference, {
       userId,
       flutterwaveReference: airtime.reference,
-      description: `Airtime ${network} - ${phoneNumber}`,
+      description: `Airtime ${network} - ${validation.normalizedPhone}`,
       payoutType: "airtime",
     });
 
@@ -272,12 +282,14 @@ router.post("/recharge", authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      message: `₦${amount.toFixed(2)} airtime sent to ${phoneNumber}`,
+      message: `₦${amount.toFixed(2)} ${network} airtime sent to ${
+        validation.normalizedPhone
+      }`,
       data: {
         reference,
         amount,
-        phoneNumber,
-        network,
+        phoneNumber: validation.normalizedPhone,
+        network: network.toUpperCase(),
       },
     });
   } catch (error) {

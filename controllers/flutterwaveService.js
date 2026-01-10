@@ -3,6 +3,8 @@
 // ==========================================
 const axios = require("axios");
 
+// Add to services/flutterwaveService.js or create utils/phoneValidation.js
+
 class FlutterwaveService {
   constructor() {
     this.baseUrl = "https://api.flutterwave.com/v3";
@@ -74,17 +76,38 @@ class FlutterwaveService {
   }
 
   // Send airtime
+  // Update in services/flutterwaveService.js
+
+  // Send airtime - CORRECTED VERSION
   async sendAirtime(data) {
     try {
+      // Map network names to Flutterwave biller codes
+      const networkMap = {
+        MTN: "BIL099", // MTN Nigeria
+        GLO: "BIL098", // Glo Nigeria
+        AIRTEL: "BIL100", // Airtel Nigeria
+        "9MOBILE": "BIL102", // 9mobile Nigeria
+        ETISALAT: "BIL102", // Alternative name for 9mobile
+      };
+
+      const billerCode = networkMap[data.network.toUpperCase()];
+
+      if (!billerCode) {
+        return {
+          success: false,
+          error: `Unsupported network: ${data.network}. Supported networks: MTN, GLO, AIRTEL, 9MOBILE`,
+        };
+      }
+
       const response = await axios.post(
         `${this.baseUrl}/bills`,
         {
           country: "NG",
           customer: data.phoneNumber,
           amount: data.amount,
-          recurrence: "ONCE",
-          type: data.network.toUpperCase(),
+          type: "AIRTIME", // Changed from network name
           reference: data.reference,
+          biller_code: billerCode, // Add biller code
         },
         {
           headers: {
@@ -101,6 +124,7 @@ class FlutterwaveService {
         flutterwaveId: response.data.data?.flw_ref,
       };
     } catch (error) {
+      console.error("Airtime error:", error.response?.data);
       return {
         success: false,
         error: error.response?.data?.message || "Airtime purchase failed",
