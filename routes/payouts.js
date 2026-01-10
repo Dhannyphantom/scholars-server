@@ -11,6 +11,7 @@ const PayoutRequest = require("../models/PayoutRequest");
 const authMiddleware = require("../middlewares/authRoutes");
 const adminMiddleware = require("../middlewares/adminRoutes");
 const { User } = require("../models/User");
+const { getFullName } = require("../controllers/helpers");
 
 // Helper function to convert points to amount
 const pointsToAmount = (points) => {
@@ -438,51 +439,52 @@ router.post("/webhooks/flutterwave", async (req, res) => {
   const signature = req.headers["verif-hash"];
 
   if (!signature || signature !== secretHash) {
+    console.error("Invalid webhook signature");
     return res.status(401).end();
   }
 
   const payload = req.body;
+  const eventType = payload.event;
+
+  console.log(`Webhook received: ${eventType}`);
 
   try {
-    if (payload.event === "transfer.completed") {
-      const payout = await PayoutRequest.findOne({
-        reference: payload.data.reference,
-      });
+    switch (eventType) {
+      // ===================================
+      // SUBSCRIPTION PAYMENTS (charge.completed)
+      // ===================================
+      case "charge.completed":
+        await handleChargeCompleted(payload);
+        break;
 
-      if (payout) {
-        payout.status = "completed";
-        payout.completedAt = new Date();
-        await payout.save();
-      }
-    } else if (payload.event === "transfer.failed") {
-      const payout = await PayoutRequest.findOne({
-        reference: payload.data.reference,
-      });
+      // ===================================
+      // WITHDRAWALS (transfer events)
+      // ===================================
+      case "transfer.completed":
+        await handleTransferCompleted(payload);
+        break;
 
-      if (payout) {
-        payout.status = "failed";
-        payout.errorMessage = payload.data.complete_message;
-        await payout.save();
+      case "transfer.failed":
+        await handleTransferFailed(payload);
+        break;
 
-        // Refund points to user
-        const user = await User.findById(payout.userId);
-        if (user) {
-          user.points += payout.pointsConverted;
-          await user.save();
-        }
+      case "transfer.reversed":
+        await handleTransferFailed(payload); // Treat same as failed
+        break;
 
-        // Credit wallet back
-        await walletService.credit(
-          "student",
-          payout.amount,
-          "refund",
-          `REFUND_${payout.reference}`,
-          {
-            userId: payout.userId,
-            description: `Refund for failed payout ${payout.reference}`,
-          }
-        );
-      }
+      // ===================================
+      // AIRTIME/DATA (bill payment events)
+      // ===================================
+      case "billpayment.completed":
+        await handleBillPaymentCompleted(payload);
+        break;
+
+      case "billpayment.failed":
+        await handleBillPaymentFailed(payload);
+        break;
+
+      default:
+        console.log(`Unhandled event type: ${eventType}`);
     }
 
     res.status(200).end();
@@ -491,5 +493,407 @@ router.post("/webhooks/flutterwave", async (req, res) => {
     res.status(500).end();
   }
 });
+
+// -====================== SUBSCRIPTION =============================================-
+router.post("/verify-subscription", authMiddleware, async (req, res) => {
+  try {
+    const { transaction_id, tx_ref, status } = req.body;
+    const userId = req.user.userId;
+
+    console.log("Verifying subscription:", { transaction_id, tx_ref, status });
+
+    // Validate input
+    if (!transaction_id || !tx_ref) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing transaction details",
+      });
+    }
+
+    // Check if transaction already processed
+    const existingTransaction = await walletService.getTransactionByReference(
+      tx_ref
+    );
+    if (existingTransaction) {
+      return res.json({
+        success: true,
+        message: "Transaction already processed",
+        data: {
+          pointsAdded: existingTransaction.metadata?.pointsAdded || 0,
+          walletCredited: existingTransaction.metadata?.walletCredited || 0,
+        },
+      });
+    }
+
+    // Verify transaction with Flutterwave
+    const verification = await flutterwaveService.verifyTransaction(
+      transaction_id
+    );
+
+    if (!verification.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Transaction verification failed",
+        error: verification.error,
+      });
+    }
+
+    const transactionData = verification.data;
+
+    // Check if payment was successful
+    if (transactionData.status !== "successful") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment was not successful",
+        status: transactionData.status,
+      });
+    }
+
+    // Get payment details
+    const amount = parseFloat(transactionData.amount);
+    const accountType = transactionData.meta?.account_type || "student"; // Default to student
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Credit appropriate wallet
+    await walletService.credit(accountType, amount, "subscription", tx_ref, {
+      flutterwaveReference: transaction_id,
+      userId: userId,
+      customerEmail: transactionData.customer?.email || user.email,
+      customerName: transactionData.customer?.name || getFullName(user),
+      description: `${
+        accountType === "school" ? "School" : "Student"
+      } subscription payment`,
+      pointsAdded: accountType === "student" ? amount * 10 : 0, // 1 NGN = 10 points
+      walletCredited: amount,
+    });
+
+    // If student payment, credit user points
+    // let pointsAdded = 0;
+    // if (accountType === "student") {
+    //   pointsAdded = amount * 10; // 1 NGN = 10 points
+    //   user.points = (user.points || 0) + pointsAdded;
+    //   await user.save();
+    //   console.log(`Credited ${pointsAdded} points to user ${userId}`);
+    // }
+
+    res.json({
+      success: true,
+      message: "Subscription payment verified successfully",
+      data: {
+        amount,
+        accountType,
+        // pointsAdded,
+        // currentPoints: user.points,
+        transactionRef: tx_ref,
+        flutterwaveId: transaction_id,
+      },
+    });
+  } catch (error) {
+    console.error("Subscription verification error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// ==========================================
+// GET SUBSCRIPTION PACKAGES
+// Return available subscription packages
+// ==========================================
+router.get("/subscription-packages", async (req, res) => {
+  try {
+    const packages = [
+      {
+        id: "student_monthly",
+        name: "Student Monthly",
+        description: "Access all features for 1 month",
+        amount: 1000, // NGN
+        points: 10000, // Points received (1 NGN = 10 points)
+        duration: "30 days",
+        accountType: "student",
+      },
+      {
+        id: "student_quarterly",
+        name: "Student Quarterly",
+        description: "Access all features for 3 months + 10% bonus",
+        amount: 2700, // NGN (10% discount)
+        points: 27000,
+        duration: "90 days",
+        accountType: "student",
+        savings: 300,
+      },
+      {
+        id: "student_yearly",
+        name: "Student Yearly",
+        description: "Access all features for 1 year + 20% bonus",
+        amount: 9600, // NGN (20% discount)
+        points: 96000,
+        duration: "365 days",
+        accountType: "student",
+        savings: 2400,
+      },
+      {
+        id: "school_annual",
+        name: "School Annual License",
+        description: "Full school access for 1 year",
+        amount: 50000, // NGN
+        duration: "365 days",
+        accountType: "school",
+        features: [
+          "Unlimited student accounts",
+          "Admin dashboard",
+          "Analytics & Reports",
+          "Priority support",
+        ],
+      },
+    ];
+
+    res.json({
+      success: true,
+      data: packages,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// ==========================================
+// GET USER SUBSCRIPTION STATUS
+// ==========================================
+router.get("/subscription-status", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Get recent subscription transactions
+    const recentSubscriptions = await walletService.getTransactions("student", {
+      limit: 5,
+      userId: userId,
+      category: "subscription",
+    });
+
+    res.json({
+      success: true,
+      data: {
+        currentPoints: user.points || 0,
+        equivalentAmount: pointsToAmount(user.points || 0),
+        recentSubscriptions: recentSubscriptions.transactions,
+        subscriptionActive: user.subscription.isActive || false,
+        subscriptionExpiry: user.subscription.expiry || null,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// Handle subscription payments
+async function handleChargeCompleted(payload) {
+  const data = payload.data;
+  const {
+    id: transactionId,
+    tx_ref: reference,
+    amount,
+    customer,
+    status,
+    meta,
+  } = data;
+
+  if (status !== "successful") {
+    console.log(`Payment not successful: ${status}`);
+    return;
+  }
+
+  // Check if already processed (idempotency)
+  const existingTx = await WalletTransaction.findOne({ reference });
+  if (existingTx) {
+    console.log(`Transaction ${reference} already processed`);
+    return;
+  }
+
+  const accountType = meta?.account_type || "student";
+  const userId = meta?.user_id;
+
+  console.log(`Processing ${accountType} payment: ₦${amount}`);
+
+  // Credit appropriate wallet
+  await walletService.credit(accountType, amount, "subscription", reference, {
+    flutterwaveReference: transactionId,
+    userId,
+    customerEmail: customer?.email,
+    customerName: customer?.name,
+    description: `${
+      accountType === "school" ? "School" : "Student"
+    } subscription payment`,
+    pointsAdded: accountType === "student" ? amount * 10 : 0,
+    walletCredited: amount,
+  });
+
+  // If student payment, credit user points
+  if (accountType === "student" && userId) {
+    const user = await User.findById(userId);
+    if (user) {
+      const pointsToAdd = amount * 10; // 1 NGN = 10 points
+      user.points = (user.points || 0) + pointsToAdd;
+      await user.save();
+
+      console.log(`✓ Credited ${pointsToAdd} points to user ${userId}`);
+    }
+  }
+
+  console.log(`✓ ${accountType} wallet credited with ₦${amount}`);
+}
+
+// Handle successful withdrawals
+async function handleTransferCompleted(payload) {
+  const data = payload.data;
+  const { id: transferId, reference, amount } = data;
+
+  console.log(`Transfer completed: ${reference}, Amount: ₦${amount}`);
+
+  const payout = await PayoutRequest.findOne({ reference });
+
+  if (!payout) {
+    console.log(`No payout request found for reference: ${reference}`);
+    return;
+  }
+
+  payout.status = "completed";
+  payout.completedAt = new Date();
+  payout.flutterwaveId = transferId;
+  await payout.save();
+
+  console.log(`✓ Payout ${reference} marked as completed`);
+}
+
+// Handle failed withdrawals
+async function handleTransferFailed(payload) {
+  const data = payload.data;
+  const { reference, amount, complete_message } = data;
+
+  console.log(`Transfer failed: ${reference}, Reason: ${complete_message}`);
+
+  const payout = await PayoutRequest.findOne({ reference });
+
+  if (!payout) {
+    console.log(`No payout request found for reference: ${reference}`);
+    return;
+  }
+
+  payout.status = "failed";
+  payout.errorMessage = complete_message;
+  await payout.save();
+
+  // Refund points to user
+  if (payout.userId) {
+    const user = await User.findById(payout.userId);
+    if (user) {
+      user.points = (user.points || 0) + payout.pointsConverted;
+      await user.save();
+      console.log(`Refunded ${payout.pointsConverted} points to user`);
+    }
+  }
+
+  // Credit student wallet back (refund)
+  await walletService.credit(
+    "student",
+    payout.amount,
+    "refund",
+    `REFUND_${reference}`,
+    {
+      userId: payout.userId,
+      description: `Refund for failed withdrawal: ${complete_message}`,
+      originalReference: reference,
+    }
+  );
+
+  console.log(`✓ Refunded ₦${amount} to student wallet`);
+}
+
+// Handle successful airtime/data
+async function handleBillPaymentCompleted(payload) {
+  const data = payload.data;
+  const { reference, amount, product_name } = data;
+
+  console.log(`Bill payment completed: ${reference}, Product: ${product_name}`);
+
+  const payout = await PayoutRequest.findOne({ reference });
+
+  if (!payout) {
+    console.log(`No payout request found for reference: ${reference}`);
+    return;
+  }
+
+  payout.status = "completed";
+  payout.completedAt = new Date();
+  await payout.save();
+
+  console.log(`✓ ${payout.payoutType} payout ${reference} completed`);
+}
+
+// Handle failed airtime/data
+async function handleBillPaymentFailed(payload) {
+  const data = payload.data;
+  const { reference, amount, response_message } = data;
+
+  console.log(`Bill payment failed: ${reference}, Reason: ${response_message}`);
+
+  const payout = await PayoutRequest.findOne({ reference });
+
+  if (!payout) {
+    console.log(`No payout request found for reference: ${reference}`);
+    return;
+  }
+
+  payout.status = "failed";
+  payout.errorMessage = response_message;
+  await payout.save();
+
+  // Refund points to user
+  if (payout.userId) {
+    const user = await User.findById(payout.userId);
+    if (user) {
+      user.points = (user.points || 0) + payout.pointsConverted;
+      await user.save();
+      console.log(`Refunded ${payout.pointsConverted} points to user`);
+    }
+  }
+
+  // Credit student wallet back (refund)
+  await walletService.credit(
+    "student",
+    payout.amount,
+    "refund",
+    `REFUND_${reference}`,
+    {
+      userId: payout.userId,
+      description: `Refund for failed ${payout.payoutType}: ${response_message}`,
+      originalReference: reference,
+    }
+  );
+
+  console.log(`✓ Refunded ₦${amount} to student wallet`);
+}
 
 module.exports = router;

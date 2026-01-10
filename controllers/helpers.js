@@ -226,6 +226,16 @@ module.exports.checkUserSub = async (userInfo) => {
   }
 };
 
+module.exports.getFullName = (user, usernameFallback) => {
+  if (user?.firstName && user?.lastName) {
+    return `${user?.firstName} ${user?.lastName}`;
+  } else if (usernameFallback) {
+    return user?.username;
+  } else {
+    return null;
+  }
+};
+
 module.exports = {
   formatPoints,
   calculatePointsAmount,

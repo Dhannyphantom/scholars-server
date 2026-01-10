@@ -258,6 +258,39 @@ class WalletService {
       isBalanced: Math.abs(actualBalance - calculatedBalance) < 0.01,
     };
   }
+
+  // Get transaction by reference
+  async getTransactionByReference(reference) {
+    try {
+      const transaction = await WalletTransaction.findOne({ reference });
+      return transaction;
+    } catch (error) {
+      console.error("Error fetching transaction:", error);
+      return null;
+    }
+  }
+
+  // Get transactions with userId filter
+  async getTransactionsByUser(accountType, userId, options = {}) {
+    const { limit = 50, skip = 0, category } = options;
+
+    const query = { accountType, userId };
+    if (category) query.category = category;
+
+    const transactions = await WalletTransaction.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip(skip);
+
+    const total = await WalletTransaction.countDocuments(query);
+
+    return {
+      transactions,
+      total,
+      page: Math.floor(skip / limit) + 1,
+      pages: Math.ceil(total / limit),
+    };
+  }
 }
 
 module.exports = new WalletService();

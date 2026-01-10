@@ -175,6 +175,32 @@ class FlutterwaveService {
 
     return response.data.data.fee;
   }
+
+  // Verify transaction
+  async verifyTransaction(transactionId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/transactions/${transactionId}/verify`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.secretKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return {
+        success: response.data.status === "success",
+        data: response.data.data,
+      };
+    } catch (error) {
+      console.error("Transaction verification error:", error.response?.data);
+      return {
+        success: false,
+        error: error.response?.data?.message || "Verification failed",
+      };
+    }
+  }
 }
 
 module.exports = new FlutterwaveService();
