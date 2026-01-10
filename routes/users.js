@@ -1182,6 +1182,76 @@ router.post("/pro_reset", async (req, res) => {
   res.send({ status: "success", message: `Password reset successful` });
 });
 
+router.post("/renew-subscription", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { value, days } = req.body;
+
+    if (!days || days <= 0) {
+      return res.status(400).send({
+        status: "failed",
+        message: "Invalid subscription duration",
+      });
+    }
+
+    const user = await User.findById(userId).select("points subscription");
+
+    if (!user) {
+      return res.status(404).send({
+        status: "failed",
+        message: "User not found",
+      });
+    }
+
+    if (user.points < value) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Not enough Guru Tokens",
+      });
+    }
+
+    const today = new Date();
+    const millisToAdd = days * 24 * 60 * 60 * 1000;
+
+    let startDate;
+
+    // 🔑 Decide where to extend from
+    if (user.subscription?.expiry && today < user.subscription.expiry) {
+      // Active subscription → extend from expiry
+      startDate = new Date(user.subscription.expiry);
+    } else {
+      // Expired or no subscription → start fresh
+      startDate = today;
+      user.subscription.current = today;
+    }
+
+    const newExpiry = new Date(startDate.getTime() + millisToAdd);
+
+    // 🔄 Apply updates
+    user.subscription.expiry = newExpiry;
+    user.subscription.isActive = true;
+    user.points -= value;
+
+    await user.save();
+
+    res.send({
+      status: "success",
+      message: "Subscription renewed successfully",
+      data: {
+        current: user.subscription.current,
+        expiry: user.subscription.expiry,
+        isActive: user.subscription.isActive,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({
+      status: "failed",
+      message: "Subscription renewal failed",
+    });
+  }
+});
+
 router.get("/app_info", async (req, res) => {
   const appInfo = await AppInfo.findOne({ ID: "APP" });
 
