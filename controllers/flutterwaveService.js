@@ -79,15 +79,67 @@ class FlutterwaveService {
   // Update in services/flutterwaveService.js
 
   // Send airtime - CORRECTED VERSION
+  // async sendAirtime(data) {
+  //   try {
+  //     // Map network names to Flutterwave biller codes
+  //     const networkMap = {
+  //       MTN: "BIL099", // MTN Nigeria
+  //       GLO: "BIL098", // Glo Nigeria
+  //       AIRTEL: "BIL100", // Airtel Nigeria
+  //       "9MOBILE": "BIL102", // 9mobile Nigeria
+  //       ETISALAT: "BIL102", // Alternative name for 9mobile
+  //     };
+
+  //     const billerCode = networkMap[data.network.toUpperCase()];
+
+  //     if (!billerCode) {
+  //       return {
+  //         success: false,
+  //         error: `Unsupported network: ${data.network}. Supported networks: MTN, GLO, AIRTEL, 9MOBILE`,
+  //       };
+  //     }
+
+  //     const response = await axios.post(
+  //       `${this.baseUrl}/bills`,
+  //       {
+  //         country: "NG",
+  //         customer: data.phoneNumber,
+  //         amount: data.amount,
+  //         type: "AIRTIME", // Changed from network name
+  //         reference: data.reference,
+  //         biller_code: billerCode, // Add biller code
+  //       },
+  //       {
+  //         headers: {
+  //           Authorization: `Bearer ${this.secretKey}`,
+  //           "Content-Type": "application/json",
+  //         },
+  //       }
+  //     );
+
+  //     return {
+  //       success: response.data.status === "success",
+  //       data: response.data.data,
+  //       reference: response.data.data?.reference,
+  //       flutterwaveId: response.data.data?.flw_ref,
+  //     };
+  //   } catch (error) {
+  //     console.error("Airtime error:", error.response?.data);
+  //     return {
+  //       success: false,
+  //       error: error.response?.data?.message || "Airtime purchase failed",
+  //     };
+  //   }
+  // }
   async sendAirtime(data) {
     try {
       // Map network names to Flutterwave biller codes
       const networkMap = {
-        MTN: "BIL099", // MTN Nigeria
-        GLO: "BIL098", // Glo Nigeria
-        AIRTEL: "BIL100", // Airtel Nigeria
-        "9MOBILE": "BIL102", // 9mobile Nigeria
-        ETISALAT: "BIL102", // Alternative name for 9mobile
+        MTN: "BIL099",
+        GLO: "BIL098",
+        AIRTEL: "BIL100",
+        "9MOBILE": "BIL102",
+        ETISALAT: "BIL102",
       };
 
       const billerCode = networkMap[data.network.toUpperCase()];
@@ -99,20 +151,26 @@ class FlutterwaveService {
         };
       }
 
+      // Airtime uses a generic item code "AT" + last 3 digits of biller code
+      const itemCode = `AT${billerCode.slice(-3)}`;
+
+      // Use the new endpoint format
+      const url = `${this.baseUrl}/billers/${billerCode}/items/${itemCode}/payment`;
+
       const response = await axios.post(
-        `${this.baseUrl}/bills`,
+        url,
         {
           country: "NG",
-          customer: data.phoneNumber,
+          customer_id: data.phoneNumber,
           amount: data.amount,
-          type: "AIRTIME", // Changed from network name
           reference: data.reference,
-          biller_code: billerCode, // Add biller code
+          callback_url: `${process.env.BASE_URL}/api/payouts/webhooks/flutterwave`,
         },
         {
           headers: {
             Authorization: `Bearer ${this.secretKey}`,
             "Content-Type": "application/json",
+            accept: "application/json",
           },
         }
       );
@@ -120,8 +178,10 @@ class FlutterwaveService {
       return {
         success: response.data.status === "success",
         data: response.data.data,
-        reference: response.data.data?.reference,
-        flutterwaveId: response.data.data?.flw_ref,
+        reference: response.data.data?.reference || data.reference,
+        flutterwaveId:
+          response.data.data?.transaction_reference ||
+          response.data.data?.flw_ref,
       };
     } catch (error) {
       console.error("Airtime error:", error.response?.data);
