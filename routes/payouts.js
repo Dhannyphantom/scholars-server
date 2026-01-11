@@ -304,13 +304,45 @@ router.post("/recharge", authMiddleware, async (req, res) => {
 // 3. DATA BUNDLE
 router.post("/data", authMiddleware, async (req, res) => {
   try {
-    const { pointsToConvert, phoneNumber, network, bundleCode } = req.body;
+    const {
+      pointsToConvert,
+      phoneNumber,
+      network,
+      billerCode, // e.g., BIL104
+      itemCode, // e.g., MD107
+      bundleName, // e.g., "MTN 1.5 GB"
+      bundleAmount, // e.g., 1000
+    } = req.body;
+
+    console.log({ body: req.body });
+
     const userId = req.user.userId;
 
-    if (!pointsToConvert || !phoneNumber || !network) {
+    // Validate
+    if (
+      !pointsToConvert ||
+      !phoneNumber ||
+      !network ||
+      !billerCode ||
+      !itemCode
+    ) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields",
+      });
+    }
+
+    // Validate phone and network
+    const validation = PhoneValidator.validatePhoneNetwork(
+      phoneNumber,
+      network
+    );
+
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.error,
+        detectedNetwork: validation.detectedNetwork,
       });
     }
 
@@ -328,8 +360,7 @@ router.post("/data", authMiddleware, async (req, res) => {
     if (walletBalance < amount) {
       return res.status(400).json({
         success: false,
-        message:
-          "Insufficient wallet balance. Please try again in the next 24 hours",
+        message: "Insufficient wallet balance",
       });
     }
 
@@ -340,19 +371,22 @@ router.post("/data", authMiddleware, async (req, res) => {
       pointsConverted: pointsToConvert,
       amount,
       payoutType: "data",
-      phoneNumber,
-      network,
-      bundleCode,
+      phoneNumber: validation.normalizedPhone,
+      network: network.toUpperCase(),
+      bundleCode: itemCode,
       reference,
       status: "processing",
     });
 
     await payoutRequest.save();
 
+    // Purchase data bundle
     const dataBundle = await flutterwaveService.sendDataBundle({
-      phoneNumber,
-      network,
-      amount,
+      phoneNumber: validation.normalizedPhone,
+      network: network.toUpperCase(),
+      amount: bundleAmount,
+      billerCode: billerCode,
+      itemCode: itemCode,
       reference,
     });
 
@@ -373,7 +407,7 @@ router.post("/data", authMiddleware, async (req, res) => {
     await walletService.debit("student", amount, "payout", reference, {
       userId,
       flutterwaveReference: dataBundle.reference,
-      description: `Data ${network} - ${phoneNumber}`,
+      description: `Data ${network} ${bundleName} - ${validation.normalizedPhone}`,
       payoutType: "data",
     });
 
@@ -384,15 +418,70 @@ router.post("/data", authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Data bundle sent to ${phoneNumber}`,
+      message: `${bundleName} data bundle sent to ${validation.normalizedPhone}`,
       data: {
         reference,
-        phoneNumber,
-        network,
+        phoneNumber: validation.normalizedPhone,
+        network: network.toUpperCase(),
+        bundle: bundleName,
+        amount,
       },
     });
   } catch (error) {
     console.error("Data purchase error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// Add to routes/payouts.js
+
+// Get available data bundles for a network
+router.get("/data-bundles/:network", async (req, res) => {
+  try {
+    const { network } = req.params;
+
+    const result = await flutterwaveService.getDataBundles(network);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: {
+          network: network.toUpperCase(),
+          bundles: result.bundles,
+        },
+      });
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// Get all data bundles for all networks (optional)
+router.get("/data-bundles", async (req, res) => {
+  try {
+    const networks = ["MTN", "GLO", "AIRTEL", "9MOBILE"];
+    const allBundles = {};
+
+    for (const network of networks) {
+      const result = await flutterwaveService.getDataBundles(network);
+      if (result.success) {
+        allBundles[network] = result.bundles;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: allBundles,
+    });
+  } catch (error) {
     res.status(500).json({
       success: false,
       message: error.message,

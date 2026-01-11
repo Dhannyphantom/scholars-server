@@ -132,23 +132,113 @@ class FlutterwaveService {
     }
   }
 
-  // Send data bundle
+  // Add to services/flutterwaveService.js
+
+  // Get data bundles for a specific network
+  // Replace the getDataBundles method in services/flutterwaveService.js
+
+  // Replace getDataBundles in services/flutterwaveService.js
+
+  async getDataBundles(network) {
+    try {
+      // Correct biller codes from actual API
+      const networkBillerMap = {
+        MTN: "BIL104",
+        GLO: "BIL105",
+        AIRTEL: "BIL106",
+        "9MOBILE": "BIL107",
+      };
+
+      const billerCode = networkBillerMap[network.toUpperCase()];
+
+      if (!billerCode) {
+        return {
+          success: false,
+          error: `Unsupported network: ${network}. Supported: MTN, GLO, AIRTEL, 9MOBILE`,
+        };
+      }
+
+      // Get items for this biller
+      const response = await axios.get(
+        `${this.baseUrl}/billers/${billerCode}/items`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.secretKey}`,
+          },
+        }
+      );
+
+      if (!response.data.data || response.data.data.length === 0) {
+        return {
+          success: false,
+          error: `No data bundles found for ${network}`,
+        };
+      }
+
+      // Remove duplicates based on item_code
+      const uniqueBundles = [];
+      const seenItemCodes = new Set();
+
+      response.data.data.forEach((item) => {
+        if (!seenItemCodes.has(item.item_code)) {
+          seenItemCodes.add(item.item_code);
+          uniqueBundles.push({
+            id: item.id,
+            billerCode: item.biller_code,
+            itemCode: item.item_code,
+            name: item.biller_name, // e.g., "MTN 1.5 GB"
+            amount: parseFloat(item.amount),
+            points: `${parseFloat(item.amount) * 10} GT`,
+            value: parseFloat(item.amount) * 10,
+            validity: item.validity_period || "N/A",
+            description: `${item.biller_name} - Valid for ${
+              item.validity_period || "N/A"
+            } day(s)`,
+          });
+        }
+      });
+
+      // Sort by amount
+      uniqueBundles.sort((a, b) => a.amount - b.amount);
+
+      return {
+        success: true,
+        bundles: uniqueBundles,
+      };
+    } catch (error) {
+      console.error(
+        "Get bundles error:",
+        error.response?.data || error.message
+      );
+      return {
+        success: false,
+        error: error.response?.data?.message || "Failed to fetch data bundles",
+      };
+    }
+  }
+
+  // Purchase data bundle - UPDATED
+  // Update sendDataBundle in services/flutterwaveService.js
+
   async sendDataBundle(data) {
     try {
+      // Use the new endpoint format
+      const url = `${this.baseUrl}/billers/${data.billerCode}/items/${data.itemCode}/payment`;
+
       const response = await axios.post(
-        `${this.baseUrl}/bills`,
+        url,
         {
           country: "NG",
-          customer: data.phoneNumber,
+          customer_id: data.phoneNumber, // Note: customer_id not customer
           amount: data.amount,
-          type: "DATA_BUNDLE",
           reference: data.reference,
-          biller_name: data.network.toUpperCase(),
+          callback_url: `${process.env.BASE_URL}/api/payouts/webhooks/flutterwave`,
         },
         {
           headers: {
             Authorization: `Bearer ${this.secretKey}`,
             "Content-Type": "application/json",
+            accept: "application/json",
           },
         }
       );
@@ -156,13 +246,17 @@ class FlutterwaveService {
       return {
         success: response.data.status === "success",
         data: response.data.data,
-        reference: response.data.data?.reference,
-        flutterwaveId: response.data.data?.flw_ref,
+        reference: response.data.data?.reference || data.reference,
+        flutterwaveId:
+          response.data.data?.transaction_reference ||
+          response.data.data?.flw_ref,
       };
     } catch (error) {
+      console.error("Data bundle error:", error.response?.data);
       return {
         success: false,
         error: error.response?.data?.message || "Data purchase failed",
+        details: error.response?.data,
       };
     }
   }
