@@ -18,6 +18,8 @@ const {
   checkUserSub,
 } = require("../controllers/helpers");
 const { AppInfo } = require("../models/AppInfo");
+const WalletTransaction = require("../models/WalletTransaction");
+const walletService = require("../controllers/walletService");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1182,6 +1184,60 @@ router.post("/pro_reset", async (req, res) => {
   res.send({ status: "success", message: `Password reset successful` });
 });
 
+// Add to routes/payouts.js
+
+// Get all user transactions (money + points)
+router.get("/transactions", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const {
+      page = 1,
+      limit = 30,
+      category, // Optional: filter by category (subscription, payout, refund, etc.)
+      type, // Optional: filter by type (credit, debit, points)
+    } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    // Build query
+    const query = { userId };
+    if (category) query.category = category;
+    if (type) query.transactionType = type;
+
+    // Fetch transactions
+    const transactions = await WalletTransaction.find(query)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip(skip)
+      .select(
+        "transactionType category amount reference description metadata createdAt status"
+      );
+
+    const total = await WalletTransaction.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        transactions,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(total / limit),
+          hasNextPage: page < Math.ceil(total / limit),
+          hasPrevPage: page > 1,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Fetch transactions error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 router.post("/renew-subscription", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -1215,23 +1271,45 @@ router.post("/renew-subscription", auth, async (req, res) => {
 
     let startDate;
 
-    // 🔑 Decide where to extend from
     if (user.subscription?.expiry && today < user.subscription.expiry) {
-      // Active subscription → extend from expiry
       startDate = new Date(user.subscription.expiry);
     } else {
-      // Expired or no subscription → start fresh
       startDate = today;
       user.subscription.current = today;
     }
 
     const newExpiry = new Date(startDate.getTime() + millisToAdd);
 
-    // 🔄 Apply updates
+    const balanceBefore = user.points;
     user.subscription.expiry = newExpiry;
+    user.subscription.current = today;
     user.subscription.isActive = true;
     user.points -= value;
 
+    // Record as points transaction (doesn't affect wallet balance)
+    const reference = `SUB_RENEW_${Date.now()}_${userId}`;
+
+    const transaction = new WalletTransaction({
+      accountType: "student",
+      transactionType: "points", // New type - doesn't affect wallet balance
+      category: "subscription",
+      amount: 0, // No money involved
+      balanceBefore: 0, // Wallet balance unchanged
+      balanceAfter: 0, // Wallet balance unchanged
+      reference,
+      userId,
+      description: `Subscription renewal - ${days} days`,
+      metadata: {
+        pointsSpent: value,
+        pointsBalanceBefore: balanceBefore,
+        pointsBalanceAfter: user.points,
+        days,
+        newExpiry,
+      },
+      status: "completed",
+    });
+
+    await transaction.save();
     await user.save();
 
     res.send({
@@ -1241,6 +1319,9 @@ router.post("/renew-subscription", auth, async (req, res) => {
         current: user.subscription.current,
         expiry: user.subscription.expiry,
         isActive: user.subscription.isActive,
+        pointsSpent: value,
+        pointsRemaining: user.points,
+        daysAdded: days,
       },
     });
   } catch (err) {

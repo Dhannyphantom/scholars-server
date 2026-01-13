@@ -11,7 +11,7 @@ const walletTransactionSchema = new mongoose.Schema(
     },
     transactionType: {
       type: String,
-      enum: ["credit", "debit"],
+      enum: ["credit", "debit", "points"],
       required: true,
     },
     category: {
@@ -41,6 +41,10 @@ const walletTransactionSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+    },
+    schoolId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "School",
     },
     description: String,
     metadata: {

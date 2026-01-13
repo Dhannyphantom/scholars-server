@@ -94,6 +94,7 @@ class WalletService {
         reference,
         flutterwaveReference: metadata.flutterwaveReference,
         userId: metadata.userId,
+        schoolId: metadata.schoolId,
         description: metadata.description || `Credit: ${category}`,
         metadata,
         status: "completed",
@@ -229,6 +230,7 @@ class WalletService {
     const transactions = await WalletTransaction.find({
       accountType,
       status: "completed",
+      transactionType: { $in: ["credit", "debit"] },
     });
 
     let calculatedBalance = 0;

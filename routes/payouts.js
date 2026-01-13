@@ -13,6 +13,7 @@ const adminMiddleware = require("../middlewares/adminRoutes");
 const { User } = require("../models/User");
 const { getFullName } = require("../controllers/helpers");
 const PhoneValidator = require("../controllers/phoneValidation");
+const { School } = require("../models/School");
 
 // Helper function to convert points to amount
 const pointsToAmount = (points) => {
@@ -601,8 +602,6 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     const { transaction_id, tx_ref, status } = req.body;
     const userId = req.user.userId;
 
-    console.log("Verifying subscription:", { transaction_id, tx_ref, status });
-
     // Validate input
     if (!transaction_id || !tx_ref) {
       return res.status(400).json({
@@ -654,6 +653,8 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     const amount = parseFloat(transactionData.amount);
     const accountType = transactionData.meta?.account_type || "student"; // Default to student
     const user = await User.findById(userId);
+    const days = transactionData.meta?.days;
+    const schoolId = transactionData.meta?.schoolId;
 
     if (!user) {
       return res.status(404).json({
@@ -665,7 +666,8 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     // Credit appropriate wallet
     await walletService.credit(accountType, amount, "subscription", tx_ref, {
       flutterwaveReference: transaction_id,
-      userId: userId,
+      userId,
+      schoolId,
       customerEmail: transactionData.customer?.email || user.email,
       customerName: transactionData.customer?.name || getFullName(user),
       description: `${
@@ -673,16 +675,68 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
       } subscription payment`,
       pointsAdded: accountType === "student" ? amount * 10 : 0, // 1 NGN = 10 points
       walletCredited: amount,
+      days,
     });
 
-    // If student payment, credit user points
-    // let pointsAdded = 0;
-    // if (accountType === "student") {
-    //   pointsAdded = amount * 10; // 1 NGN = 10 points
-    //   user.points = (user.points || 0) + pointsAdded;
-    //   await user.save();
-    //   console.log(`Credited ${pointsAdded} points to user ${userId}`);
-    // }
+    // If student payment, extend user sub
+
+    if (accountType === "student") {
+      const today = new Date();
+      const millisToAdd = days * 24 * 60 * 60 * 1000;
+
+      let startDate;
+
+      if (user.subscription?.expiry && today < user.subscription.expiry) {
+        startDate = new Date(user.subscription.expiry);
+      } else {
+        startDate = today;
+        user.subscription.current = today;
+      }
+
+      const newExpiry = new Date(startDate.getTime() + millisToAdd);
+
+      user.subscription.expiry = newExpiry;
+      user.subscription.current = today;
+      user.subscription.isActive = true;
+
+      await user.save();
+    } else if (accountType === "school") {
+      // School Sub
+      const schoolData = await School.findById(schoolId);
+      const today = new Date();
+      const millisToAdd = days * 24 * 60 * 60 * 1000;
+
+      let startDate;
+
+      if (
+        schoolData.subscription?.expiry &&
+        today < schoolData.subscription.expiry
+      ) {
+        startDate = new Date(schoolData.subscription.expiry);
+      } else {
+        startDate = today;
+        schoolData.subscription.current = today;
+      }
+
+      const newExpiry = new Date(startDate.getTime() + millisToAdd);
+
+      schoolData.subscription.expiry = newExpiry;
+      schoolData.subscription.current = today;
+      schoolData.subscription.isActive = true;
+
+      const schoolObj = schoolData.toObject();
+      const teacherIds = schoolObj.teachers.map((teach) => teach.user);
+
+      await schoolData.save();
+      await User.updateMany(
+        { _id: { $in: teacherIds } },
+        {
+          $set: {
+            subscription: schoolObj.subscription,
+          },
+        }
+      );
+    }
 
     res.json({
       success: true,
