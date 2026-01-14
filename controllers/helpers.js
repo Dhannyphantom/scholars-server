@@ -226,6 +226,24 @@ module.exports.checkUserSub = async (userInfo) => {
   }
 };
 
+const reconcileSchool = async (school) => {
+  // CHECK AND UPDATE ASSIGNMENT SUBMISSINOS;
+  const schoolObj = school?.toObject();
+  const today = new Date();
+  school.assignments = schoolObj.assignments.map((assignment) => {
+    if (today > new Date(assignment?.expiry)) {
+      return {
+        ...assignment,
+        status: "inactive",
+      };
+    } else {
+      return assignment;
+    }
+  });
+
+  await school.save();
+};
+
 module.exports.getFullName = (user, usernameFallback) => {
   if (user?.firstName && user?.lastName) {
     return `${user?.firstName} ${user?.lastName}`;
@@ -243,6 +261,7 @@ module.exports = {
   classsSchoolEnums,
   getUploadUri,
   getUserPoint,
+  reconcileSchool,
   getClasses,
   userSelector,
   ensureDirectory,

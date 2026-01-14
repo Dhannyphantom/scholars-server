@@ -315,8 +315,6 @@ router.post("/data", authMiddleware, async (req, res) => {
       bundleAmount, // e.g., 1000
     } = req.body;
 
-    console.log({ body: req.body });
-
     const userId = req.user.userId;
 
     // Validate
@@ -548,8 +546,6 @@ router.post("/webhooks/flutterwave", async (req, res) => {
   const payload = req.body;
   const eventType = payload.event;
 
-  console.log(`Webhook received: ${eventType}`);
-
   try {
     switch (eventType) {
       // ===================================
@@ -584,9 +580,6 @@ router.post("/webhooks/flutterwave", async (req, res) => {
       case "billpayment.failed":
         await handleBillPaymentFailed(payload);
         break;
-
-      default:
-        console.log(`Unhandled event type: ${eventType}`);
     }
 
     res.status(200).end();
@@ -876,21 +869,17 @@ async function handleChargeCompleted(payload) {
   } = data;
 
   if (status !== "successful") {
-    console.log(`Payment not successful: ${status}`);
     return;
   }
 
   // Check if already processed (idempotency)
   const existingTx = await WalletTransaction.findOne({ reference });
   if (existingTx) {
-    console.log(`Transaction ${reference} already processed`);
     return;
   }
 
   const accountType = meta?.account_type || "student";
   const userId = meta?.user_id;
-
-  console.log(`Processing ${accountType} payment: ₦${amount}`);
 
   // Credit appropriate wallet
   await walletService.credit(accountType, amount, "subscription", reference, {
@@ -912,12 +901,8 @@ async function handleChargeCompleted(payload) {
       const pointsToAdd = amount * 10; // 1 NGN = 10 points
       user.points = (user.points || 0) + pointsToAdd;
       await user.save();
-
-      console.log(`✓ Credited ${pointsToAdd} points to user ${userId}`);
     }
   }
-
-  console.log(`✓ ${accountType} wallet credited with ₦${amount}`);
 }
 
 // Handle successful withdrawals
@@ -925,12 +910,9 @@ async function handleTransferCompleted(payload) {
   const data = payload.data;
   const { id: transferId, reference, amount } = data;
 
-  console.log(`Transfer completed: ${reference}, Amount: ₦${amount}`);
-
   const payout = await PayoutRequest.findOne({ reference });
 
   if (!payout) {
-    console.log(`No payout request found for reference: ${reference}`);
     return;
   }
 
@@ -938,8 +920,6 @@ async function handleTransferCompleted(payload) {
   payout.completedAt = new Date();
   payout.flutterwaveId = transferId;
   await payout.save();
-
-  console.log(`✓ Payout ${reference} marked as completed`);
 }
 
 // Handle failed withdrawals
@@ -947,12 +927,9 @@ async function handleTransferFailed(payload) {
   const data = payload.data;
   const { reference, amount, complete_message } = data;
 
-  console.log(`Transfer failed: ${reference}, Reason: ${complete_message}`);
-
   const payout = await PayoutRequest.findOne({ reference });
 
   if (!payout) {
-    console.log(`No payout request found for reference: ${reference}`);
     return;
   }
 
@@ -966,7 +943,6 @@ async function handleTransferFailed(payload) {
     if (user) {
       user.points = (user.points || 0) + payout.pointsConverted;
       await user.save();
-      console.log(`Refunded ${payout.pointsConverted} points to user`);
     }
   }
 
@@ -982,8 +958,6 @@ async function handleTransferFailed(payload) {
       originalReference: reference,
     }
   );
-
-  console.log(`✓ Refunded ₦${amount} to student wallet`);
 }
 
 // Handle successful airtime/data
@@ -991,20 +965,15 @@ async function handleBillPaymentCompleted(payload) {
   const data = payload.data;
   const { reference, amount, product_name } = data;
 
-  console.log(`Bill payment completed: ${reference}, Product: ${product_name}`);
-
   const payout = await PayoutRequest.findOne({ reference });
 
   if (!payout) {
-    console.log(`No payout request found for reference: ${reference}`);
     return;
   }
 
   payout.status = "completed";
   payout.completedAt = new Date();
   await payout.save();
-
-  console.log(`✓ ${payout.payoutType} payout ${reference} completed`);
 }
 
 // Handle failed airtime/data
@@ -1012,12 +981,9 @@ async function handleBillPaymentFailed(payload) {
   const data = payload.data;
   const { reference, amount, response_message } = data;
 
-  console.log(`Bill payment failed: ${reference}, Reason: ${response_message}`);
-
   const payout = await PayoutRequest.findOne({ reference });
 
   if (!payout) {
-    console.log(`No payout request found for reference: ${reference}`);
     return;
   }
 
@@ -1031,7 +997,6 @@ async function handleBillPaymentFailed(payload) {
     if (user) {
       user.points = (user.points || 0) + payout.pointsConverted;
       await user.save();
-      console.log(`Refunded ${payout.pointsConverted} points to user`);
     }
   }
 
@@ -1047,8 +1012,6 @@ async function handleBillPaymentFailed(payload) {
       originalReference: reference,
     }
   );
-
-  console.log(`✓ Refunded ₦${amount} to student wallet`);
 }
 
 module.exports = router;

@@ -14,6 +14,7 @@ const {
   capFirstLetter,
   userSelector,
   getClasses,
+  reconcileSchool,
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
 const nanoid = uuid.v4;
@@ -703,6 +704,8 @@ router.put("/quiz_status", auth, async (req, res) => {
 
   let pusher = {};
 
+  console.log({ status });
+
   if (status === "active") {
     pusher.$push = {
       announcements: {
@@ -724,6 +727,16 @@ router.put("/quiz_status", auth, async (req, res) => {
           "quiz.$.class": schoolClass,
         },
         ...pusher,
+      }
+    );
+  } else if (status === "inactive") {
+    await School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $set: {
+          "quiz.$.status": status,
+          "quiz.$.class": schoolClass,
+        },
       }
     );
   } else if (status === "review") {
@@ -1027,6 +1040,7 @@ router.get("/fetch", auth, async (req, res) => {
   let assignmentCount, announcementCount, classCount, quizCount;
 
   if (school) {
+    reconcileSchool(school);
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
 
@@ -1174,6 +1188,300 @@ router.get("/assignments", auth, async (req, res) => {
   }
 
   res.send({ status: "success", data });
+});
+
+// DELETE /api/assignment?schoolId=xxx&assignmentId=xxx
+router.delete("/assignment", auth, async (req, res) => {
+  try {
+    const { schoolId, assignmentId } = req.query;
+    const userId = req.user?.userId;
+
+    // Validate user authentication
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. User not authenticated",
+      });
+    }
+
+    // Validate required query parameters
+    if (!schoolId || !assignmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId and assignmentId are required",
+      });
+    }
+
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid assignment ID",
+      });
+    }
+
+    // Find the school and check if user is the assignment teacher
+    const school = await School.findOne({
+      _id: schoolId,
+      "assignments._id": assignmentId,
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School or assignment not found",
+      });
+    }
+
+    // Find the specific assignment
+    const assignment = school.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    // Verify user is the teacher of this assignment
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to delete this assignment",
+      });
+    }
+
+    // Remove the assignment
+    const updatedSchool = await School.findOneAndUpdate(
+      { _id: schoolId, "assignments._id": assignmentId },
+      { $pull: { assignments: { _id: assignmentId } } },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Assignment deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting assignment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while deleting assignment",
+      error: error.message,
+    });
+  }
+});
+
+// PATCH /api/assignment?schoolId=xxx&assignmentId=xxx
+router.put("/assignment", auth, async (req, res) => {
+  try {
+    const { data, schoolId, assignmentId } = req.body;
+    const userId = req.user?.userId;
+
+    // Validate user authentication
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. User not authenticated",
+      });
+    }
+
+    // Validate required parameters
+    if (!schoolId || !assignmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId and assignmentId are required",
+      });
+    }
+
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid assignment ID",
+      });
+    }
+
+    // Find the school and check if user is the assignment teacher
+    const school = await School.findOne({
+      _id: schoolId,
+      "assignments._id": assignmentId,
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School or assignment not found",
+      });
+    }
+
+    // Find the specific assignment
+    const assignment = school.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    // Verify user is the teacher of this assignment
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to update this assignment",
+      });
+    }
+
+    let updater = {};
+    console.log(data?.classes);
+
+    for (const key in data) {
+      if (key === "classes") {
+        updater[key] = data[key]?.map((classItm) =>
+          classItm?.name?.toLowerCase()
+        );
+        console.log({ updater });
+      } else if (key === "subject") {
+        updater[key] = data[key]?._id;
+      } else if (key === "date") {
+        updater["expiry"] = data[key];
+      } else {
+        updater[key] = data[key];
+      }
+    }
+
+    // Update the assignment status
+    const updatedSchool = await School.findOneAndUpdate(
+      { _id: schoolId, "assignments._id": assignmentId },
+      { $set: { "assignments.$": updater } },
+      { new: true }
+    );
+
+    // Find the updated assignment to return
+    const updatedAssignment = updatedSchool.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Assignment status updated successfully",
+      data: updatedAssignment,
+    });
+  } catch (error) {
+    console.error("Error updating assignment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating assignment",
+      error: error.message,
+    });
+  }
+});
+
+router.patch("/assignment", auth, async (req, res) => {
+  try {
+    const { status, schoolId, assignmentId } = req.body;
+    const userId = req.user?.userId;
+
+    // Validate user authentication
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. User not authenticated",
+      });
+    }
+
+    // Validate required parameters
+    if (!schoolId || !assignmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId and assignmentId are required",
+      });
+    }
+
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid assignment ID",
+      });
+    }
+
+    // Validate status
+    const validStatuses = ["ongoing", "inactive"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status. Must be 'ongoing' or 'inactive'",
+      });
+    }
+
+    // Find the school and check if user is the assignment teacher
+    const school = await School.findOne({
+      _id: schoolId,
+      "assignments._id": assignmentId,
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School or assignment not found",
+      });
+    }
+
+    // Find the specific assignment
+    const assignment = school.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    // Verify user is the teacher of this assignment
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to update this assignment",
+      });
+    }
+
+    // Update the assignment status
+    const updatedSchool = await School.findOneAndUpdate(
+      { _id: schoolId, "assignments._id": assignmentId },
+      { $set: { "assignments.$.status": status } },
+      { new: true }
+    );
+
+    // Find the updated assignment to return
+    const updatedAssignment = updatedSchool.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Assignment status updated successfully",
+      data: {
+        assignmentId: updatedAssignment._id,
+        status: updatedAssignment.status,
+        title: updatedAssignment.title,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating assignment status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating assignment status",
+      error: error.message,
+    });
+  }
 });
 
 module.exports = router;
