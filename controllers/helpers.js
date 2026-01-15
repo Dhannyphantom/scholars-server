@@ -254,11 +254,35 @@ module.exports.getFullName = (user, usernameFallback) => {
   }
 };
 
+const getGrade = (score) => {
+  let grade = "";
+  if (score >= 95) {
+    grade = "A+";
+  } else if (score > 70 && score < 95) {
+    grade = "A";
+  } else if (score > 60 && score < 70) {
+    grade = "B";
+  } else if (score > 50 && score < 60) {
+    grade = "C";
+  } else if (score > 40 && score < 50) {
+    grade = "D";
+  } else if (score >= 30 && score < 40) {
+    grade = "E";
+  } else if (score < 30) {
+    grade = "F";
+  }
+  return {
+    value: score,
+    grade,
+  };
+};
+
 module.exports = {
   formatPoints,
   calculatePointsAmount,
   getCurrencyAmount,
   classsSchoolEnums,
+  getGrade,
   getUploadUri,
   getUserPoint,
   reconcileSchool,

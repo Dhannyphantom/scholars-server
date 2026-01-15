@@ -28,6 +28,37 @@ const classSchema = new schema({
   },
 });
 
+const submissionSchema = new schema({
+  student: {
+    type: schema.Types.ObjectId,
+    ref: "User",
+    requied: true,
+  },
+  score: {
+    // title: {
+    //   type: String,
+    //   maxlength: 50,
+    // },
+    grade: {
+      type: String,
+      maxlength: 3,
+    },
+    value: {
+      type: Number,
+      default: 0,
+      max: 100,
+    },
+  },
+  solution: {
+    type: String,
+    required: true,
+  },
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
 const answerSchema = new schema({
   name: {
     type: String,
@@ -196,31 +227,9 @@ const announcementSchema = new schema({
   },
 });
 
-const submissionSchema = new schema({
-  student: {
-    type: schema.Types.ObjectId,
-    ref: "User",
-    requied: true,
-  },
-  score: {
-    title: {
-      type: String,
-      maxlength: 50,
-    },
-    percent: {
-      type: String,
-      maxlength: 5,
-    },
-    grade: {
-      type: String,
-      maxlength: 3,
-    },
-  },
-  solution: {
-    type: String,
-    required: true,
-  },
-  date: {
+const historySchema = new schema({
+  participants: [submissionSchema],
+  createdAt: {
     type: Date,
     default: Date.now,
   },
@@ -264,6 +273,7 @@ const assignmentSchema = new schema({
     ref: "User",
   },
   submissions: [submissionSchema],
+  history: [historySchema],
 });
 
 const userSchema = new schema({

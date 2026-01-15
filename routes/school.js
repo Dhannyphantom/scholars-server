@@ -15,6 +15,7 @@ const {
   userSelector,
   getClasses,
   reconcileSchool,
+  getGrade,
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
 const nanoid = uuid.v4;
@@ -350,32 +351,6 @@ router.post("/class", auth, async (req, res) => {
   } else {
     school.classes.push({ alias: data.name, level: data.class?.name });
   }
-
-  await school.save();
-
-  res.send({ status: "success" });
-});
-
-router.post("/assignment", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const data = req.body;
-  const { classes, title, question, subject, date, schoolId } = data;
-
-  const school = await School.findById(schoolId);
-
-  if (!school)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "School not found" });
-
-  school.assignments.addToSet({
-    classes: classes.map((item) => item.name?.toLowerCase()),
-    title,
-    question,
-    subject: subject?._id,
-    expiry: date,
-    teacher: userId,
-  });
 
   await school.save();
 
@@ -1145,7 +1120,7 @@ router.get("/assignments", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.query;
 
-  const userInfo = await User.findById(userId).select("accountType");
+  const userInfo = await User.findById(userId).select("accountType class");
   if (!userInfo)
     return res
       .status(422)
@@ -1181,13 +1156,191 @@ router.get("/assignments", auth, async (req, res) => {
         });
         return {
           ...item._doc,
+          submissions: null,
+          history: null,
           total: len,
           submissionsCount: item?.submissions?.length,
         };
       });
+  } else {
   }
 
   res.send({ status: "success", data });
+});
+
+router.post("/assignment", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+  const { classes, title, question, subject, date, status, schoolId } = data;
+
+  const school = await School.findById(schoolId);
+
+  if (!school)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "School not found" });
+
+  school.assignments.addToSet({
+    classes: classes.map((item) => item.name?.toLowerCase()),
+    title,
+    question,
+    subject: subject?._id,
+    expiry: date,
+    teacher: userId,
+    status,
+  });
+
+  await school.save();
+
+  res.send({ status: "success" });
+});
+
+router.get("/assignment", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  const { assignmentId, schoolId } = req.query;
+  // Validate user authentication
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. User not authenticated",
+    });
+  }
+
+  // Validate required query parameters
+  if (!schoolId || !assignmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "schoolId and assignmentId are required",
+    });
+  }
+
+  // Validate IDs
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid school ID",
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid assignment ID",
+    });
+  }
+
+  // Find the school and check if user is the assignment teacher
+  const school = await School.findOne({
+    _id: schoolId,
+    "assignments._id": assignmentId,
+  }).populate("assignments.teacher", "username avatar firstName lastName");
+
+  if (!school) {
+    return res.status(404).json({
+      success: false,
+      message: "School or assignment not found",
+    });
+  }
+
+  // Find the specific assignment
+  const assignment = school.assignments.find(
+    (a) => a._id.toString() === assignmentId
+  );
+
+  res.send({ success: true, data: assignment });
+});
+
+router.post("/assignment/grade", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, assignmentId, score, user } = req.query;
+
+  // Validate user authentication
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. User not authenticated",
+    });
+  }
+
+  // Validate required query parameters
+  if (!schoolId || !assignmentId || score || user) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing fields are required",
+    });
+  }
+
+  // Validate IDs
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid school ID",
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid assignment ID",
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(user)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid student ID",
+    });
+  }
+
+  // Find the school and check if user is the assignment teacher
+  const school = await School.findOne({
+    _id: schoolId,
+    "assignments._id": assignmentId,
+  });
+
+  if (!school) {
+    return res.status(404).json({
+      success: false,
+      message: "School or assignment not found",
+    });
+  }
+
+  // Find the specific assignment
+  const assignment = school.assignments.find(
+    (a) => a._id.toString() === assignmentId
+  );
+
+  // Verify user is the teacher of this assignment
+  if (assignment.teacher.toString() !== userId) {
+    return res.status(403).json({
+      success: false,
+      message: "You are not authorized to delete this assignment",
+    });
+  }
+
+  const userScore = getGrade(score);
+
+  const submission = assignment.submissions.find(
+    (sub) => sub.student?.toString() === user
+  );
+
+  if (!submission) {
+    return res.status(404).send({
+      success: false,
+      message: "User assignment submission not found",
+    });
+  }
+
+  submission.score = userScore;
+
+  await submission.save();
+
+  res.send({
+    success: true,
+    message: "Assignment graded successfully",
+    data: submission,
+  });
 });
 
 // DELETE /api/assignment?schoolId=xxx&assignmentId=xxx
