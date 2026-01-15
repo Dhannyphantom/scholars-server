@@ -1133,8 +1133,14 @@ router.get("/assignments", auth, async (req, res) => {
         model: "Subject",
         select: "name",
       },
+      {
+        path: "assignments.teacher",
+        model: "User",
+        select: "preffix firstName lastName username avatar",
+      },
     ])
     .select("assignments classes");
+
   if (!school)
     return res
       .status(422)
@@ -1154,6 +1160,7 @@ router.get("/assignments", auth, async (req, res) => {
             len += finder?.students?.length;
           }
         });
+
         return {
           ...item._doc,
           submissions: null,
@@ -1163,11 +1170,78 @@ router.get("/assignments", auth, async (req, res) => {
         };
       });
   } else {
+    // Filter assignments for the student's class
+    const studentAssignments = school.assignments.filter(
+      (assignment) =>
+        assignment.classes.includes(userInfo.class.level) &&
+        assignment.status === "ongoing"
+    );
+
+    // Group assignments by teacher
+    const teacherMap = new Map();
+
+    studentAssignments.forEach((assignment) => {
+      const teacherId = assignment.teacher._id.toString();
+
+      // Find student's submission for this assignment
+      const userSubmission = assignment.submissions.find(
+        (sub) => sub.student.toString() === userId
+      );
+
+      // Determine user status
+      let userStatus = "pending";
+      if (userSubmission) {
+        if (userSubmission.score?.grade) {
+          // Has been graded
+          const gradeValue = userSubmission.score.value || 0;
+          userStatus = gradeValue >= 50 ? "passed" : "failed";
+        } else {
+          userStatus = "submitted";
+        }
+      }
+
+      // Create assignment item
+      const assignmentItem = {
+        _id: assignment._id,
+        title: assignment.title,
+        subject: assignment.subject,
+        question: assignment.question,
+        date: assignment.date,
+        expiry: assignment.expiry,
+        status: assignment.status,
+        userStatus,
+      };
+
+      // Add to teacher's group
+      if (!teacherMap.has(teacherId)) {
+        teacherMap.set(teacherId, {
+          teacher: {
+            _id: assignment.teacher._id,
+            firstName: assignment.teacher.firstName,
+            lastName: assignment.teacher.lastName,
+            preffix: assignment.teacher.preffix,
+            avatar: assignment.teacher.avatar,
+            username: assignment.teacher.username,
+          },
+          pendingCount: 0,
+          list: [],
+        });
+      }
+
+      const teacherGroup = teacherMap.get(teacherId);
+      teacherGroup.list.push(assignmentItem);
+
+      if (userStatus === "pending") {
+        teacherGroup.pendingCount++;
+      }
+    });
+
+    // Convert map to array
+    data = Array.from(teacherMap.values());
   }
 
   res.send({ status: "success", data });
 });
-
 router.post("/assignment", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
