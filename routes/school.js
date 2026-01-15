@@ -1417,6 +1417,82 @@ router.post("/assignment/grade", auth, async (req, res) => {
   });
 });
 
+router.post("/assignment/submit", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, assignmentId, solution } = req.body;
+
+  // Validate user authentication
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. User not authenticated",
+    });
+  }
+
+  // Validate required query parameters
+  if (!schoolId || !assignmentId || !solution) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing fields are required",
+    });
+  }
+
+  // Validate IDs
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid school ID",
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid assignment ID",
+    });
+  }
+
+  // Find the school and check if user is the assignment teacher
+  const school = await School.findOne({
+    _id: schoolId,
+    "assignments._id": assignmentId,
+  });
+
+  if (!school) {
+    return res.status(404).json({
+      success: false,
+      message: "School or assignment not found",
+    });
+  }
+  // Find the specific assignment
+  const assignment = school.assignments.find(
+    (a) => a._id.toString() === assignmentId
+  );
+
+  // Check if user has already submitted
+  const existingSubmission = assignment.submissions.find(
+    (sub) => sub.student.toString() === userId
+  );
+
+  if (existingSubmission) {
+    return res.status(400).json({
+      success: false,
+      message: "You have already submitted this assignment",
+    });
+  }
+
+  // Add the submission
+  assignment.submissions.push({
+    student: userId,
+    solution,
+    date: new Date(),
+  });
+
+  await school.save();
+
+  res.send({ success: true, message: "Assignment submitted successfully" });
+});
+
 // DELETE /api/assignment?schoolId=xxx&assignmentId=xxx
 router.delete("/assignment", auth, async (req, res) => {
   try {
