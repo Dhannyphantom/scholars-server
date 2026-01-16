@@ -1391,4 +1391,144 @@ router.put("/updateProfile", auth, async (req, res) => {
   res.json({ user: updatedUser });
 });
 
+router.get("/user_stats", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const A_DAY = 1000 * 60 * 60 * 24;
+  const A_WEEK = 1000 * 60 * 60 * 24 * 7;
+
+  try {
+    const userInfo = await User.findById(userId)
+      .select("quota quotas points totalPoints qBank")
+      .populate("quota.subjects.subject", "name")
+      .populate("quota.daily_subjects.subject", "name")
+      .lean();
+
+    if (!userInfo) {
+      return res.status(404).send({
+        status: "failed",
+        message: "User not found",
+      });
+    }
+
+    const currentQuota = userInfo.quota;
+    const isToday =
+      currentQuota && new Date() - new Date(currentQuota.daily_update) < A_DAY;
+    const isThisWeek =
+      currentQuota &&
+      new Date() - new Date(currentQuota.weekly_update) < A_WEEK;
+
+    // Daily stats
+    const dailyStats = {
+      questionsAnswered: isToday ? currentQuota.daily_questions_count || 0 : 0,
+      questionsRemaining:
+        100 - (isToday ? currentQuota.daily_questions_count || 0 : 0),
+      subjectsAnswered: isToday
+        ? (currentQuota.daily_subjects || []).map((s) => ({
+            subject: s.subject,
+            questionsCount: s.questions_count,
+            remainingQuestions: 50 - s.questions_count,
+          }))
+        : [],
+      canAnswerMore: isToday
+        ? (currentQuota.daily_questions_count || 0) < 100
+        : true,
+      lastUpdate: isToday ? currentQuota.daily_update : null,
+    };
+
+    // Weekly stats
+    const weeklyStats = {
+      pointsEarned: isThisWeek ? currentQuota.point_per_week || 0 : 0,
+      questionsAnswered: isThisWeek
+        ? currentQuota.daily_questions?.length || 0
+        : 0,
+      subjectsCount: isThisWeek
+        ? new Set(currentQuota.subjects?.map((s) => s.subject.toString())).size
+        : 0,
+      weekStart: isThisWeek ? currentQuota.weekly_update : null,
+    };
+
+    // Overall stats
+    const overallStats = {
+      totalPoints: userInfo.totalPoints || 0,
+      currentPoints: userInfo.points || 0,
+      totalQuestionsAnswered: userInfo.qBank?.length || 0,
+      weeklyHistory:
+        userInfo.quotas?.map((q) => ({
+          weekStart: q.weekly_update,
+          pointsEarned: q.point_per_week,
+          questionsAnswered: q.daily_questions?.length || 0,
+        })) || [],
+    };
+
+    res.send({
+      status: "success",
+      data: {
+        daily: dailyStats,
+        weekly: weeklyStats,
+        overall: overallStats,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(422).send({
+      status: "failed",
+      message: "Failed to fetch stats",
+      error: err.message,
+    });
+  }
+});
+
+router.get("/check_limits", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const A_DAY = 1000 * 60 * 60 * 24;
+
+  try {
+    const userInfo = await User.findById(userId)
+      .select("quota")
+      .populate("quota.daily_subjects.subject", "name")
+      .lean();
+
+    if (!userInfo) {
+      return res.status(404).send({
+        status: "failed",
+        message: "User not found",
+      });
+    }
+
+    const currentQuota = userInfo.quota;
+    const isToday =
+      currentQuota && new Date() - new Date(currentQuota.daily_update) < A_DAY;
+
+    const dailyQuestionsCount = isToday
+      ? currentQuota.daily_questions_count || 0
+      : 0;
+    const dailySubjects = isToday ? currentQuota.daily_subjects || [] : [];
+
+    res.send({
+      status: "success",
+      data: {
+        totalQuestionsRemaining: 100 - dailyQuestionsCount,
+        totalQuestionsAnswered: dailyQuestionsCount,
+        maxQuestionsPerDay: 100,
+        maxQuestionsPerSubject: 50,
+        maxSubjectsPerDay: 2,
+        subjectsToday: dailySubjects.map((s) => ({
+          subject: s.subject,
+          questionsAnswered: s.questions_count,
+          questionsRemaining: 50 - s.questions_count,
+        })),
+        canAnswerMore: dailyQuestionsCount < 100,
+        canAddSubject: dailySubjects.length < 2,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(422).send({
+      status: "failed",
+      message: "Failed to check limits",
+      error: err.message,
+    });
+  }
+});
+
 module.exports = router;

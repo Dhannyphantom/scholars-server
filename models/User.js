@@ -424,31 +424,47 @@ const rewardSchema = new schema({
 
 const quotaSchema = new schema({
   last_update: {
-    // Per Quiz Done
     type: Date,
     default: Date.now,
   },
   daily_update: {
-    // Per Day
     type: Date,
     default: Date.now,
   },
   weekly_update: {
-    // Per Week
     type: Date,
     default: Date.now,
   },
   point_per_week: {
-    // Points per week
     type: Number,
     default: 0,
   },
   daily_questions: {
-    // For the whole week
     type: [schema.Types.ObjectId],
     ref: "Question",
   },
+  daily_questions_count: {
+    type: Number,
+    default: 0,
+  },
   subjects: [studentSubjectsSchema],
+  // Track subjects practiced today
+  daily_subjects: [
+    {
+      subject: {
+        type: schema.Types.ObjectId,
+        ref: "Subject",
+      },
+      questions_count: {
+        type: Number,
+        default: 0,
+      },
+      date: {
+        type: Date,
+        default: Date.now,
+      },
+    },
+  ],
 });
 
 const userSchema = new schema({
@@ -539,12 +555,12 @@ const userSchema = new schema({
   },
   points: {
     type: Number,
-    min: 0,
+    // min: 0,
     default: 0,
   },
   schoolPoints: {
     type: Number,
-    min: 0,
+    // min: 0,
     default: 0,
   },
   preffix: {
@@ -554,7 +570,7 @@ const userSchema = new schema({
   },
   totalPoints: {
     type: Number,
-    min: 0,
+    // min: 0,
     default: 0,
   },
   streak: {

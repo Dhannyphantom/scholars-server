@@ -21,6 +21,9 @@ const userSelector =
   "avatar firstName lastName username class gender preffix state lga points rank verified accountType";
 const fullUserSelector = "-password -__v";
 
+const A_DAY = 1000 * 60 * 60 * 24; // A DAY
+const A_WEEK = 1000 * 60 * 60 * 24 * 7; // A WEEK
+
 const getUploadUri = (images, bucketName) => {
   let imgUri, thumbUri;
 
@@ -284,13 +287,156 @@ const getGrade = (score) => {
   };
 };
 
+/**
+ * Check if user has exceeded daily limits
+ * @param {Object} userInfo - User document
+ * @param {Array} newQuestions - Questions to be submitted
+ * @returns {Object} - { allowed: boolean, message: string, remaining: number }
+ */
+const checkDailyLimits = (userInfo, newQuestions) => {
+  const A_DAY = 1000 * 60 * 60 * 24;
+  const MAX_DAILY_QUESTIONS = 100;
+  const MAX_QUESTIONS_PER_SUBJECT = 50;
+  const MAX_DAILY_SUBJECTS = 2;
+
+  const currentQuota = userInfo.quota;
+
+  // Check if quota exists and if it's still the same day
+  const isToday =
+    currentQuota && new Date() - new Date(currentQuota.daily_update) < A_DAY;
+
+  let dailyQuestionsCount = isToday
+    ? currentQuota.daily_questions_count || 0
+    : 0;
+  let dailySubjects = isToday ? currentQuota.daily_subjects || [] : [];
+
+  // Count new questions
+  const newQuestionsCount = newQuestions.reduce(
+    (total, subj) => total + subj.questions.length,
+    0
+  );
+
+  // Check total daily limit
+  if (dailyQuestionsCount + newQuestionsCount > MAX_DAILY_QUESTIONS) {
+    return {
+      allowed: false,
+      message: `Daily limit exceeded. You can only answer ${MAX_DAILY_QUESTIONS} questions per day. Remaining: ${
+        MAX_DAILY_QUESTIONS - dailyQuestionsCount
+      }`,
+      remaining: MAX_DAILY_QUESTIONS - dailyQuestionsCount,
+      dailyQuestionsCount,
+    };
+  }
+
+  // Check subject limits
+  const subjectCounts = new Map(
+    dailySubjects.map((s) => [s.subject.toString(), s.questions_count])
+  );
+
+  for (const subj of newQuestions) {
+    const subjId = subj.subject._id.toString();
+    const currentCount = subjectCounts.get(subjId) || 0;
+    const newCount = subj.questions.length;
+
+    if (currentCount + newCount > MAX_QUESTIONS_PER_SUBJECT) {
+      return {
+        allowed: false,
+        message: `Subject limit exceeded. You can only answer ${MAX_QUESTIONS_PER_SUBJECT} questions per subject per day. Remaining for this subject: ${
+          MAX_QUESTIONS_PER_SUBJECT - currentCount
+        }`,
+        remaining: MAX_QUESTIONS_PER_SUBJECT - currentCount,
+        dailyQuestionsCount,
+      };
+    }
+
+    subjectCounts.set(subjId, currentCount + newCount);
+  }
+
+  // Check maximum subjects per day (2 subjects)
+  const uniqueNewSubjects = new Set(
+    newQuestions.map((s) => s.subject._id.toString())
+  );
+  const existingSubjects = new Set(
+    dailySubjects.map((s) => s.subject.toString())
+  );
+
+  uniqueNewSubjects.forEach((s) => existingSubjects.add(s));
+
+  if (existingSubjects.size > MAX_DAILY_SUBJECTS) {
+    return {
+      allowed: false,
+      message: `You can only practice ${MAX_DAILY_SUBJECTS} subjects per day.`,
+      remaining: 0,
+      dailyQuestionsCount,
+    };
+  }
+
+  return {
+    allowed: true,
+    message: "Limits check passed",
+    remaining: MAX_DAILY_QUESTIONS - dailyQuestionsCount,
+    dailyQuestionsCount,
+  };
+};
+
+/**
+ * Calculate points based on qBank (only award points for new questions)
+ * @param {Array} questions - Questions array
+ * @param {Array} userQBank - User's question bank (answered questions)
+ * @param {Object} appInfo - App configuration
+ * @returns {Object} - { totalPoints, newQuestions, answeredQuestions }
+ */
+const calculatePoints = (questions, userQBank, appInfo) => {
+  let totalPoints = 0;
+  const newQuestionIds = [];
+  const answeredQuestionIds = [];
+  const qBankSet = new Set(userQBank.map((q) => q.toString()));
+
+  questions.forEach((quest) => {
+    quest.questions.forEach((question) => {
+      const questionId = question._id.toString();
+      const isNewQuestion = !qBankSet.has(questionId);
+
+      if (question.answered?.correct) {
+        if (isNewQuestion) {
+          // Award full points only for new correct answers
+          totalPoints += question.point;
+          newQuestionIds.push(question._id);
+        } else {
+          // Already answered before, no points
+          answeredQuestionIds.push(question._id);
+        }
+      } else {
+        // Wrong answer - deduct points regardless
+        totalPoints -= appInfo.POINT_FAIL;
+        if (isNewQuestion) {
+          newQuestionIds.push(question._id);
+        } else {
+          answeredQuestionIds.push(question._id);
+        }
+      }
+    });
+  });
+
+  return {
+    totalPoints: Math.max(0, totalPoints), // Don't go below 0
+    newQuestionIds,
+    answeredQuestionIds,
+    newQuestionsCount: newQuestionIds.length,
+    repeatedQuestionsCount: answeredQuestionIds.length,
+  };
+};
+
 module.exports = {
   formatPoints,
   calculatePointsAmount,
   getCurrencyAmount,
   classsSchoolEnums,
   getGrade,
+  updateUserQuota,
   getUploadUri,
+  checkDailyLimits,
+  calculatePoints,
   getUserPoint,
   reconcileSchool,
   getClasses,
