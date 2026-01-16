@@ -1330,12 +1330,41 @@ router.get("/assignment", auth, async (req, res) => {
   }
 
   await reconcileSchool(school);
+
   // Find the specific assignment
   const assignment = school.assignments.find(
     (a) => a._id.toString() === assignmentId
   );
 
-  res.send({ success: true, data: assignment });
+  // Format history
+  const formattedHistory = assignment.history.map((historyEntry) => {
+    const participants = historyEntry.participants || [];
+    const participantCount = participants.length;
+
+    // Calculate average percentage score
+    let percentageScore = 0;
+    if (participantCount > 0) {
+      const totalScore = participants.reduce((sum, participant) => {
+        return sum + (participant.score?.value || 0);
+      }, 0);
+      percentageScore = Math.round((totalScore / participantCount) * 100) / 100;
+    }
+
+    return {
+      _id: historyEntry._id,
+      percentageScore,
+      participants: participantCount,
+      createdAt: historyEntry.createdAt,
+    };
+  });
+
+  // Create formatted assignment response
+  const formattedAssignment = {
+    ...assignment._doc,
+    history: formattedHistory,
+  };
+
+  res.send({ success: true, data: formattedAssignment });
 });
 
 router.post("/assignment/grade", auth, async (req, res) => {
@@ -1639,6 +1668,115 @@ router.post("/assignment/submit", auth, async (req, res) => {
   await school.save();
 
   res.send({ success: true, message: "Assignment submitted successfully" });
+});
+
+router.get("/assignment/history", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { assignmentId, schoolId, historyId } = req.query;
+
+  try {
+    // Validate user authentication
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. User not authenticated",
+      });
+    }
+
+    // Validate required query parameters
+    if (!schoolId || !assignmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId and assignmentId are required",
+      });
+    }
+
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid assignment ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(historyId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid history ID",
+      });
+    }
+
+    // Find the school and populate student details
+    const school = await School.findOne({
+      _id: schoolId,
+      "assignments._id": assignmentId,
+    }).populate({
+      path: "assignments.history.participants.student",
+      select: "username avatar firstName lastName class",
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School or assignment not found",
+      });
+    }
+
+    // Find the specific assignment
+    const assignment = school.assignments.find(
+      (a) => a._id.toString() === assignmentId
+    );
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: "Assignment not found",
+      });
+    }
+
+    // Find the specific history entry
+    const historyEntry = assignment.history.find(
+      (h) => h._id.toString() === historyId
+    );
+
+    if (!historyEntry) {
+      return res.status(404).json({
+        success: false,
+        message: "History entry not found",
+      });
+    }
+
+    // Format participants data without solution
+    const participants = historyEntry.participants.map((participant) => ({
+      _id: participant._id,
+      student: participant.student,
+      score: participant.score,
+      date: participant.date,
+      solution: participant.solution,
+    }));
+
+    res.send({
+      success: true,
+      data: {
+        historyId: historyEntry._id,
+        createdAt: historyEntry.createdAt,
+        participants,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching history participants:", error);
+    res.status(500).send({
+      success: false,
+      message: "An error occurred while fetching history participants",
+    });
+  }
 });
 
 // DELETE /api/assignment?schoolId=xxx&assignmentId=xxx
