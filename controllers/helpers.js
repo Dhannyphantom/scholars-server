@@ -380,13 +380,14 @@ const checkDailyLimits = (userInfo, newQuestions) => {
 };
 
 /**
- * Calculate points based on qBank (only award points for new questions)
+ * Calculate points based on qBank (award full points for new, 0.2 for repeated)
  * @param {Array} questions - Questions array
  * @param {Array} userQBank - User's question bank (answered questions)
  * @param {Object} appInfo - App configuration
  * @returns {Object} - { totalPoints, newQuestions, answeredQuestions }
  */
 const calculatePoints = (questions, userQBank, appInfo) => {
+  const REPEATED_QUESTION_POINTS = 0.2;
   let totalPoints = 0;
   const newQuestionIds = [];
   const answeredQuestionIds = [];
@@ -399,11 +400,12 @@ const calculatePoints = (questions, userQBank, appInfo) => {
 
       if (question.answered?.correct) {
         if (isNewQuestion) {
-          // Award full points only for new correct answers
+          // Award full points for new correct answers
           totalPoints += question.point;
           newQuestionIds.push(question._id);
         } else {
-          // Already answered before, no points
+          // Award 0.2 points for repeated correct answers
+          totalPoints += REPEATED_QUESTION_POINTS;
           answeredQuestionIds.push(question._id);
         }
       } else {
