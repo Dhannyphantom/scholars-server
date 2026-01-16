@@ -459,37 +459,12 @@ router.put("/question", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
-/**
- * POST /premium_quiz
- * Fetches quiz questions with intelligent prioritization
- *
- * Request Body:
- * {
- *   categoryId: string,
- *   subjects: [
- *     {
- *       _id: string,
- *       topics: [string] // optional topic IDs
- *     }
- *   ]
- * }
- *
- * Features:
- * - Fetches 25 questions per subject
- * - Prioritizes fresh (unanswered) questions first
- * - Falls back to answered questions if fresh ones exhausted
- * - Totally randomized within each priority group
- * - Overrides point value to 0.2 for answered questions
- * - Validates daily limits before fetching
- */
 router.post("/premium_quiz", auth, async (req, res) => {
   const reqData = req.body;
   const userId = req.user.userId;
+  const { mode } = reqData; // 'solo' or 'friends'
 
   try {
-    // ========================================
-    // 1. FETCH USER INFO
-    // ========================================
     const userInfo = await User.findById(userId).select("qBank quota").lean();
 
     if (!userInfo) {
@@ -499,9 +474,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
       });
     }
 
-    // ========================================
-    // 2. VALIDATE REQUEST DATA
-    // ========================================
+    // Validate request
     if (!reqData?.categoryId) {
       return res.status(422).send({
         status: "failed",
@@ -516,101 +489,79 @@ router.post("/premium_quiz", auth, async (req, res) => {
       });
     }
 
-    if (reqData.subjects.length > MAX_DAILY_SUBJECTS) {
+    if (reqData.subjects.length > 2) {
       return res.status(422).send({
         status: "failed",
-        message: `Maximum of ${MAX_DAILY_SUBJECTS} subjects allowed per quiz!`,
+        message: "Maximum of 2 subjects allowed per quiz!",
       });
     }
 
-    // ========================================
-    // 3. CHECK DAILY LIMITS
-    // ========================================
-    const currentQuota = userInfo.quota;
-    const isToday =
-      currentQuota && new Date() - new Date(currentQuota.daily_update) < A_DAY;
+    // FOR SOLO MODE: Check daily limits
+    // FOR MULTIPLAYER: Skip limit checks (host manages this)
+    if (mode === "solo") {
+      const A_DAY = 1000 * 60 * 60 * 24;
+      const currentQuota = userInfo.quota;
+      const isToday =
+        currentQuota &&
+        new Date() - new Date(currentQuota.daily_update) < A_DAY;
 
-    const dailyQuestionsCount = isToday
-      ? currentQuota.daily_questions_count || 0
-      : 0;
-    const dailySubjects = isToday ? currentQuota.daily_subjects || [] : [];
-
-    // Calculate how many questions user wants to fetch
-    const requestedQuestionsCount =
-      reqData.subjects.length * QUESTIONS_PER_SUBJECT;
-
-    // Check if user has enough quota remaining
-    if (dailyQuestionsCount + requestedQuestionsCount > MAX_DAILY_QUESTIONS) {
-      return res.status(429).send({
-        status: "failed",
-        message: `Cannot fetch quiz. You have ${
-          MAX_DAILY_QUESTIONS - dailyQuestionsCount
-        } questions remaining today. You're requesting ${requestedQuestionsCount} questions.`,
-        data: {
-          questionsRemaining: MAX_DAILY_QUESTIONS - dailyQuestionsCount,
-          questionsRequested: requestedQuestionsCount,
-          dailyLimit: MAX_DAILY_QUESTIONS,
-        },
-      });
-    }
-
-    // ========================================
-    // 4. CHECK SUBJECT LIMITS
-    // ========================================
-    for (const subject of reqData.subjects) {
-      const existingSubject = dailySubjects.find(
-        (s) => s.subject.toString() === subject._id.toString()
-      );
-      const currentSubjectCount = existingSubject
-        ? existingSubject.questions_count
+      const dailyQuestionsCount = isToday
+        ? currentQuota.daily_questions_count || 0
         : 0;
+      const dailySubjects = isToday ? currentQuota.daily_subjects || [] : [];
 
-      if (
-        currentSubjectCount + QUESTIONS_PER_SUBJECT >
-        MAX_QUESTIONS_PER_SUBJECT
-      ) {
+      const requestedQuestionsCount = reqData.subjects.length * 25;
+
+      if (dailyQuestionsCount + requestedQuestionsCount > 100) {
         return res.status(429).send({
           status: "failed",
-          message: `Subject limit exceeded. You can only answer ${
-            MAX_QUESTIONS_PER_SUBJECT - currentSubjectCount
-          } more questions for this subject today.`,
+          message: `Cannot fetch quiz. You have ${
+            100 - dailyQuestionsCount
+          } questions remaining today.`,
           data: {
-            subjectId: subject._id,
-            questionsRemaining: MAX_QUESTIONS_PER_SUBJECT - currentSubjectCount,
-            subjectLimit: MAX_QUESTIONS_PER_SUBJECT,
+            questionsRemaining: 100 - dailyQuestionsCount,
+            questionsRequested: requestedQuestionsCount,
           },
+        });
+      }
+
+      // Check subject limits
+      for (const subject of reqData.subjects) {
+        const existingSubject = dailySubjects.find(
+          (s) => s.subject.toString() === subject._id.toString()
+        );
+        const currentSubjectCount = existingSubject
+          ? existingSubject.questions_count
+          : 0;
+
+        if (currentSubjectCount + 25 > 50) {
+          return res.status(429).send({
+            status: "failed",
+            message: `Subject limit exceeded. You have ${
+              50 - currentSubjectCount
+            } questions remaining for this subject.`,
+          });
+        }
+      }
+
+      // Check max subjects per day
+      const uniqueSubjectIds = new Set(
+        reqData.subjects.map((s) => s._id.toString())
+      );
+      const existingSubjectIds = new Set(
+        dailySubjects.map((s) => s.subject.toString())
+      );
+      uniqueSubjectIds.forEach((id) => existingSubjectIds.add(id));
+
+      if (existingSubjectIds.size > 2) {
+        return res.status(429).send({
+          status: "failed",
+          message: "You can only practice 2 subjects per day.",
         });
       }
     }
 
-    // ========================================
-    // 5. CHECK MAXIMUM SUBJECTS PER DAY
-    // ========================================
-    const uniqueSubjectIds = new Set(
-      reqData.subjects.map((s) => s._id.toString())
-    );
-    const existingSubjectIds = new Set(
-      dailySubjects.map((s) => s.subject.toString())
-    );
-
-    // Combine both sets to see total unique subjects
-    uniqueSubjectIds.forEach((id) => existingSubjectIds.add(id));
-
-    if (existingSubjectIds.size > MAX_DAILY_SUBJECTS) {
-      return res.status(429).send({
-        status: "failed",
-        message: `You can only practice ${MAX_DAILY_SUBJECTS} subjects per day. You've already practiced different subjects today.`,
-        data: {
-          subjectsLimit: MAX_DAILY_SUBJECTS,
-          subjectsToday: dailySubjects.map((s) => s.subject),
-          requestedSubjects: reqData.subjects.map((s) => s._id),
-        },
-      });
-    }
-
-    // ========================================
-    // 6. PREPARE QUERY PARAMETERS
-    // ========================================
+    // Prepare query
     const subjectIds = reqData.subjects.map(
       (item) => new mongoose.Types.ObjectId(item._id)
     );
@@ -629,55 +580,42 @@ router.post("/premium_quiz", auth, async (req, res) => {
     );
     const categoryId = new mongoose.Types.ObjectId(reqData.categoryId);
 
-    // ========================================
-    // 7. FETCH QUESTIONS WITH SMART PRIORITIZATION
-    // ========================================
     const matchStage = {
       categories: categoryId,
       subject: { $in: subjectIds },
       isTheory: false,
     };
 
-    // Only add topic filter if topics were specified
     if (topicIds.length > 0) {
       matchStage.topic = { $in: topicIds };
     }
 
+    // Fetch questions
     const questions = await Question.aggregate([
-      // Match questions based on criteria
-      {
-        $match: matchStage,
-      },
-      // Add hasAnswered flag and random seed
+      { $match: matchStage },
       {
         $addFields: {
-          hasAnswered: {
-            $in: ["$_id", userQBank],
-          },
+          hasAnswered: { $in: ["$_id", userQBank] },
           randomSeed: { $rand: {} },
         },
       },
-      // Sort: unanswered first (hasAnswered: false = 0), then by random
       {
         $sort: {
-          hasAnswered: 1, // false (0) comes before true (1) - fresh questions first
-          randomSeed: 1, // randomize within each group
+          hasAnswered: 1, // Fresh questions first
+          randomSeed: 1,
         },
       },
-      // Group by subject
       {
         $group: {
           _id: "$subject",
           questions: { $push: "$$ROOT" },
         },
       },
-      // Take first 25 questions per subject (prioritizing unanswered)
       {
         $addFields: {
-          questions: { $slice: ["$questions", QUESTIONS_PER_SUBJECT] },
+          questions: { $slice: ["$questions", 25] },
         },
       },
-      // Lookup subject details
       {
         $lookup: {
           from: "subjects",
@@ -686,10 +624,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
           as: "subjectDetails",
         },
       },
-      {
-        $unwind: "$subjectDetails",
-      },
-      // Format output
+      { $unwind: "$subjectDetails" },
       {
         $project: {
           subject: {
@@ -705,17 +640,11 @@ router.post("/premium_quiz", auth, async (req, res) => {
                 question: "$$q.question",
                 answers: "$$q.answers",
                 timer: "$$q.timer",
-                point: {
-                  $cond: {
-                    if: "$$q.hasAnswered",
-                    then: REPEATED_QUESTION_POINTS, // Override to 0.2 for answered
-                    else: "$$q.point", // Keep original point for fresh
-                  },
-                },
+                point: "$$q.point", // KEEP ORIGINAL - don't override!
                 subject: "$$q.subject",
                 topic: "$$q.topic",
                 categories: "$$q.categories",
-                hasAnswered: "$$q.hasAnswered",
+                hasAnswered: "$$q.hasAnswered", // Only for host's reference
                 isTheory: "$$q.isTheory",
               },
             },
@@ -724,43 +653,24 @@ router.post("/premium_quiz", auth, async (req, res) => {
       },
     ]);
 
-    // ========================================
-    // 8. VALIDATE RESULTS
-    // ========================================
+    // Validate results
     if (questions.length === 0) {
       return res.status(404).send({
         status: "failed",
         message: "No questions found for the selected criteria",
-        data: {
-          categoryId: reqData.categoryId,
-          subjects: reqData.subjects.map((s) => s._id),
-          topics: topicIds.length > 0 ? topicIds : "none specified",
-        },
       });
     }
 
-    // Validate that we got questions for all requested subjects
     if (questions.length !== reqData.subjects.length) {
-      const foundSubjectIds = questions.map((q) => q.subject._id.toString());
-      const missingSubjects = reqData.subjects.filter(
-        (s) => !foundSubjectIds.includes(s._id.toString())
-      );
-
       return res.status(404).send({
         status: "failed",
         message: "Not enough questions available for selected subjects/topics",
-        data: {
-          foundSubjects: foundSubjectIds,
-          missingSubjects: missingSubjects.map((s) => s._id),
-        },
       });
     }
 
-    // Check if any subject has less than required questions
     const insufficientSubjects = questions.filter(
-      (q) => q.questions.length < QUESTIONS_PER_SUBJECT
+      (q) => q.questions.length < 25
     );
-
     if (insufficientSubjects.length > 0) {
       return res.status(404).send({
         status: "failed",
@@ -770,20 +680,17 @@ router.post("/premium_quiz", auth, async (req, res) => {
             subjectId: s.subject._id,
             subjectName: s.subject.name,
             availableQuestions: s.questions.length,
-            requiredQuestions: QUESTIONS_PER_SUBJECT,
+            requiredQuestions: 25,
           })),
         },
       });
     }
 
-    // ========================================
-    // 9. CALCULATE STATISTICS FOR RESPONSE
-    // ========================================
+    // Calculate stats (for host only)
     const stats = {
       totalQuestions: 0,
       freshQuestions: 0,
       answeredQuestions: 0,
-      potentialPoints: 0,
       subjects: [],
     };
 
@@ -794,14 +701,10 @@ router.post("/premium_quiz", auth, async (req, res) => {
         totalQuestions: subjectData.questions.length,
         freshQuestions: 0,
         answeredQuestions: 0,
-        potentialPoints: 0,
       };
 
       subjectData.questions.forEach((q) => {
         stats.totalQuestions++;
-        stats.potentialPoints += q.point;
-        subjectStats.potentialPoints += q.point;
-
         if (q.hasAnswered) {
           stats.answeredQuestions++;
           subjectStats.answeredQuestions++;
@@ -814,24 +717,18 @@ router.post("/premium_quiz", auth, async (req, res) => {
       stats.subjects.push(subjectStats);
     });
 
-    // ========================================
-    // 10. SEND RESPONSE
-    // ========================================
     res.send({
       status: "success",
       data: questions,
       meta: {
-        questionsPerSubject: QUESTIONS_PER_SUBJECT,
-        repeatedQuestionPoints: REPEATED_QUESTION_POINTS,
-        maxDailyQuestions: MAX_DAILY_QUESTIONS,
-        maxQuestionsPerSubject: MAX_QUESTIONS_PER_SUBJECT,
-        maxDailySubjects: MAX_DAILY_SUBJECTS,
-        stats,
-        remainingToday: {
-          totalQuestions: MAX_DAILY_QUESTIONS - dailyQuestionsCount,
-          afterThisQuiz:
-            MAX_DAILY_QUESTIONS - (dailyQuestionsCount + stats.totalQuestions),
-        },
+        mode: mode || "solo",
+        questionsPerSubject: 25,
+        repeatedQuestionPoints: 0.2,
+        stats, // These stats are only accurate for the host
+        note:
+          mode === "friends"
+            ? "Stats shown are for host only. Each player's points will be calculated based on their individual history."
+            : null,
       },
     });
   } catch (error) {
@@ -851,10 +748,11 @@ router.post("/premium_quiz", auth, async (req, res) => {
 router.post("/submit_premium", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  const { questions, type, mode } = data;
+  const { questions, type, mode, sessionId, participantCount, rank, isWinner } =
+    data;
 
   const userInfo = await User.findById(userId).select(
-    "accountType quota quotas points totalPoints qBank"
+    "accountType quota quotas points totalPoints qBank quizStats quizHistory"
   );
 
   if (!userInfo) {
@@ -871,37 +769,22 @@ router.post("/submit_premium", auth, async (req, res) => {
     });
   }
 
-  if (mode !== "solo") {
-    return res.status(422).send({
-      status: "failed",
-      message: "Only solo mode is currently allowed!",
-    });
-  }
-
   try {
     const appInfo = await AppInfo.findOne({ ID: "APP" });
 
-    // Check daily limits BEFORE processing
-    const limitCheck = checkDailyLimits(userInfo, questions);
-    if (!limitCheck.allowed) {
-      return res.status(429).send({
-        status: "failed",
-        message: limitCheck.message,
-        data: {
-          remaining: limitCheck.remaining,
-          dailyQuestionsAnswered: limitCheck.dailyQuestionsCount,
-        },
-      });
-    }
+    // ========================================
+    // CALCULATE POINTS BASED ON THIS USER'S qBank
+    // ========================================
+    const REPEATED_QUESTION_POINTS = 0.2;
+    const userQBank = (userInfo.qBank || []).map((q) => q.toString());
+    const qBankSet = new Set(userQBank);
 
-    // Calculate points based on qBank
-    const pointsResult = calculatePoints(
-      questions,
-      userInfo.qBank || [],
-      appInfo
-    );
+    let totalPoints = 0;
+    const newQuestionIds = [];
+    const answeredQuestionIds = [];
+    let correctAnswers = 0;
+    let totalQuestions = 0;
 
-    // Prepare data structures
     const studentSubjects = [];
     const questionIds = [];
     const questionData = [];
@@ -917,7 +800,34 @@ router.post("/submit_premium", auth, async (req, res) => {
       subjectIds.push(quest.subject._id);
 
       quest.questions.forEach((question) => {
+        totalQuestions++;
         questionIds.push(question._id);
+
+        const questionId = question._id.toString();
+        const isNewQuestion = !qBankSet.has(questionId);
+
+        // Calculate points based on THIS user's history
+        if (question.answered?.correct) {
+          correctAnswers++;
+          if (isNewQuestion) {
+            // Award full points for NEW correct answers
+            totalPoints += question.point;
+            newQuestionIds.push(question._id);
+          } else {
+            // Award 0.2 points for REPEATED correct answers
+            totalPoints += REPEATED_QUESTION_POINTS;
+            answeredQuestionIds.push(question._id);
+          }
+        } else {
+          // Wrong answer - deduct points
+          totalPoints -= appInfo.POINT_FAIL;
+          if (isNewQuestion) {
+            newQuestionIds.push(question._id);
+          } else {
+            answeredQuestionIds.push(question._id);
+          }
+        }
+
         questionData.push({
           question: question.question,
           answers: question.answers,
@@ -935,98 +845,162 @@ router.post("/submit_premium", auth, async (req, res) => {
       });
     });
 
+    totalPoints = Math.max(0, totalPoints);
+
+    // ========================================
+    // UPDATE QUOTA (ONLY FOR SOLO MODE)
+    // ========================================
     const A_DAY = 1000 * 60 * 60 * 24;
     const A_WEEK = 1000 * 60 * 60 * 24 * 7;
-    const currentQuota = userInfo.quota;
 
-    let updatedQuota;
+    if (mode === "solo") {
+      const currentQuota = userInfo.quota;
+      let updatedQuota;
 
-    if (
-      currentQuota &&
-      new Date() - new Date(currentQuota.daily_update) < A_DAY
-    ) {
-      // Same day - update existing quota
-      const dailySubjects = currentQuota.daily_subjects || [];
-
-      // Update subject counts
-      questions.forEach((quest) => {
-        const subjId = quest.subject._id.toString();
-        const existingSubj = dailySubjects.find(
-          (s) => s.subject.toString() === subjId
-        );
-
-        if (existingSubj) {
-          existingSubj.questions_count += quest.questions.length;
-        } else {
-          dailySubjects.push({
-            subject: quest.subject._id,
-            questions_count: quest.questions.length,
-            date: Date.now(),
-          });
-        }
-      });
-
-      updatedQuota = {
-        last_update: Date.now(),
-        daily_update: currentQuota.daily_update,
-        weekly_update: currentQuota.weekly_update,
-        point_per_week: pointsResult.totalPoints + currentQuota.point_per_week,
-        subjects: currentQuota.subjects.concat(studentSubjects),
-        daily_questions: currentQuota.daily_questions.concat(questionIds),
-        daily_questions_count:
-          (currentQuota.daily_questions_count || 0) + questionIds.length,
-        daily_subjects: dailySubjects,
-      };
-
-      // Check if week has passed
-      if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
-        userInfo.quotas?.push(currentQuota);
-        updatedQuota.weekly_update = Date.now();
-        updatedQuota.point_per_week = pointsResult.totalPoints;
-      }
-    } else {
-      // New day - reset daily counters
-      const dailySubjects = questions.map((quest) => ({
-        subject: quest.subject._id,
-        questions_count: quest.questions.length,
-        date: Date.now(),
-      }));
-
-      updatedQuota = {
-        last_update: Date.now(),
-        daily_update: Date.now(),
-        weekly_update: currentQuota?.weekly_update || Date.now(),
-        point_per_week: currentQuota
-          ? pointsResult.totalPoints + currentQuota.point_per_week
-          : pointsResult.totalPoints,
-        subjects: studentSubjects,
-        daily_questions: questionIds,
-        daily_questions_count: questionIds.length,
-        daily_subjects: dailySubjects,
-      };
-
-      // Check if week has passed
       if (
         currentQuota &&
-        new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+        new Date() - new Date(currentQuota.daily_update) < A_DAY
       ) {
-        userInfo.quotas?.push(currentQuota);
-        updatedQuota.weekly_update = Date.now();
-        updatedQuota.point_per_week = pointsResult.totalPoints;
+        const dailySubjects = currentQuota.daily_subjects || [];
+
+        questions.forEach((quest) => {
+          const subjId = quest.subject._id.toString();
+          const existingSubj = dailySubjects.find(
+            (s) => s.subject.toString() === subjId
+          );
+
+          if (existingSubj) {
+            existingSubj.questions_count += quest.questions.length;
+          } else {
+            dailySubjects.push({
+              subject: quest.subject._id,
+              questions_count: quest.questions.length,
+              date: Date.now(),
+            });
+          }
+        });
+
+        updatedQuota = {
+          last_update: Date.now(),
+          daily_update: currentQuota.daily_update,
+          weekly_update: currentQuota.weekly_update,
+          point_per_week: totalPoints + currentQuota.point_per_week,
+          subjects: currentQuota.subjects.concat(studentSubjects),
+          daily_questions: currentQuota.daily_questions.concat(questionIds),
+          daily_questions_count:
+            (currentQuota.daily_questions_count || 0) + questionIds.length,
+          daily_subjects: dailySubjects,
+        };
+
+        if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
+          userInfo.quotas?.push(currentQuota);
+          updatedQuota.weekly_update = Date.now();
+          updatedQuota.point_per_week = totalPoints;
+        }
+      } else {
+        const dailySubjects = questions.map((quest) => ({
+          subject: quest.subject._id,
+          questions_count: quest.questions.length,
+          date: Date.now(),
+        }));
+
+        updatedQuota = {
+          last_update: Date.now(),
+          daily_update: Date.now(),
+          weekly_update: currentQuota?.weekly_update || Date.now(),
+          point_per_week: currentQuota
+            ? totalPoints + currentQuota.point_per_week
+            : totalPoints,
+          subjects: studentSubjects,
+          daily_questions: questionIds,
+          daily_questions_count: questionIds.length,
+          daily_subjects: dailySubjects,
+        };
+
+        if (
+          currentQuota &&
+          new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+        ) {
+          userInfo.quotas?.push(currentQuota);
+          updatedQuota.weekly_update = Date.now();
+          updatedQuota.point_per_week = totalPoints;
+        }
+      }
+
+      userInfo.quota = updatedQuota;
+    }
+
+    // ========================================
+    // UPDATE USER POINTS & qBank
+    // ========================================
+    userInfo.points += totalPoints;
+    userInfo.totalPoints += totalPoints;
+    userInfo.qBank = userInfo.qBank.concat(newQuestionIds);
+
+    // ========================================
+    // UPDATE QUIZ STATS
+    // ========================================
+    if (!userInfo.quizStats) {
+      userInfo.quizStats = {};
+    }
+
+    userInfo.quizStats.totalQuizzes =
+      (userInfo.quizStats.totalQuizzes || 0) + 1;
+
+    if (mode === "solo") {
+      userInfo.quizStats.totalSoloQuizzes =
+        (userInfo.quizStats.totalSoloQuizzes || 0) + 1;
+    } else if (mode === "friends") {
+      userInfo.quizStats.totalMultiplayerQuizzes =
+        (userInfo.quizStats.totalMultiplayerQuizzes || 0) + 1;
+
+      if (isWinner) {
+        userInfo.quizStats.totalWins = (userInfo.quizStats.totalWins || 0) + 1;
+        userInfo.quizStats.multiplayerStats.wins =
+          (userInfo.quizStats.multiplayerStats?.wins || 0) + 1;
+      }
+
+      if (rank === 2) {
+        userInfo.quizStats.multiplayerStats.secondPlace =
+          (userInfo.quizStats.multiplayerStats?.secondPlace || 0) + 1;
+      } else if (rank === 3) {
+        userInfo.quizStats.multiplayerStats.thirdPlace =
+          (userInfo.quizStats.multiplayerStats?.thirdPlace || 0) + 1;
       }
     }
 
-    // Update user info
-    userInfo.quota = updatedQuota;
-    userInfo.points += pointsResult.totalPoints;
-    userInfo.totalPoints += pointsResult.totalPoints;
+    userInfo.quizStats.totalCorrectAnswers =
+      (userInfo.quizStats.totalCorrectAnswers || 0) + correctAnswers;
+    userInfo.quizStats.totalQuestionsAnswered =
+      (userInfo.quizStats.totalQuestionsAnswered || 0) + totalQuestions;
 
-    // Add only NEW questions to qBank
-    userInfo.qBank = userInfo.qBank.concat(pointsResult.newQuestionIds);
+    // ========================================
+    // ADD TO QUIZ HISTORY
+    // ========================================
+    const quizSession = {
+      quizId: null, // Set after creating Quiz document
+      sessionId: sessionId || new mongoose.Types.ObjectId().toString(),
+      mode,
+      type,
+      pointsEarned: totalPoints,
+      correctAnswers,
+      totalQuestions,
+      rank: rank || null,
+      isWinner: isWinner || false,
+      participantCount: participantCount || 1,
+      date: Date.now(),
+    };
+
+    if (!userInfo.quizHistory) {
+      userInfo.quizHistory = [];
+    }
+    userInfo.quizHistory.push(quizSession);
 
     await userInfo.save();
 
-    // Save quiz info
+    // ========================================
+    // SAVE QUIZ DOCUMENT
+    // ========================================
     const newQuiz = new Quiz({
       user: userId,
       mode,
@@ -1034,6 +1008,7 @@ router.post("/submit_premium", auth, async (req, res) => {
       questions: questionData,
       subjects: subjectIds,
       topics: topicIds,
+      sessionId: quizSession.sessionId,
     });
 
     await newQuiz.save();
@@ -1041,11 +1016,20 @@ router.post("/submit_premium", auth, async (req, res) => {
     res.send({
       status: "success",
       data: {
-        pointsEarned: pointsResult.totalPoints,
-        newQuestionsAnswered: pointsResult.newQuestionsCount,
-        repeatedQuestions: pointsResult.repeatedQuestionsCount,
-        dailyQuestionsRemaining: 100 - updatedQuota.daily_questions_count,
-        dailyQuestionsAnswered: updatedQuota.daily_questions_count,
+        pointsEarned: totalPoints,
+        newQuestionsAnswered: newQuestionIds.length,
+        repeatedQuestions: answeredQuestionIds.length,
+        correctAnswers,
+        totalQuestions,
+        accuracy: ((correctAnswers / totalQuestions) * 100).toFixed(2),
+        ...(mode === "solo"
+          ? {
+              dailyQuestionsRemaining:
+                100 - (userInfo.quota?.daily_questions_count || 0),
+              dailyQuestionsAnswered:
+                userInfo.quota?.daily_questions_count || 0,
+            }
+          : {}),
       },
     });
   } catch (err) {
