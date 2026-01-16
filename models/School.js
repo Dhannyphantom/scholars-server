@@ -257,7 +257,7 @@ const assignmentSchema = new schema({
   },
   status: {
     type: String,
-    enum: ["ongoing", "inactive"],
+    enum: ["ongoing", "finished", "inactive"],
     default: "ongoing",
   },
   date: {

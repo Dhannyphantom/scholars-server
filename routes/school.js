@@ -1015,7 +1015,7 @@ router.get("/fetch", auth, async (req, res) => {
   let assignmentCount, announcementCount, classCount, quizCount;
 
   if (school) {
-    reconcileSchool(school);
+    await reconcileSchool(school);
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
 
@@ -1140,6 +1140,8 @@ router.get("/assignments", auth, async (req, res) => {
       },
     ])
     .select("assignments classes");
+
+  await reconcileSchool(school);
 
   if (!school)
     return res
@@ -1327,6 +1329,7 @@ router.get("/assignment", auth, async (req, res) => {
     });
   }
 
+  await reconcileSchool(school);
   // Find the specific assignment
   const assignment = school.assignments.find(
     (a) => a._id.toString() === assignmentId
@@ -1425,6 +1428,141 @@ router.post("/assignment/grade", auth, async (req, res) => {
     message: "Assignment graded successfully",
     data: submission,
   });
+});
+
+router.post("/assignment/publish", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, assignmentId } = req.body;
+
+  try {
+    // Validate input
+    if (!schoolId || !assignmentId) {
+      return res.status(400).send({
+        status: "failed",
+        message: "School ID and Assignment ID are required",
+      });
+    }
+
+    // Check if user is a teacher
+    const userInfo = await User.findById(userId).select("accountType name");
+    if (!userInfo) {
+      return res.status(422).send({
+        status: "failed",
+        message: "User not found",
+      });
+    }
+
+    if (userInfo.accountType !== "teacher") {
+      return res.status(403).send({
+        status: "failed",
+        message: "Only teachers can publish assignments",
+      });
+    }
+
+    // Get school and assignment
+    const school = await School.findById(schoolId);
+    if (!school) {
+      return res.status(422).send({
+        status: "failed",
+        message: "School not found",
+      });
+    }
+
+    const assignment = school.assignments.id(assignmentId);
+    if (!assignment) {
+      return res.status(404).send({
+        status: "failed",
+        message: "Assignment not found",
+      });
+    }
+
+    // Check if user is the owner of the assignment
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).send({
+        status: "failed",
+        message: "You are not authorized to publish this assignment",
+      });
+    }
+
+    // Check if assignment has expired
+    if (assignment.expiry) {
+      const currentDate = new Date();
+      if (currentDate < assignment.expiry) {
+        return res.status(400).send({
+          status: "failed",
+          message: "Cannot publish assignment before submission date",
+        });
+      }
+    }
+
+    // Check that all submissions have been scored
+    const unscoredSubmissions = assignment.submissions.filter(
+      (submission) =>
+        submission.score?.value === undefined ||
+        submission.score?.value === null
+    );
+
+    if (unscoredSubmissions.length > 0) {
+      return res.status(400).send({
+        status: "failed",
+        message: `${unscoredSubmissions.length} submission(s) have not been scored yet`,
+      });
+    }
+
+    // Push current submissions to history
+    if (assignment.submissions.length > 0) {
+      const historyEntry = {
+        participants: assignment.submissions.map((submission) => ({
+          student: submission.student,
+          score: submission.score,
+          solution: submission.solution,
+          date: submission.date,
+        })),
+        createdAt: new Date(),
+      };
+
+      assignment.history.push(historyEntry);
+    }
+
+    // Reset submissions array
+    assignment.submissions = [];
+
+    // Set assignment status to inactive
+    assignment.status = "inactive";
+
+    // Create announcement
+    const announcement = {
+      teacher: userId,
+      message: `${userInfo.name} has published scores for "${assignment.title}"`,
+      type: "school",
+      classes: assignment.classes,
+      visibility: "class",
+      date: new Date(),
+    };
+
+    school.announcements.push(announcement);
+
+    // Save school
+    await school.save();
+
+    res.send({
+      status: "success",
+      message: "Assignment published successfully",
+      data: {
+        assignment: {
+          _id: assignment._id,
+          title: assignment.title,
+          status: assignment.status,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error publishing assignment:", error);
+    res.status(500).send({
+      status: "failed",
+      message: "An error occurred while publishing the assignment",
+    });
+  }
 });
 
 router.post("/assignment/submit", auth, async (req, res) => {

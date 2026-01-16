@@ -228,20 +228,27 @@ module.exports.checkUserSub = async (userInfo) => {
 
 const reconcileSchool = async (school) => {
   // CHECK AND UPDATE ASSIGNMENT SUBMISSINOS;
-  const schoolObj = school?.toObject();
-  const today = new Date();
-  school.assignments = schoolObj.assignments.map((assignment) => {
-    if (today > new Date(assignment?.expiry)) {
-      return {
-        ...assignment,
-        status: "inactive",
-      };
-    } else {
-      return assignment;
-    }
-  });
+  try {
+    const schoolObj = school?.toObject();
+    const today = new Date();
+    school.assignments = schoolObj.assignments.map((assignment) => {
+      if (
+        today > new Date(assignment?.expiry) &&
+        assignment?.status === "ongoing"
+      ) {
+        return {
+          ...assignment,
+          status: "finished",
+        };
+      } else {
+        return assignment;
+      }
+    });
 
-  await school.save();
+    await school.save();
+  } catch (errr) {
+    console.log("Reconcile school Err: ", errr);
+  }
 };
 
 module.exports.getFullName = (user, usernameFallback) => {
