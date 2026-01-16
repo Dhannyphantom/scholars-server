@@ -1149,7 +1149,7 @@ router.get("/assignments", auth, async (req, res) => {
   let data;
   if (userInfo.accountType == "teacher") {
     data = school.assignments
-      .filter((item) => item.teacher.toString() == userId)
+      .filter((item) => item?.teacher?._id.toString() == userId)
       .map((item) => {
         let len = 0;
         item.classes.forEach((classItem) => {
@@ -1242,6 +1242,7 @@ router.get("/assignments", auth, async (req, res) => {
 
   res.send({ status: "success", data });
 });
+
 router.post("/assignment", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
@@ -1308,7 +1309,16 @@ router.get("/assignment", auth, async (req, res) => {
   const school = await School.findOne({
     _id: schoolId,
     "assignments._id": assignmentId,
-  }).populate("assignments.teacher", "username avatar firstName lastName");
+  }).populate([
+    {
+      path: "assignments.teacher",
+      select: "username avatar firstName lastName",
+    },
+    {
+      path: "assignments.submissions.student",
+      select: "username avatar firstName class lastName",
+    },
+  ]);
 
   if (!school) {
     return res.status(404).json({
@@ -1327,7 +1337,7 @@ router.get("/assignment", auth, async (req, res) => {
 
 router.post("/assignment/grade", auth, async (req, res) => {
   const userId = req.user.userId;
-  const { schoolId, assignmentId, score, user } = req.query;
+  const { schoolId, assignmentId, score, user } = req.body;
 
   // Validate user authentication
   if (!userId) {
@@ -1338,7 +1348,7 @@ router.post("/assignment/grade", auth, async (req, res) => {
   }
 
   // Validate required query parameters
-  if (!schoolId || !assignmentId || score || user) {
+  if (!schoolId || !assignmentId || !score || !user) {
     return res.status(400).json({
       success: false,
       message: "Missing fields are required",
@@ -1408,7 +1418,7 @@ router.post("/assignment/grade", auth, async (req, res) => {
 
   submission.score = userScore;
 
-  await submission.save();
+  await school.save();
 
   res.send({
     success: true,

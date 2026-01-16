@@ -258,13 +258,13 @@ const getGrade = (score) => {
   let grade = "";
   if (score >= 95) {
     grade = "A+";
-  } else if (score > 70 && score < 95) {
+  } else if (score >= 70 && score < 95) {
     grade = "A";
-  } else if (score > 60 && score < 70) {
+  } else if (score >= 60 && score < 70) {
     grade = "B";
-  } else if (score > 50 && score < 60) {
+  } else if (score >= 50 && score < 60) {
     grade = "C";
-  } else if (score > 40 && score < 50) {
+  } else if (score >= 40 && score < 50) {
     grade = "D";
   } else if (score >= 30 && score < 40) {
     grade = "E";
