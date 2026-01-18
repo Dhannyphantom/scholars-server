@@ -1560,6 +1560,8 @@ router.get("/suggestions", auth, async (req, res) => {
       ...(currentUser.followers || []).map((id) => id.toString()),
     ]);
 
+    const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
+
     // Build match criteria with scoring weights
     const matchPipeline = [
       // Exclude current user and existing connections
@@ -1570,7 +1572,84 @@ router.get("/suggestions", auth, async (req, res) => {
               (id) => new mongoose.Types.ObjectId(id)
             ),
           },
-          // isActive: true, // Only active users
+          accountType: "student", // Only students
+        },
+      },
+
+      /* ===========================
+         SCHOOL LOOKUP & VERIFICATION
+      ============================ */
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $in: ["$$userId", "$students.user"],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                type: 1,
+                state: 1,
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+
+      // Transform school data
+      {
+        $addFields: {
+          schoolInfo: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              {
+                _id: { $arrayElemAt: ["$schoolData._id", 0] },
+                name: { $arrayElemAt: ["$schoolData.name", 0] },
+                type: { $arrayElemAt: ["$schoolData.type", 0] },
+                state: { $arrayElemAt: ["$schoolData.state", 0] },
+                verified: {
+                  $arrayElemAt: ["$schoolData.studentRecord.verified", 0],
+                },
+              },
+              null,
+            ],
+          },
+        },
+      },
+
+      // FILTER: Only verified students with schools
+      {
+        $match: {
+          "schoolInfo.verified": true,
+        },
+      },
+
+      // Normalize arrays for safe operations
+      {
+        $addFields: {
+          followers: { $ifNull: ["$followers", []] },
+          following: { $ifNull: ["$following", []] },
+          subjects: { $ifNull: ["$subjects", []] },
         },
       },
 
@@ -1583,8 +1662,8 @@ router.get("/suggestions", auth, async (req, res) => {
               {
                 $and: [
                   { $ne: [currentUser.school, null] },
-                  { $ne: ["$school", null] },
-                  { $ne: ["$school", currentUser.school] },
+                  { $ne: ["$schoolInfo._id", null] },
+                  { $ne: ["$schoolInfo._id", currentUser.school] },
                 ],
               },
               20,
@@ -1598,7 +1677,7 @@ router.get("/suggestions", auth, async (req, res) => {
               {
                 $and: [
                   { $ne: [currentUser.state, null] },
-                  { $eq: ["$state", currentUser.state] },
+                  { $eq: ["$schoolInfo.state", currentUser.state] },
                 ],
               },
               15,
@@ -1628,60 +1707,28 @@ router.get("/suggestions", auth, async (req, res) => {
           // Mutual followers score (STRONGEST social proof)
           mutualFollowersCount: {
             $size: {
-              $ifNull: [
-                {
-                  $setIntersection: [
-                    { $ifNull: ["$followers", []] },
-                    currentUser.following || [],
-                  ],
-                },
-                [],
-              ],
+              $setIntersection: ["$followers", currentUser.following || []],
             },
           },
 
           // Mutual following score (bidirectional connections)
           mutualFollowingCount: {
             $size: {
-              $ifNull: [
-                {
-                  $setIntersection: [
-                    { $ifNull: ["$following", []] },
-                    currentUser.following || [],
-                  ],
-                },
-                [],
-              ],
+              $setIntersection: ["$following", currentUser.following || []],
             },
           },
 
           // People who follow YOU that also follow this user (strong relevance)
           yourFollowersAlsoFollowCount: {
             $size: {
-              $ifNull: [
-                {
-                  $setIntersection: [
-                    { $ifNull: ["$followers", []] },
-                    currentUser.followers || [],
-                  ],
-                },
-                [],
-              ],
+              $setIntersection: ["$followers", currentUser.followers || []],
             },
           },
 
           // People YOU follow who also follow this user (discovered through network)
           followedByYourNetworkCount: {
             $size: {
-              $ifNull: [
-                {
-                  $setIntersection: [
-                    { $ifNull: ["$followers", []] },
-                    currentUser.following || [],
-                  ],
-                },
-                [],
-              ],
+              $setIntersection: ["$followers", currentUser.following || []],
             },
           },
         },
@@ -1704,22 +1751,18 @@ router.get("/suggestions", auth, async (req, res) => {
       // Popular user bonus (social proof through follower count)
       {
         $addFields: {
+          followersCount: { $size: "$followers" },
+          followingCount: { $size: "$following" },
           popularityScore: {
             $cond: [
-              { $gte: [{ $size: { $ifNull: ["$followers", []] } }, 50] },
+              { $gte: [{ $size: "$followers" }, 50] },
               15,
               {
                 $cond: [
-                  { $gte: [{ $size: { $ifNull: ["$followers", []] } }, 20] },
+                  { $gte: [{ $size: "$followers" }, 20] },
                   10,
                   {
-                    $cond: [
-                      {
-                        $gte: [{ $size: { $ifNull: ["$followers", []] } }, 10],
-                      },
-                      5,
-                      0,
-                    ],
+                    $cond: [{ $gte: [{ $size: "$followers" }, 10] }, 5, 0],
                   },
                 ],
               },
@@ -1783,15 +1826,7 @@ router.get("/suggestions", auth, async (req, res) => {
             $multiply: [
               {
                 $size: {
-                  $ifNull: [
-                    {
-                      $setIntersection: [
-                        { $ifNull: ["$subjects", []] },
-                        currentUser.subjects || [],
-                      ],
-                    },
-                    [],
-                  ],
+                  $setIntersection: ["$subjects", currentUser.subjects || []],
                 },
               },
               8,
@@ -1813,6 +1848,46 @@ router.get("/suggestions", auth, async (req, res) => {
               },
               10,
               0,
+            ],
+          },
+        },
+      },
+
+      // Mutual connections count (for status field)
+      {
+        $addFields: {
+          mutualsCount: {
+            $size: {
+              $setIntersection: ["$followers", "$following"],
+            },
+          },
+        },
+      },
+
+      // Relationship flags relative to current user
+      {
+        $addFields: {
+          isFollowing: { $in: [currentUserObjectId, "$followers"] },
+          isFollower: { $in: [currentUserObjectId, "$following"] },
+        },
+      },
+
+      // Friend status (same logic as search_students)
+      {
+        $addFields: {
+          status: {
+            $cond: [
+              { $and: ["$isFollowing", "$isFollower"] },
+              "mutual",
+              {
+                $cond: [
+                  "$isFollowing",
+                  "following",
+                  {
+                    $cond: ["$isFollower", "follower", null],
+                  },
+                ],
+              },
             ],
           },
         },
@@ -1856,14 +1931,16 @@ router.get("/suggestions", auth, async (req, res) => {
           lastName: 1,
           avatar: 1,
           accountType: 1,
-          school: 1,
+          school: "$schoolInfo",
           "class.level": 1,
           points: 1,
           totalPoints: 1,
           streak: 1,
           verified: 1,
-          followers: { $size: { $ifNull: ["$followers", []] } },
-          following: { $size: { $ifNull: ["$following", []] } },
+          followersCount: 1,
+          followingCount: 1,
+          mutualsCount: 1,
+          status: 1,
 
           // Include match details for transparency
           matchDetails: {
@@ -1872,23 +1949,15 @@ router.get("/suggestions", auth, async (req, res) => {
               mutualConnections: "$mutualFollowersCount",
               followedByYourNetwork: "$followedByYourNetworkCount",
               yourFollowersAlsoFollow: "$yourFollowersAlsoFollowCount",
-              totalFollowers: { $size: { $ifNull: ["$followers", []] } },
-              totalFollowing: { $size: { $ifNull: ["$following", []] } },
+              totalFollowers: "$followersCount",
+              totalFollowing: "$followingCount",
             },
             academicMatch: {
               sameClass: { $gt: ["$classScore", 0] },
               classLevel: "$class.level",
               sharedSubjects: {
                 $size: {
-                  $ifNull: [
-                    {
-                      $setIntersection: [
-                        { $ifNull: ["$subjects", []] },
-                        currentUser.subjects || [],
-                      ],
-                    },
-                    [],
-                  ],
+                  $setIntersection: ["$subjects", currentUser.subjects || []],
                 },
               },
             },
@@ -1906,13 +1975,7 @@ router.get("/suggestions", auth, async (req, res) => {
 
     const suggestions = await User.aggregate(matchPipeline);
 
-    // Populate school details if needed
-    await User.populate(suggestions, {
-      path: "school",
-      select: "name type",
-    });
-
-    // Get total count for pagination
+    // Get total count for pagination (with verified school filter)
     const totalCountPipeline = [
       {
         $match: {
@@ -1921,7 +1984,55 @@ router.get("/suggestions", auth, async (req, res) => {
               (id) => new mongoose.Types.ObjectId(id)
             ),
           },
-          isActive: true,
+          accountType: "student",
+        },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $in: ["$$userId", "$students.user"],
+                },
+              },
+            },
+            {
+              $project: {
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          isVerified: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+              false,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          isVerified: true,
         },
       },
       ...(accountType ? [{ $match: { accountType } }] : []),
@@ -1973,68 +2084,170 @@ router.get("/suggestions/smart", auth, async (req, res) => {
       ...(currentUser.followers || []).map((id) => id.toString()),
     ]);
 
+    const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
+
+    // Base pipeline for verified students
+    const getVerifiedStudentsPipeline = (additionalMatch = {}) => [
+      {
+        $match: {
+          _id: { $nin: Array.from(excludedUserIds) },
+          accountType: "student",
+          ...additionalMatch,
+        },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $in: ["$$userId", "$students.user"] },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                type: 1,
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          school: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              {
+                _id: { $arrayElemAt: ["$schoolData._id", 0] },
+                name: { $arrayElemAt: ["$schoolData.name", 0] },
+                type: { $arrayElemAt: ["$schoolData.type", 0] },
+                verified: {
+                  $arrayElemAt: ["$schoolData.studentRecord.verified", 0],
+                },
+              },
+              null,
+            ],
+          },
+        },
+      },
+      {
+        $match: { "school.verified": true },
+      },
+      {
+        $addFields: {
+          followers: { $ifNull: ["$followers", []] },
+          following: { $ifNull: ["$following", []] },
+        },
+      },
+      {
+        $addFields: {
+          followersCount: { $size: "$followers" },
+          followingCount: { $size: "$following" },
+          mutualsCount: {
+            $size: { $setIntersection: ["$followers", "$following"] },
+          },
+          isFollowing: { $in: [currentUserObjectId, "$followers"] },
+          isFollower: { $in: [currentUserObjectId, "$following"] },
+        },
+      },
+      {
+        $addFields: {
+          status: {
+            $cond: [
+              { $and: ["$isFollowing", "$isFollower"] },
+              "mutual",
+              {
+                $cond: [
+                  "$isFollowing",
+                  "following",
+                  { $cond: ["$isFollower", "follower", null] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          username: 1,
+          firstName: 1,
+          lastName: 1,
+          avatar: 1,
+          accountType: 1,
+          school: 1,
+          "class.level": 1,
+          points: 1,
+          verified: 1,
+          streak: 1,
+          followersCount: 1,
+          followingCount: 1,
+          mutualsCount: 1,
+          status: 1,
+        },
+      },
+    ];
+
     // Get categorized suggestions
     const [
-      sameschoolUsers,
+      sameSchoolUsers,
       sameClassUsers,
       mutualConnectionUsers,
       activeUsers,
     ] = await Promise.all([
       // Same school
       currentUser.school
-        ? User.find({
-            _id: { $nin: Array.from(excludedUserIds) },
-            school: currentUser.school,
-            isActive: true,
-          })
-            .select(
-              "username firstName lastName avatar accountType school class.level points verified"
-            )
-            .populate("school", "name type")
-            .limit(10)
-            .lean()
+        ? User.aggregate([
+            ...getVerifiedStudentsPipeline({
+              school: currentUser.school,
+            }),
+            { $limit: 10 },
+          ])
         : [],
 
       // Same class level
       currentUser.class?.level
-        ? User.find({
-            _id: { $nin: Array.from(excludedUserIds) },
-            "class.level": currentUser.class.level,
-            isActive: true,
-          })
-            .select(
-              "username firstName lastName avatar accountType class.level points verified"
-            )
-            .limit(10)
-            .lean()
+        ? User.aggregate([
+            ...getVerifiedStudentsPipeline({
+              "class.level": currentUser.class.level,
+            }),
+            { $limit: 10 },
+          ])
         : [],
 
-      // Mutual connections (people followed by people you follow)
-      User.find({
-        _id: { $nin: Array.from(excludedUserIds) },
-        followers: { $in: currentUser.following || [] },
-        isActive: true,
-      })
-        .select(
-          "username firstName lastName avatar accountType points verified followers"
-        )
-        .limit(10)
-        .lean(),
+      // Mutual connections
+      User.aggregate([
+        ...getVerifiedStudentsPipeline({
+          followers: { $in: currentUser.following || [] },
+        }),
+        { $limit: 10 },
+      ]),
 
-      // Recently active users
-      User.find({
-        _id: { $nin: Array.from(excludedUserIds) },
-        "quota.last_update": {
-          $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-        },
-        isActive: true,
-      })
-        .select(
-          "username firstName lastName avatar accountType points verified streak"
-        )
-        .sort({ "quota.last_update": -1 })
-        .limit(10)
-        .lean(),
+      // Recently active
+      User.aggregate([
+        ...getVerifiedStudentsPipeline({
+          "quota.last_update": {
+            $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+          },
+        }),
+        { $sort: { "quota.last_update": -1 } },
+        { $limit: 10 },
+      ]),
     ]);
 
     return res.json({
@@ -2043,8 +2256,8 @@ router.get("/suggestions/smart", auth, async (req, res) => {
         categories: {
           sameSchool: {
             title: "From Your School",
-            users: sameschoolUsers,
-            count: sameschoolUsers.length,
+            users: sameSchoolUsers,
+            count: sameSchoolUsers.length,
           },
           sameClass: {
             title: "In Your Class",
