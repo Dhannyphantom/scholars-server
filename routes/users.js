@@ -319,10 +319,10 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
           _id: 1,
         },
       },
-      // Add rank using window functions
+      // Add rank using window functions - FIXED: single field only
       {
         $setWindowFields: {
-          sortBy: { questionsCount: -1, _id: 1 },
+          sortBy: { questionsCount: -1 },
           output: {
             rank: {
               $rank: {},
@@ -384,9 +384,10 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
           _id: 1,
         },
       },
+      // FIXED: single field only in sortBy
       {
         $setWindowFields: {
-          sortBy: { questionsCount: -1, _id: 1 },
+          sortBy: { questionsCount: -1 },
           output: {
             rank: {
               $rank: {},

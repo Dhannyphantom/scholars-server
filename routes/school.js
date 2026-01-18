@@ -2078,6 +2078,7 @@ router.patch("/assignment", auth, async (req, res) => {
  * School-specific leaderboard for current user's school
  * Only shows verified students from the same school
  */
+
 router.get("/leaderboard", auth, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
@@ -2091,16 +2092,14 @@ router.get("/leaderboard", auth, async (req, res) => {
 
     const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
 
-    // Get current user's school
-    const currentUser = await User.findById(currentUserId)
-      .select("school class.level")
+    // Find which school the current user belongs to
+    const userSchool = await School.findOne({
+      "students.user": currentUserObjectId,
+    })
+      .select("_id name type state")
       .lean();
 
-    if (!currentUser) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    if (!currentUser.school) {
+    if (!userSchool) {
       return res.status(400).json({
         error: "No school affiliation",
         message:
@@ -2151,23 +2150,22 @@ router.get("/leaderboard", auth, async (req, res) => {
       {
         $match: {
           accountType: "student",
-          school: currentUser.school,
           ...dateFilter,
           ...classFilter,
         },
       },
 
-      // Verify student is in school's student list
+      // Verify student is in school's student list and get verification status
       {
         $lookup: {
           from: "schools",
-          let: { userId: "$_id", schoolId: "$school" },
+          let: { userId: "$_id" },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $and: [
-                    { $eq: ["$_id", "$$schoolId"] },
+                    { $eq: ["$_id", userSchool._id] },
                     { $in: ["$$userId", "$students.user"] },
                   ],
                 },
@@ -2217,7 +2215,7 @@ router.get("/leaderboard", auth, async (req, res) => {
         },
       },
 
-      // Only verified students
+      // Only verified students who are in this school
       {
         $match: {
           "schoolInfo.verified": true,
@@ -2293,7 +2291,6 @@ router.get("/leaderboard", auth, async (req, res) => {
       {
         $match: {
           accountType: "student",
-          school: currentUser.school,
           ...dateFilter,
           ...classFilter,
         },
@@ -2301,13 +2298,13 @@ router.get("/leaderboard", auth, async (req, res) => {
       {
         $lookup: {
           from: "schools",
-          let: { userId: "$_id", schoolId: "$school" },
+          let: { userId: "$_id" },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $and: [
-                    { $eq: ["$_id", "$$schoolId"] },
+                    { $eq: ["$_id", userSchool._id] },
                     { $in: ["$$userId", "$students.user"] },
                   ],
                 },
@@ -2385,71 +2382,67 @@ router.get("/leaderboard", auth, async (req, res) => {
 
     const currentUserRank = await User.aggregate(currentUserRankPipeline);
 
-    // Get total count and school info
-    const [totalResult, schoolInfo] = await Promise.all([
-      User.aggregate([
-        {
-          $match: {
-            accountType: "student",
-            school: currentUser.school,
-            ...dateFilter,
-            ...classFilter,
-          },
+    // Get total count
+    const totalResult = await User.aggregate([
+      {
+        $match: {
+          accountType: "student",
+          ...dateFilter,
+          ...classFilter,
         },
-        {
-          $lookup: {
-            from: "schools",
-            let: { userId: "$_id", schoolId: "$school" },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: ["$_id", "$$schoolId"] },
-                      { $in: ["$$userId", "$students.user"] },
-                    ],
-                  },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", userSchool._id] },
+                    { $in: ["$$userId", "$students.user"] },
+                  ],
                 },
               },
-              {
-                $project: {
-                  studentRecord: {
-                    $arrayElemAt: [
-                      {
-                        $filter: {
-                          input: "$students",
-                          as: "s",
-                          cond: { $eq: ["$$s.user", "$$userId"] },
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                },
-              },
-            ],
-            as: "schoolData",
-          },
-        },
-        {
-          $addFields: {
-            isVerified: {
-              $cond: [
-                { $gt: [{ $size: "$schoolData" }, 0] },
-                { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
-                false,
-              ],
             },
+            {
+              $project: {
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          isVerified: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+              false,
+            ],
           },
         },
-        {
-          $match: {
-            isVerified: true,
-          },
+      },
+      {
+        $match: {
+          isVerified: true,
         },
-        { $count: "total" },
-      ]),
-      School.findById(currentUser.school).select("name type state").lean(),
+      },
+      { $count: "total" },
     ]);
 
     const totalUsers = totalResult.length > 0 ? totalResult[0].total : 0;
@@ -2458,7 +2451,7 @@ router.get("/leaderboard", auth, async (req, res) => {
       success: true,
       data: {
         leaderboard,
-        school: schoolInfo,
+        school: userSchool,
         currentUser: currentUserRank.length > 0 ? currentUserRank[0] : null,
         pagination: {
           total: totalUsers,
