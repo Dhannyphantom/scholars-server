@@ -435,7 +435,6 @@ module.exports = {
   getCurrencyAmount,
   classsSchoolEnums,
   getGrade,
-  updateUserQuota,
   getUploadUri,
   checkDailyLimits,
   calculatePoints,
