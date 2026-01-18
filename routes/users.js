@@ -458,6 +458,11 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
  * Global leaderboard for all verified students
  * Supports pagination and filtering by timeframe
  */
+/**
+ * GET /api/leaderboard/global
+ * Global leaderboard for all verified students
+ * Supports pagination and filtering by timeframe
+ */
 router.get("/leaderboard/global", auth, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
@@ -592,7 +597,12 @@ router.get("/leaderboard/global", auth, async (req, res) => {
       // Add rank before pagination
       {
         $setWindowFields: {
-          sortBy: sortField,
+          sortBy:
+            sortBy === "points"
+              ? { points: -1 }
+              : sortBy === "streak"
+              ? { streak: -1 }
+              : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},
@@ -693,7 +703,12 @@ router.get("/leaderboard/global", auth, async (req, res) => {
       { $sort: { ...sortField, _id: 1 } },
       {
         $setWindowFields: {
-          sortBy: sortField,
+          sortBy:
+            sortBy === "points"
+              ? { points: -1 }
+              : sortBy === "streak"
+              ? { streak: -1 }
+              : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},

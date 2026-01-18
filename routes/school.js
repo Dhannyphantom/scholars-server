@@ -2078,7 +2078,7 @@ router.patch("/assignment", auth, async (req, res) => {
  * School-specific leaderboard for current user's school
  * Only shows verified students from the same school
  */
-router.get("leaderboard", auth, async (req, res) => {
+router.get("/leaderboard", auth, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const {
@@ -2239,7 +2239,14 @@ router.get("leaderboard", auth, async (req, res) => {
       // Add rank
       {
         $setWindowFields: {
-          sortBy: sortField,
+          sortBy:
+            sortBy === "points"
+              ? { points: -1 }
+              : sortBy === "streak"
+              ? { streak: -1 }
+              : sortBy === "schoolPoints"
+              ? { schoolPoints: -1 }
+              : { totalPoints: -1 },
           output: {
             schoolRank: {
               $rank: {},
@@ -2345,7 +2352,14 @@ router.get("leaderboard", auth, async (req, res) => {
       { $sort: { ...sortField, _id: 1 } },
       {
         $setWindowFields: {
-          sortBy: sortField,
+          sortBy:
+            sortBy === "points"
+              ? { points: -1 }
+              : sortBy === "streak"
+              ? { streak: -1 }
+              : sortBy === "schoolPoints"
+              ? { schoolPoints: -1 }
+              : { totalPoints: -1 },
           output: {
             schoolRank: {
               $rank: {},
@@ -2472,7 +2486,7 @@ router.get("leaderboard", auth, async (req, res) => {
  * GET /api/leaderboard/school/:schoolId
  * View any school's leaderboard (public)
  */
-router.get("leaderboard/:schoolId", auth, async (req, res) => {
+router.get("/leaderboard/:schoolId", auth, async (req, res) => {
   try {
     const { schoolId } = req.params;
     const currentUserId = req.user.userId;
@@ -2580,7 +2594,14 @@ router.get("leaderboard/:schoolId", auth, async (req, res) => {
       { $sort: { ...sortField, _id: 1 } },
       {
         $setWindowFields: {
-          sortBy: sortField,
+          sortBy:
+            sortBy === "points"
+              ? { points: -1 }
+              : sortBy === "streak"
+              ? { streak: -1 }
+              : sortBy === "schoolPoints"
+              ? { schoolPoints: -1 }
+              : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},
