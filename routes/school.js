@@ -2073,4 +2073,629 @@ router.patch("/assignment", auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/leaderboard/school
+ * School-specific leaderboard for current user's school
+ * Only shows verified students from the same school
+ */
+router.get("leaderboard", auth, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const {
+      limit = 50,
+      offset = 0,
+      timeframe = "all-time", // 'all-time', 'weekly', 'monthly'
+      sortBy = "totalPoints", // 'totalPoints', 'points', 'streak', 'schoolPoints'
+      classLevel, // Optional: filter by specific class level
+    } = req.query;
+
+    const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
+
+    // Get current user's school
+    const currentUser = await User.findById(currentUserId)
+      .select("school class.level")
+      .lean();
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (!currentUser.school) {
+      return res.status(400).json({
+        error: "No school affiliation",
+        message:
+          "You must be affiliated with a school to view school leaderboard",
+      });
+    }
+
+    // Determine date filter
+    let dateFilter = {};
+    const now = new Date();
+
+    switch (timeframe) {
+      case "weekly":
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        dateFilter = { "quota.weekly_update": { $gte: weekAgo } };
+        break;
+      case "monthly":
+        const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        dateFilter = { "quota.last_update": { $gte: monthAgo } };
+        break;
+      case "all-time":
+      default:
+        dateFilter = {};
+    }
+
+    // Determine sort field
+    let sortField = {};
+    switch (sortBy) {
+      case "points":
+        sortField = { points: -1, totalPoints: -1 };
+        break;
+      case "streak":
+        sortField = { streak: -1, totalPoints: -1 };
+        break;
+      case "schoolPoints":
+        sortField = { schoolPoints: -1, totalPoints: -1 };
+        break;
+      case "totalPoints":
+      default:
+        sortField = { totalPoints: -1, points: -1 };
+    }
+
+    // Add class level filter if specified
+    const classFilter = classLevel ? { "class.level": classLevel } : {};
+
+    const schoolLeaderboardPipeline = [
+      // Match students from the same school
+      {
+        $match: {
+          accountType: "student",
+          school: currentUser.school,
+          ...dateFilter,
+          ...classFilter,
+        },
+      },
+
+      // Verify student is in school's student list
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id", schoolId: "$school" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$schoolId"] },
+                    { $in: ["$$userId", "$students.user"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                type: 1,
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+
+      // Transform school data
+      {
+        $addFields: {
+          schoolInfo: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              {
+                _id: { $arrayElemAt: ["$schoolData._id", 0] },
+                name: { $arrayElemAt: ["$schoolData.name", 0] },
+                type: { $arrayElemAt: ["$schoolData.type", 0] },
+                verified: {
+                  $arrayElemAt: ["$schoolData.studentRecord.verified", 0],
+                },
+              },
+              null,
+            ],
+          },
+        },
+      },
+
+      // Only verified students
+      {
+        $match: {
+          "schoolInfo.verified": true,
+        },
+      },
+
+      // Calculate additional stats
+      {
+        $addFields: {
+          isCurrentUser: { $eq: ["$_id", currentUserObjectId] },
+          followersCount: { $size: { $ifNull: ["$followers", []] } },
+          followingCount: { $size: { $ifNull: ["$following", []] } },
+        },
+      },
+
+      // Sort
+      { $sort: { ...sortField, _id: 1 } },
+
+      // Add rank
+      {
+        $setWindowFields: {
+          sortBy: sortField,
+          output: {
+            schoolRank: {
+              $rank: {},
+            },
+          },
+        },
+      },
+
+      // Pagination
+      { $skip: parseInt(offset) },
+      { $limit: parseInt(limit) },
+
+      // Project final fields
+      {
+        $project: {
+          username: 1,
+          firstName: 1,
+          lastName: 1,
+          avatar: 1,
+          points: 1,
+          totalPoints: 1,
+          schoolPoints: 1,
+          streak: 1,
+          verified: 1,
+          "class.level": 1,
+          schoolRank: 1,
+          isCurrentUser: 1,
+          followersCount: 1,
+          followingCount: 1,
+          quizStats: {
+            totalQuizzes: "$quizStats.totalQuizzes",
+            totalWins: "$quizStats.totalWins",
+            averageScore: "$quizStats.averageScore",
+            accuracyRate: "$quizStats.accuracyRate",
+          },
+        },
+      },
+    ];
+
+    const leaderboard = await User.aggregate(schoolLeaderboardPipeline);
+
+    // Get current user's school rank
+    const currentUserRankPipeline = [
+      {
+        $match: {
+          accountType: "student",
+          school: currentUser.school,
+          ...dateFilter,
+          ...classFilter,
+        },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id", schoolId: "$school" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$schoolId"] },
+                    { $in: ["$$userId", "$students.user"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          isVerified: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+              false,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          isVerified: true,
+        },
+      },
+      { $sort: { ...sortField, _id: 1 } },
+      {
+        $setWindowFields: {
+          sortBy: sortField,
+          output: {
+            schoolRank: {
+              $rank: {},
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          _id: currentUserObjectId,
+        },
+      },
+      {
+        $project: {
+          schoolRank: 1,
+          points: 1,
+          totalPoints: 1,
+          schoolPoints: 1,
+          streak: 1,
+        },
+      },
+    ];
+
+    const currentUserRank = await User.aggregate(currentUserRankPipeline);
+
+    // Get total count and school info
+    const [totalResult, schoolInfo] = await Promise.all([
+      User.aggregate([
+        {
+          $match: {
+            accountType: "student",
+            school: currentUser.school,
+            ...dateFilter,
+            ...classFilter,
+          },
+        },
+        {
+          $lookup: {
+            from: "schools",
+            let: { userId: "$_id", schoolId: "$school" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$_id", "$$schoolId"] },
+                      { $in: ["$$userId", "$students.user"] },
+                    ],
+                  },
+                },
+              },
+              {
+                $project: {
+                  studentRecord: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$students",
+                          as: "s",
+                          cond: { $eq: ["$$s.user", "$$userId"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+              },
+            ],
+            as: "schoolData",
+          },
+        },
+        {
+          $addFields: {
+            isVerified: {
+              $cond: [
+                { $gt: [{ $size: "$schoolData" }, 0] },
+                { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+                false,
+              ],
+            },
+          },
+        },
+        {
+          $match: {
+            isVerified: true,
+          },
+        },
+        { $count: "total" },
+      ]),
+      School.findById(currentUser.school).select("name type state").lean(),
+    ]);
+
+    const totalUsers = totalResult.length > 0 ? totalResult[0].total : 0;
+
+    return res.json({
+      success: true,
+      data: {
+        leaderboard,
+        school: schoolInfo,
+        currentUser: currentUserRank.length > 0 ? currentUserRank[0] : null,
+        pagination: {
+          total: totalUsers,
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          hasMore: parseInt(offset) + leaderboard.length < totalUsers,
+        },
+        filters: {
+          timeframe,
+          sortBy,
+          classLevel: classLevel || null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("School leaderboard error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch school leaderboard",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/leaderboard/school/:schoolId
+ * View any school's leaderboard (public)
+ */
+router.get("leaderboard/:schoolId", auth, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const currentUserId = req.user.userId;
+    const {
+      limit = 50,
+      offset = 0,
+      sortBy = "totalPoints",
+      classLevel,
+    } = req.query;
+
+    const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
+    const schoolObjectId = new mongoose.Types.ObjectId(schoolId);
+
+    // Verify school exists
+    const school = await School.findById(schoolObjectId)
+      .select("name type state")
+      .lean();
+
+    if (!school) {
+      return res.status(404).json({ error: "School not found" });
+    }
+
+    let sortField = {};
+    switch (sortBy) {
+      case "points":
+        sortField = { points: -1, totalPoints: -1 };
+        break;
+      case "streak":
+        sortField = { streak: -1, totalPoints: -1 };
+        break;
+      case "schoolPoints":
+        sortField = { schoolPoints: -1, totalPoints: -1 };
+        break;
+      case "totalPoints":
+      default:
+        sortField = { totalPoints: -1, points: -1 };
+    }
+
+    const classFilter = classLevel ? { "class.level": classLevel } : {};
+
+    const leaderboard = await User.aggregate([
+      {
+        $match: {
+          accountType: "student",
+          school: schoolObjectId,
+          ...classFilter,
+        },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", schoolObjectId] },
+                    { $in: ["$$userId", "$students.user"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          isVerified: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+              false,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          isVerified: true,
+        },
+      },
+      {
+        $addFields: {
+          isCurrentUser: { $eq: ["$_id", currentUserObjectId] },
+        },
+      },
+      { $sort: { ...sortField, _id: 1 } },
+      {
+        $setWindowFields: {
+          sortBy: sortField,
+          output: {
+            rank: {
+              $rank: {},
+            },
+          },
+        },
+      },
+      { $skip: parseInt(offset) },
+      { $limit: parseInt(limit) },
+      {
+        $project: {
+          username: 1,
+          firstName: 1,
+          lastName: 1,
+          avatar: 1,
+          points: 1,
+          totalPoints: 1,
+          schoolPoints: 1,
+          streak: 1,
+          verified: 1,
+          "class.level": 1,
+          rank: 1,
+          isCurrentUser: 1,
+        },
+      },
+    ]);
+
+    const totalResult = await User.aggregate([
+      {
+        $match: {
+          accountType: "student",
+          school: schoolObjectId,
+          ...classFilter,
+        },
+      },
+      {
+        $lookup: {
+          from: "schools",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", schoolObjectId] },
+                    { $in: ["$$userId", "$students.user"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                studentRecord: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$students",
+                        as: "s",
+                        cond: { $eq: ["$$s.user", "$$userId"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          ],
+          as: "schoolData",
+        },
+      },
+      {
+        $addFields: {
+          isVerified: {
+            $cond: [
+              { $gt: [{ $size: "$schoolData" }, 0] },
+              { $arrayElemAt: ["$schoolData.studentRecord.verified", 0] },
+              false,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          isVerified: true,
+        },
+      },
+      { $count: "total" },
+    ]);
+
+    const totalUsers = totalResult.length > 0 ? totalResult[0].total : 0;
+
+    return res.json({
+      success: true,
+      data: {
+        leaderboard,
+        school,
+        pagination: {
+          total: totalUsers,
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          hasMore: parseInt(offset) + leaderboard.length < totalUsers,
+        },
+        filters: {
+          sortBy,
+          classLevel: classLevel || null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("School leaderboard by ID error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch school leaderboard",
+      message: error.message,
+    });
+  }
+});
+
 module.exports = router;
