@@ -1531,4 +1531,546 @@ router.get("/check_limits", auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/users/suggestions/friends
+ * Smart friend suggestions based on multiple criteria
+ */
+router.get("/suggestions", auth, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const {
+      limit = 20,
+      offset = 0,
+      accountType, // Optional filter by account type
+    } = req.query;
+
+    // Get current user with all relationship data
+    const currentUser = await User.findById(currentUserId)
+      .select("following followers school class.level subjects accountType")
+      .lean();
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Build exclusion list (users to NOT suggest)
+    const excludedUserIds = new Set([
+      currentUserId.toString(),
+      ...(currentUser.following || []).map((id) => id.toString()),
+      ...(currentUser.followers || []).map((id) => id.toString()),
+    ]);
+
+    // Build match criteria with scoring weights
+    const matchPipeline = [
+      // Exclude current user and existing connections
+      {
+        $match: {
+          _id: {
+            $nin: Array.from(excludedUserIds).map(
+              (id) => new mongoose.Types.ObjectId(id)
+            ),
+          },
+          // isActive: true, // Only active users
+        },
+      },
+
+      // Add calculated scoring fields
+      {
+        $addFields: {
+          // Different school bonus (encourage cross-school connections)
+          differentSchoolScore: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: [currentUser.school, null] },
+                  { $ne: ["$school", null] },
+                  { $ne: ["$school", currentUser.school] },
+                ],
+              },
+              20,
+              1,
+            ],
+          },
+
+          // Same state/region score (proximity matters)
+          sameRegionScore: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: [currentUser.state, null] },
+                  { $eq: ["$state", currentUser.state] },
+                ],
+              },
+              15,
+              0,
+            ],
+          },
+
+          // Class level match score (academic peer level)
+          classScore: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: [currentUser.class?.level, null] },
+                  { $eq: ["$class.level", currentUser.class?.level] },
+                ],
+              },
+              25,
+              0,
+            ],
+          },
+
+          // Account type match score
+          accountTypeScore: {
+            $cond: [{ $eq: ["$accountType", currentUser.accountType] }, 10, 0],
+          },
+
+          // Mutual followers score (STRONGEST social proof)
+          mutualFollowersCount: {
+            $size: {
+              $ifNull: [
+                {
+                  $setIntersection: [
+                    { $ifNull: ["$followers", []] },
+                    currentUser.following || [],
+                  ],
+                },
+                [],
+              ],
+            },
+          },
+
+          // Mutual following score (bidirectional connections)
+          mutualFollowingCount: {
+            $size: {
+              $ifNull: [
+                {
+                  $setIntersection: [
+                    { $ifNull: ["$following", []] },
+                    currentUser.following || [],
+                  ],
+                },
+                [],
+              ],
+            },
+          },
+
+          // People who follow YOU that also follow this user (strong relevance)
+          yourFollowersAlsoFollowCount: {
+            $size: {
+              $ifNull: [
+                {
+                  $setIntersection: [
+                    { $ifNull: ["$followers", []] },
+                    currentUser.followers || [],
+                  ],
+                },
+                [],
+              ],
+            },
+          },
+
+          // People YOU follow who also follow this user (discovered through network)
+          followedByYourNetworkCount: {
+            $size: {
+              $ifNull: [
+                {
+                  $setIntersection: [
+                    { $ifNull: ["$followers", []] },
+                    currentUser.following || [],
+                  ],
+                },
+                [],
+              ],
+            },
+          },
+        },
+      },
+
+      // Calculate mutual connection score (HIGHEST WEIGHT - Social Proof)
+      {
+        $addFields: {
+          mutualConnectionScore: {
+            $add: [
+              { $multiply: ["$mutualFollowersCount", 8] }, // People you both follow
+              { $multiply: ["$mutualFollowingCount", 8] }, // People who follow both
+              { $multiply: ["$followedByYourNetworkCount", 6] }, // Followed by your connections
+              { $multiply: ["$yourFollowersAlsoFollowCount", 5] }, // Your followers like them too
+            ],
+          },
+        },
+      },
+
+      // Popular user bonus (social proof through follower count)
+      {
+        $addFields: {
+          popularityScore: {
+            $cond: [
+              { $gte: [{ $size: { $ifNull: ["$followers", []] } }, 50] },
+              15,
+              {
+                $cond: [
+                  { $gte: [{ $size: { $ifNull: ["$followers", []] } }, 20] },
+                  10,
+                  {
+                    $cond: [
+                      {
+                        $gte: [{ $size: { $ifNull: ["$followers", []] } }, 10],
+                      },
+                      5,
+                      0,
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+
+      // High performer bonus (top students get visibility)
+      {
+        $addFields: {
+          performanceScore: {
+            $cond: [
+              { $gte: ["$totalPoints", 10000] },
+              20,
+              {
+                $cond: [
+                  { $gte: ["$totalPoints", 5000] },
+                  15,
+                  {
+                    $cond: [
+                      { $gte: ["$totalPoints", 2000] },
+                      10,
+                      {
+                        $cond: [{ $gte: ["$totalPoints", 500] }, 5, 0],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+
+      // Active streak bonus (engaged users)
+      {
+        $addFields: {
+          streakScore: {
+            $cond: [
+              { $gte: ["$streak", 30] },
+              15,
+              {
+                $cond: [
+                  { $gte: ["$streak", 14] },
+                  10,
+                  {
+                    $cond: [{ $gte: ["$streak", 7] }, 5, 0],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+
+      // Calculate subject match score (for academic alignment)
+      {
+        $addFields: {
+          subjectScore: {
+            $multiply: [
+              {
+                $size: {
+                  $ifNull: [
+                    {
+                      $setIntersection: [
+                        { $ifNull: ["$subjects", []] },
+                        currentUser.subjects || [],
+                      ],
+                    },
+                    [],
+                  ],
+                },
+              },
+              8,
+            ],
+          },
+        },
+      },
+
+      // Calculate activity score based on recent activity
+      {
+        $addFields: {
+          activityScore: {
+            $cond: [
+              {
+                $gte: [
+                  "$quota.last_update",
+                  new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
+                ],
+              },
+              10,
+              0,
+            ],
+          },
+        },
+      },
+
+      // Calculate final relevance score with social proof emphasis
+      {
+        $addFields: {
+          relevanceScore: {
+            $add: [
+              "$mutualConnectionScore", // 40-100+ points (HIGHEST - social proof)
+              "$popularityScore", // 0-15 points (social validation)
+              "$performanceScore", // 0-20 points (achievement)
+              "$streakScore", // 0-15 points (engagement)
+              "$classScore", // 0-25 points (academic peer)
+              "$differentSchoolScore", // 0-20 points (cross-school networking)
+              "$sameRegionScore", // 0-15 points (geographical relevance)
+              "$accountTypeScore", // 0-10 points (user type match)
+              "$subjectScore", // 0-40+ points (academic interests)
+              "$activityScore", // 0-10 points (recent activity)
+            ],
+          },
+        },
+      },
+
+      // Apply optional filters
+      ...(accountType ? [{ $match: { accountType } }] : []),
+
+      // Sort by relevance score (highest first)
+      { $sort: { relevanceScore: -1, points: -1, createdAt: -1 } },
+
+      // Pagination
+      { $skip: parseInt(offset) },
+      { $limit: parseInt(limit) },
+
+      // Project only needed fields
+      {
+        $project: {
+          username: 1,
+          firstName: 1,
+          lastName: 1,
+          avatar: 1,
+          accountType: 1,
+          school: 1,
+          "class.level": 1,
+          points: 1,
+          totalPoints: 1,
+          streak: 1,
+          verified: 1,
+          followers: { $size: { $ifNull: ["$followers", []] } },
+          following: { $size: { $ifNull: ["$following", []] } },
+
+          // Include match details for transparency
+          matchDetails: {
+            relevanceScore: "$relevanceScore",
+            socialProof: {
+              mutualConnections: "$mutualFollowersCount",
+              followedByYourNetwork: "$followedByYourNetworkCount",
+              yourFollowersAlsoFollow: "$yourFollowersAlsoFollowCount",
+              totalFollowers: { $size: { $ifNull: ["$followers", []] } },
+              totalFollowing: { $size: { $ifNull: ["$following", []] } },
+            },
+            academicMatch: {
+              sameClass: { $gt: ["$classScore", 0] },
+              classLevel: "$class.level",
+              sharedSubjects: {
+                $size: {
+                  $ifNull: [
+                    {
+                      $setIntersection: [
+                        { $ifNull: ["$subjects", []] },
+                        currentUser.subjects || [],
+                      ],
+                    },
+                    [],
+                  ],
+                },
+              },
+            },
+            networkingValue: {
+              fromDifferentSchool: { $gt: ["$differentSchoolScore", 0] },
+              sameRegion: { $gt: ["$sameRegionScore", 0] },
+              isHighPerformer: { $gte: ["$totalPoints", 2000] },
+              hasActiveStreak: { $gte: ["$streak", 7] },
+              isRecentlyActive: { $gt: ["$activityScore", 0] },
+            },
+          },
+        },
+      },
+    ];
+
+    const suggestions = await User.aggregate(matchPipeline);
+
+    // Populate school details if needed
+    await User.populate(suggestions, {
+      path: "school",
+      select: "name type",
+    });
+
+    // Get total count for pagination
+    const totalCountPipeline = [
+      {
+        $match: {
+          _id: {
+            $nin: Array.from(excludedUserIds).map(
+              (id) => new mongoose.Types.ObjectId(id)
+            ),
+          },
+          isActive: true,
+        },
+      },
+      ...(accountType ? [{ $match: { accountType } }] : []),
+      { $count: "total" },
+    ];
+
+    const totalResult = await User.aggregate(totalCountPipeline);
+    const totalSuggestions = totalResult.length > 0 ? totalResult[0].total : 0;
+
+    return res.json({
+      success: true,
+      data: {
+        suggestions,
+        pagination: {
+          total: totalSuggestions,
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          hasMore: parseInt(offset) + suggestions.length < totalSuggestions,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Friend suggestions error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch friend suggestions",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/users/suggestions/friends/smart
+ * Enhanced suggestions with categorized results
+ */
+router.get("/suggestions/smart", auth, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const currentUser = await User.findById(currentUserId)
+      .select("following followers school class.level subjects accountType")
+      .lean();
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const excludedUserIds = new Set([
+      currentUserId.toString(),
+      ...(currentUser.following || []).map((id) => id.toString()),
+      ...(currentUser.followers || []).map((id) => id.toString()),
+    ]);
+
+    // Get categorized suggestions
+    const [
+      sameschoolUsers,
+      sameClassUsers,
+      mutualConnectionUsers,
+      activeUsers,
+    ] = await Promise.all([
+      // Same school
+      currentUser.school
+        ? User.find({
+            _id: { $nin: Array.from(excludedUserIds) },
+            school: currentUser.school,
+            isActive: true,
+          })
+            .select(
+              "username firstName lastName avatar accountType school class.level points verified"
+            )
+            .populate("school", "name type")
+            .limit(10)
+            .lean()
+        : [],
+
+      // Same class level
+      currentUser.class?.level
+        ? User.find({
+            _id: { $nin: Array.from(excludedUserIds) },
+            "class.level": currentUser.class.level,
+            isActive: true,
+          })
+            .select(
+              "username firstName lastName avatar accountType class.level points verified"
+            )
+            .limit(10)
+            .lean()
+        : [],
+
+      // Mutual connections (people followed by people you follow)
+      User.find({
+        _id: { $nin: Array.from(excludedUserIds) },
+        followers: { $in: currentUser.following || [] },
+        isActive: true,
+      })
+        .select(
+          "username firstName lastName avatar accountType points verified followers"
+        )
+        .limit(10)
+        .lean(),
+
+      // Recently active users
+      User.find({
+        _id: { $nin: Array.from(excludedUserIds) },
+        "quota.last_update": {
+          $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        },
+        isActive: true,
+      })
+        .select(
+          "username firstName lastName avatar accountType points verified streak"
+        )
+        .sort({ "quota.last_update": -1 })
+        .limit(10)
+        .lean(),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        categories: {
+          sameSchool: {
+            title: "From Your School",
+            users: sameschoolUsers,
+            count: sameschoolUsers.length,
+          },
+          sameClass: {
+            title: "In Your Class",
+            users: sameClassUsers,
+            count: sameClassUsers.length,
+          },
+          mutualConnections: {
+            title: "People You May Know",
+            users: mutualConnectionUsers,
+            count: mutualConnectionUsers.length,
+          },
+          recentlyActive: {
+            title: "Recently Active",
+            users: activeUsers,
+            count: activeUsers.length,
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Smart friend suggestions error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch smart suggestions",
+      message: error.message,
+    });
+  }
+});
+
 module.exports = router;
