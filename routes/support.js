@@ -184,6 +184,8 @@ router.get("/ticket/:ticketId", auth, async (req, res) => {
     const userId = req.user.userId;
     const { ticketId } = req.params;
 
+    const io = req.app.get("io");
+
     if (!mongoose.Types.ObjectId.isValid(ticketId)) {
       return res.status(400).json({
         success: false,
@@ -208,6 +210,11 @@ router.get("/ticket/:ticketId", auth, async (req, res) => {
     // Mark support messages as read
     await ticket.markMessagesAsRead(userId);
 
+    io.to(ticketId).emit("message_read", {
+      ticketId,
+      reader: userId,
+    });
+
     res.json({
       success: true,
       data: ticket,
@@ -227,6 +234,7 @@ router.get("/ticket/:ticketId", auth, async (req, res) => {
  * Send a message in a ticket
  */
 router.post("/ticket/:ticketId/message", auth, async (req, res) => {
+  const io = req?.app.get("io");
   try {
     const userId = req.user.userId;
     const { ticketId } = req.params;
@@ -268,6 +276,7 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
 
     // Add message
     const newMessage = {
+      _id: new mongoose.Types.ObjectId(),
       sender: "user",
       senderModel: "User",
       senderId: userId,
@@ -277,6 +286,11 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
     };
 
     await ticket.addMessage(newMessage);
+    // Emit real-time event here if using Socket.io
+    io.to(ticketId.toString()).emit("new_message", {
+      ticketId,
+      message: newMessage,
+    });
 
     // Generate auto-response for common issues
     const autoResponse = generateAutoResponse(text);
@@ -293,9 +307,17 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
         await ticket.addMessage(supportMessage);
 
         // Emit real-time event here if using Socket.io
-        // io.to(ticketId).emit('new_message', supportMessage);
+        io.to(ticketId.toString()).emit("new_message", {
+          ticketId,
+          message: supportMessage,
+        });
       }, 2000);
     }
+
+    // Delivery confirmation
+    io.to(ticketId).emit("message_delivered", {
+      messageId: newMessage._id,
+    });
 
     res.json({
       success: true,
@@ -327,6 +349,7 @@ router.put("/ticket/:ticketId/messages/read", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
     const { ticketId } = req.params;
+    const io = req.app.get("io");
 
     if (!mongoose.Types.ObjectId.isValid(ticketId)) {
       return res.status(400).json({
@@ -348,6 +371,11 @@ router.put("/ticket/:ticketId/messages/read", auth, async (req, res) => {
     }
 
     await ticket.markMessagesAsRead(userId);
+
+    io.to(ticketId).emit("message_read", {
+      ticketId,
+      reader: userId,
+    });
 
     res.json({
       success: true,
@@ -553,6 +581,7 @@ router.get("/admin/tickets", adminAuth, async (req, res) => {
  */
 router.post("/admin/ticket/:ticketId/reply", adminAuth, async (req, res) => {
   try {
+    const io = req.app.get("io");
     const adminId = req.admin.id;
     const { ticketId } = req.params;
     const { text } = req.body;
@@ -583,6 +612,11 @@ router.post("/admin/ticket/:ticketId/reply", adminAuth, async (req, res) => {
     };
 
     await ticket.addMessage(supportMessage);
+
+    io.to(ticketId.toString()).emit("new_message", {
+      ticketId,
+      message: supportMessage,
+    });
 
     // Auto-assign if not assigned
     if (!ticket.assignedTo) {

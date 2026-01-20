@@ -59,6 +59,7 @@ app.use(error);
 /// FUNCTION EXPORTS
 db();
 socs(io);
+app.set("io", io);
 // chat(http, app);
 
 app.get("/", (req, res) => {

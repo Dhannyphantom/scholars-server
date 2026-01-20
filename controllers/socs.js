@@ -505,6 +505,26 @@ module.exports = (io) => {
       });
     });
 
+    //============== CAHTS SOCKETS ========================
+    //============== CAHTS SOCKETS ========================
+    //============== CAHTS SOCKETS ========================
+    socket.on("join_ticket", (ticketId) => {
+      socket.join(ticketId);
+      console.log(`Joined ticket room: ${ticketId}`);
+    });
+
+    socket.on("typing_start", ({ ticketId, sender }) => {
+      socket.to(ticketId).emit("typing_start", { sender });
+    });
+
+    socket.on("typing_stop", ({ ticketId, sender }) => {
+      socket.to(ticketId).emit("typing_stop", { sender });
+    });
+
+    socket.on("leave_ticket", (ticketId) => {
+      socket.leave(ticketId);
+    });
+
     socket.on("disconnect", () => {
       // console.log("User disconnected:", socket.id);
     });
