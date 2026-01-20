@@ -254,7 +254,7 @@ const reconcileSchool = async (school) => {
   }
 };
 
-module.exports.getFullName = (user, usernameFallback) => {
+const getFullName = (user, usernameFallback) => {
   if (user?.firstName && user?.lastName) {
     return `${user?.firstName} ${user?.lastName}`;
   } else if (usernameFallback) {
@@ -441,6 +441,7 @@ module.exports = {
   getUserPoint,
   reconcileSchool,
   getClasses,
+  getFullName,
   userSelector,
   ensureDirectory,
   fullUserSelector,

@@ -35,6 +35,7 @@ const payments = require("./routes/payments");
 const create = require("./routes/create");
 const instance = require("./routes/instance");
 const school = require("./routes/school");
+const support = require("./routes/support");
 const socs = require("./controllers/socs");
 const payoutRoutes = require("./routes/payouts");
 const adminRoutes = require("./routes/admin");
@@ -50,6 +51,7 @@ app.use("/create", create);
 app.use("/instance", instance);
 app.use("/school", school);
 app.use("/payouts", payoutRoutes);
+app.use("/support", support);
 app.use("/admin", adminRoutes);
 
 app.use(error);
