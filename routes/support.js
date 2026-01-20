@@ -61,7 +61,7 @@ router.post("/ticket", auth, async (req, res) => {
       // senderModel: "Admin",
       senderId: null, // System message
       text: `Thank you ${capCapitalize(
-        getFullName(user)
+        getFullName(user),
       )}.\nWe apologise you're experiencing such issue.\n\nA member of our support team has been notified and will assist you shortly`,
       status: "delivered",
     };
@@ -135,7 +135,7 @@ router.get("/tickets", auth, async (req, res) => {
     const enhancedTickets = tickets.map((ticket) => {
       const lastMessage = ticket.messages[ticket.messages.length - 1];
       const unreadCount = ticket.messages.filter(
-        (msg) => msg.sender === "support" && msg.status !== "read"
+        (msg) => msg.sender === "support" && msg.status !== "read",
       ).length;
 
       return {
@@ -186,6 +186,9 @@ router.get("/ticket/:ticketId", auth, async (req, res) => {
 
     const io = req.app.get("io");
 
+    const userInfo = await User.findById(userId).select("accountType");
+    const isStudent = userInfo.accountType === "student";
+
     if (!mongoose.Types.ObjectId.isValid(ticketId)) {
       return res.status(400).json({
         success: false,
@@ -193,10 +196,12 @@ router.get("/ticket/:ticketId", auth, async (req, res) => {
       });
     }
 
-    const ticket = await SupportTicket.findOne({
-      _id: ticketId,
-      user: userId,
-    })
+    const filter = { _id: ticketId };
+    if (isStudent) {
+      filter.user = userId;
+    }
+
+    const ticket = await SupportTicket.findOne(filter)
       .populate("user", "firstName lastName email avatar username")
       .populate("assignedTo", "firstName lastName avatar");
 
@@ -530,6 +535,8 @@ router.get("/admin/tickets", adminAuth, async (req, res) => {
       const users = await User.find({
         $or: [
           { email: { $regex: search, $options: "i" } },
+          { firstName: { $regex: search, $options: "i" } },
+          { lastName: { $regex: search, $options: "i" } },
           { username: { $regex: search, $options: "i" } },
         ],
       }).select("_id");
@@ -661,7 +668,7 @@ router.put("/admin/ticket/:ticketId/assign", adminAuth, async (req, res) => {
     const ticket = await SupportTicket.findByIdAndUpdate(
       ticketId,
       { assignedTo },
-      { new: true }
+      { new: true },
     ).populate("assignedTo", "firstName lastName avatar");
 
     if (!ticket) {
@@ -776,7 +783,7 @@ router.put("/admin/ticket/:ticketId/priority", adminAuth, async (req, res) => {
     const ticket = await SupportTicket.findByIdAndUpdate(
       ticketId,
       { priority },
-      { new: true }
+      { new: true },
     );
 
     if (!ticket) {
