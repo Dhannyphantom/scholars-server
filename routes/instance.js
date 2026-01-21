@@ -93,7 +93,7 @@ router.get("/subjects", auth, async (req, res) => {
 
     // Convert user's qBank to ObjectIds for matching
     const userQBank = (userInfo?.qBank || []).map(
-      (q) => new mongoose.Types.ObjectId(q.toString())
+      (q) => new mongoose.Types.ObjectId(q.toString()),
     );
 
     // Aggregate subjects with progress tracking
@@ -274,7 +274,7 @@ router.post("/subject_topics", auth, async (req, res) => {
       // Calculate questions in the user's qBank
       const totalQuestions = topic.questions.length;
       const qBankQuestions = topic.questions.filter((question) =>
-        userQBank.includes(question._id.toString())
+        userQBank.includes(question._id.toString()),
       );
 
       return {
@@ -382,7 +382,7 @@ router.put(
           $pull: {
             subjects: data?._id,
           },
-        }
+        },
       );
     } else {
       if (data?.media) {
@@ -398,7 +398,7 @@ router.put(
               name: data?.name,
               image: asset,
             },
-          }
+          },
         );
       } else {
         await Subject.updateOne(
@@ -407,7 +407,7 @@ router.put(
             $set: {
               name: data?.name,
             },
-          }
+          },
         );
       }
       // update categories
@@ -418,7 +418,7 @@ router.put(
           $pull: {
             subjects: data?._id,
           },
-        }
+        },
       );
       await Category.updateMany(
         { _id: { $in: catIds } },
@@ -426,12 +426,12 @@ router.put(
           $addToSet: {
             subjects: data?._id,
           },
-        }
+        },
       );
     }
 
     res.send({ status: "success" });
-  }
+  },
 );
 
 router.put(
@@ -456,7 +456,7 @@ router.put(
               name: data?.name,
               image: asset,
             },
-          }
+          },
         );
       } else {
         await Category.updateOne(
@@ -465,13 +465,13 @@ router.put(
             $set: {
               name: data?.name,
             },
-          }
+          },
         );
       }
     }
 
     res.send({ status: "success", data });
-  }
+  },
 );
 
 router.put("/topic", auth, async (req, res) => {
@@ -491,7 +491,7 @@ router.put("/topic", auth, async (req, res) => {
         $pull: {
           topics: _id,
         },
-      }
+      },
     );
   } else {
     await Topic.updateOne(
@@ -500,7 +500,7 @@ router.put("/topic", auth, async (req, res) => {
         $set: {
           name,
         },
-      }
+      },
     );
 
     // Update subjects
@@ -510,7 +510,7 @@ router.put("/topic", auth, async (req, res) => {
         $pull: {
           topics: _id,
         },
-      }
+      },
     );
 
     await Subject.updateOne(
@@ -519,7 +519,7 @@ router.put("/topic", auth, async (req, res) => {
         $addToSet: {
           topics: _id,
         },
-      }
+      },
     );
   }
 
@@ -537,7 +537,7 @@ router.put("/question", auth, async (req, res) => {
         $pull: {
           questions: data?._id,
         },
-      }
+      },
     );
     await Question.deleteOne({ _id: data?._id });
   } else {
@@ -557,7 +557,7 @@ router.put("/question", auth, async (req, res) => {
         $addToSet: {
           edits: userId,
         },
-      }
+      },
     );
 
     // Update Question Topic;
@@ -567,7 +567,7 @@ router.put("/question", auth, async (req, res) => {
         $pull: {
           questions: data?._id,
         },
-      }
+      },
     );
 
     await Topic.updateMany(
@@ -576,7 +576,7 @@ router.put("/question", auth, async (req, res) => {
         $addToSet: {
           questions: data?._id,
         },
-      }
+      },
     );
   }
 
@@ -652,7 +652,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
       // Check subject limits
       for (const subject of reqData.subjects) {
         const existingSubject = dailySubjects.find(
-          (s) => s.subject.toString() === subject._id.toString()
+          (s) => s.subject.toString() === subject._id.toString(),
         );
         const currentSubjectCount = existingSubject
           ? existingSubject.questions_count
@@ -670,10 +670,10 @@ router.post("/premium_quiz", auth, async (req, res) => {
 
       // Check max subjects per day
       const uniqueSubjectIds = new Set(
-        reqData.subjects.map((s) => s._id.toString())
+        reqData.subjects.map((s) => s._id.toString()),
       );
       const existingSubjectIds = new Set(
-        dailySubjects.map((s) => s.subject.toString())
+        dailySubjects.map((s) => s.subject.toString()),
       );
       uniqueSubjectIds.forEach((id) => existingSubjectIds.add(id));
 
@@ -687,7 +687,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
 
     // Prepare query
     const subjectIds = reqData.subjects.map(
-      (item) => new mongoose.Types.ObjectId(item._id)
+      (item) => new mongoose.Types.ObjectId(item._id),
     );
 
     const topicIds = [];
@@ -700,7 +700,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
 
     const userQBank = (userInfo?.qBank || []).map(
-      (q) => new mongoose.Types.ObjectId(q.toString())
+      (q) => new mongoose.Types.ObjectId(q.toString()),
     );
     const categoryId = new mongoose.Types.ObjectId(reqData.categoryId);
 
@@ -793,7 +793,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
     }
 
     const insufficientSubjects = questions.filter(
-      (q) => q.questions.length < 25
+      (q) => q.questions.length < 25,
     );
     if (insufficientSubjects.length > 0) {
       return res.status(404).send({
@@ -876,7 +876,7 @@ router.post("/submit_premium", auth, async (req, res) => {
     data;
 
   const userInfo = await User.findById(userId).select(
-    "accountType quota quotas points totalPoints qBank quizStats quizHistory"
+    "accountType quota quotas points totalPoints qBank quizStats quizHistory",
   );
 
   if (!userInfo) {
@@ -990,7 +990,7 @@ router.post("/submit_premium", auth, async (req, res) => {
         questions.forEach((quest) => {
           const subjId = quest.subject._id.toString();
           const existingSubj = dailySubjects.find(
-            (s) => s.subject.toString() === subjId
+            (s) => s.subject.toString() === subjId,
           );
 
           if (existingSubj) {
@@ -1168,12 +1168,12 @@ router.post("/submit_premium", auth, async (req, res) => {
 
 // router.get("/mod_data", async (req, res) => {
 //   await Question.updateMany(
-//     {},
+//     { topic: "69656935513e4e01dc60d94a", subject: "678d60356345f9e35e705ed8" },
 //     {
 //       $set: {
-//         point: 5,
+//         user: "68c08834856d0d53ca1923a1",
 //       },
-//     }
+//     },
 //   );
 
 //   res.send({ status: "success" });

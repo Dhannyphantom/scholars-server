@@ -16,6 +16,7 @@ const {
   getClasses,
   reconcileSchool,
   getGrade,
+  syncSchoolClassesWithStudents,
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
 const nanoid = uuid.v4;
@@ -65,10 +66,10 @@ router.post("/verify", auth, async (req, res) => {
   const { instanceId, instance, type, schoolId } = req.body;
 
   const userInfo = await User.findById(userId).select(
-    "firstName lastName preffix"
+    "firstName lastName preffix",
   );
   const instanceInfo = await User.findById(instanceId).select(
-    "firstName lastName preffix"
+    "firstName lastName preffix",
   );
 
   const school = await School.findOne({
@@ -77,7 +78,7 @@ router.post("/verify", auth, async (req, res) => {
   });
 
   const teacherData = school.teachers.find(
-    (item) => item.user?.toString() == userId
+    (item) => item.user?.toString() == userId,
   );
 
   if (!teacherData?.verified) {
@@ -98,18 +99,18 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has verified ${capFirstLetter(
-                instanceInfo?.preffix
+                instanceInfo?.preffix,
               )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName
+                instanceInfo?.lastName,
               )} as a fellow colleaque`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = true;
       await instanceInfo.save();
@@ -124,16 +125,16 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has verified ${capFirstLetter(
-                instanceInfo.firstName
+                instanceInfo.firstName,
               )} ${capFirstLetter(instanceInfo?.lastName)} as a valid student`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = true;
       await instanceInfo.save();
@@ -150,18 +151,18 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has rejected ${capFirstLetter(
-                instanceInfo?.preffix
+                instanceInfo?.preffix,
               )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName
+                instanceInfo?.lastName,
               )} as a fellow colleaque`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = true;
       await instanceInfo.save();
@@ -176,18 +177,18 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has rejected ${capFirstLetter(
-                instanceInfo.firstName
+                instanceInfo.firstName,
               )} ${capFirstLetter(
-                instanceInfo?.lastName
+                instanceInfo?.lastName,
               )} as a invalid student`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
@@ -204,18 +205,18 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has un-verified ${capFirstLetter(
-                instanceInfo?.preffix
+                instanceInfo?.preffix,
               )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName
+                instanceInfo?.lastName,
               )} as a fellow colleaque`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
@@ -230,18 +231,18 @@ router.post("/verify", auth, async (req, res) => {
             announcements: {
               type: "system",
               message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName
+                userInfo.firstName,
               )} ${capFirstLetter(
-                userInfo?.lastName
+                userInfo?.lastName,
               )} has un-verified ${capFirstLetter(
-                instanceInfo.firstName
+                instanceInfo.firstName,
               )} ${capFirstLetter(
-                instanceInfo?.lastName
+                instanceInfo?.lastName,
               )} as a student in probation`,
               visibility: "all",
             },
           },
-        }
+        },
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
@@ -256,7 +257,7 @@ router.post("/join", auth, async (req, res) => {
   const { schoolId } = req.body;
 
   const userInfo = await User.findById(userId).select(
-    "accountType preffix firstName lastName username"
+    "accountType preffix firstName lastName username",
   );
   if (!userInfo)
     return res
@@ -289,21 +290,21 @@ router.post("/join", auth, async (req, res) => {
     if (teachSchool) {
       // remove teacher from other school previously joined
       teachSchool.teachers = teachSchool.teachers.filter(
-        (item) => item?.user?.toString() != userId
+        (item) => item?.user?.toString() != userId,
       );
       await teachSchool.save();
     }
 
     // Check if school already has this teacher
     const checker = school.teachers.findIndex(
-      (item) => item?.user?.toString() == userId
+      (item) => item?.user?.toString() == userId,
     );
     if (checker < 0) {
       school.teachers.push({ user: userId });
       school.announcements.push({
         type: "system",
         message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo.firstName
+          userInfo.firstName,
         )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
           school.name
         } as a teacher, you may verify or decline this request`,
@@ -320,14 +321,14 @@ router.post("/join", auth, async (req, res) => {
 
     if (stdSchool) {
       stdSchool.students = stdSchool.students.filter(
-        (item) => item?.user?.toString() != userId
+        (item) => item?.user?.toString() != userId,
       );
       await stdSchool.save();
     }
 
     // Check if student already has this teacher
     const checker = school.students.findIndex(
-      (item) => item?.user?.toString() == userId
+      (item) => item?.user?.toString() == userId,
     );
     if (checker < 0) {
       school.students.push({ user: userId });
@@ -378,7 +379,7 @@ router.post("/announcement", auth, async (req, res) => {
             classes: classes.map((item) => item.name?.toLowerCase()),
           },
         },
-      }
+      },
     );
   } catch (error) {
     return res
@@ -441,7 +442,7 @@ router.post("/submit_quiz", auth, async (req, res) => {
   const { schoolId, type, questions, quizId } = data;
 
   const userInfo = await User.findById(userId).select(
-    "accountType schoolPoints"
+    "accountType schoolPoints",
   );
   if (!userInfo)
     return res
@@ -474,7 +475,7 @@ router.post("/submit_quiz", auth, async (req, res) => {
   questions.forEach((quest) => {
     quest.questions.forEach((question) => {
       const correctAnswer = question?.answers?.find(
-        (item) => item?.correct == true
+        (item) => item?.correct == true,
       );
       if (correctAnswer?._id == question?.answered?._id) {
         point += question.point;
@@ -489,10 +490,10 @@ router.post("/submit_quiz", auth, async (req, res) => {
 
   if (type == "school") {
     const getQuiz = school.quiz?.find(
-      (item) => item?._id?.toString() == quizId
+      (item) => item?._id?.toString() == quizId,
     );
     const checkUser = getQuiz.currentSubmissions.findIndex(
-      (item) => item?.toString() == userId
+      (item) => item?.toString() == userId,
     );
     if (checkUser > -1) {
       return res.status(422).send({
@@ -503,7 +504,7 @@ router.post("/submit_quiz", auth, async (req, res) => {
     getQuiz.currentSubmissions.push(userId);
     if (Boolean(getQuiz)) {
       const sess = getQuiz.sessions?.find(
-        (item) => item?._id?.toString() == getQuiz.currentSession?.toString()
+        (item) => item?._id?.toString() == getQuiz.currentSession?.toString(),
       );
       if (sess) {
         sess.participants.addToSet({
@@ -616,7 +617,7 @@ router.put("/quiz", auth, async (req, res) => {
       .send({ status: "failed", message: "School not found" });
 
   const quizIdx = school.quiz.findIndex(
-    (item) => item?._id?.toString() == quiz?._id
+    (item) => item?._id?.toString() == quiz?._id,
   );
 
   if (quizIdx > -1) {
@@ -658,7 +659,7 @@ router.put("/quiz_status", auth, async (req, res) => {
     return res.status(422).send({ status: "failed", message: "Invalid info" });
 
   const userInfo = await User.findById(userId).select(
-    "accountType preffix firstName lastName"
+    "accountType preffix firstName lastName",
   );
   if (!userInfo)
     return res
@@ -686,9 +687,9 @@ router.put("/quiz_status", auth, async (req, res) => {
       announcements: {
         teacher: userId,
         message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo?.firstName
+          userInfo?.firstName,
         )} ${capFirstLetter(
-          userInfo?.lastName
+          userInfo?.lastName,
         )} has started a new quiz session for your class\nParticipate Now`,
         classes: [schoolClass],
       },
@@ -702,7 +703,7 @@ router.put("/quiz_status", auth, async (req, res) => {
           "quiz.$.class": schoolClass,
         },
         ...pusher,
-      }
+      },
     );
   } else if (status === "inactive") {
     await School.updateOne(
@@ -712,22 +713,22 @@ router.put("/quiz_status", auth, async (req, res) => {
           "quiz.$.status": status,
           "quiz.$.class": schoolClass,
         },
-      }
+      },
     );
   } else if (status === "review") {
     // Close quiz session
     // set quiz obj to false
     const quiz = school.quiz.find((item) => item._id === quizId);
     const session = quiz.sessions.find(
-      (item) => item._id == quiz.currentSession
+      (item) => item._id == quiz.currentSession,
     );
 
     school.announcements.push({
       teacher: userId,
       message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-        userInfo?.firstName
+        userInfo?.firstName,
       )} ${capFirstLetter(
-        userInfo?.lastName
+        userInfo?.lastName,
       )} has closed the quiz session for your class\nWait for your scores to be released`,
       classes: [schoolClass],
     });
@@ -762,7 +763,7 @@ router.get("/quiz", auth, async (req, res) => {
     if (userInfo.accountType === "student") {
       school = await School.findById(schoolId)
         .select(
-          "quiz.title quiz.date quiz.currentSession quiz.subject quiz._id quiz.status quiz.teacher"
+          "quiz.title quiz.date quiz.currentSession quiz.subject quiz._id quiz.status quiz.teacher",
         )
         .populate([
           {
@@ -785,7 +786,7 @@ router.get("/quiz", auth, async (req, res) => {
         .filter((item) => item?.status != "inactive")
         .map((item) => {
           const checkUser = item.currentSubmissions?.findIndex(
-            (usr) => usr?.toString() == userId
+            (usr) => usr?.toString() == userId,
           );
           if (checkUser > -1) {
             return {
@@ -801,7 +802,7 @@ router.get("/quiz", auth, async (req, res) => {
     } else if (userInfo.accountType === "teacher") {
       school = await School.findById(schoolId)
         .select(
-          "quiz.title quiz.currentSession quiz.subject quiz.status quiz._id"
+          "quiz.title quiz.currentSession quiz.subject quiz.status quiz._id",
         )
         .populate([
           {
@@ -843,7 +844,7 @@ router.get("/quiz", auth, async (req, res) => {
                 date: sess.date,
                 teacher: quizItem.teacher,
                 average_score: Math.round(
-                  (participant.score / sess.total_score) * 100
+                  (participant.score / sess.total_score) * 100,
                 ),
                 subject: quizItem.subject,
               });
@@ -935,7 +936,7 @@ router.get("/announcements", auth, async (req, res) => {
       $addToSet: {
         "announcements.$.reads": userId,
       },
-    }
+    },
   );
 
   if (!school)
@@ -981,7 +982,7 @@ router.get("/fetch", auth, async (req, res) => {
       ]);
     if (school) {
       const teacherData = school.teachers.find(
-        (item) => item.user?._id?.toString() == userId
+        (item) => item.user?._id?.toString() == userId,
       );
       isVerified = teacherData?.verified;
     }
@@ -1007,7 +1008,7 @@ router.get("/fetch", auth, async (req, res) => {
       ]);
     if (school) {
       const stdData = school.students.find(
-        (item) => item.user?._id?.toString() == userId
+        (item) => item.user?._id?.toString() == userId,
       );
       isVerified = stdData?.verified;
     }
@@ -1021,7 +1022,7 @@ router.get("/fetch", auth, async (req, res) => {
 
     // Get Counts
     assignmentCount = (school.assignments?.filter(
-      (item) => item.status == "ongoing"
+      (item) => item.status == "ongoing",
     )).length;
     // announcementCount = school.announcements?.filter()
     classCount = school.classes.length;
@@ -1176,7 +1177,7 @@ router.get("/assignments", auth, async (req, res) => {
     const studentAssignments = school.assignments.filter(
       (assignment) =>
         assignment.classes.includes(userInfo.class.level) &&
-        assignment.status === "ongoing"
+        assignment.status === "ongoing",
     );
 
     // Group assignments by teacher
@@ -1187,7 +1188,7 @@ router.get("/assignments", auth, async (req, res) => {
 
       // Find student's submission for this assignment
       const userSubmission = assignment.submissions.find(
-        (sub) => sub.student.toString() === userId
+        (sub) => sub.student.toString() === userId,
       );
 
       // Determine user status
@@ -1333,7 +1334,7 @@ router.get("/assignment", auth, async (req, res) => {
 
   // Find the specific assignment
   const assignment = school.assignments.find(
-    (a) => a._id.toString() === assignmentId
+    (a) => a._id.toString() === assignmentId,
   );
 
   // Format history
@@ -1424,7 +1425,7 @@ router.post("/assignment/grade", auth, async (req, res) => {
 
   // Find the specific assignment
   const assignment = school.assignments.find(
-    (a) => a._id.toString() === assignmentId
+    (a) => a._id.toString() === assignmentId,
   );
 
   // Verify user is the teacher of this assignment
@@ -1438,7 +1439,7 @@ router.post("/assignment/grade", auth, async (req, res) => {
   const userScore = getGrade(score);
 
   const submission = assignment.submissions.find(
-    (sub) => sub.student?.toString() === user
+    (sub) => sub.student?.toString() === user,
   );
 
   if (!submission) {
@@ -1528,7 +1529,7 @@ router.post("/assignment/publish", auth, async (req, res) => {
     const unscoredSubmissions = assignment.submissions.filter(
       (submission) =>
         submission.score?.value === undefined ||
-        submission.score?.value === null
+        submission.score?.value === null,
     );
 
     if (unscoredSubmissions.length > 0) {
@@ -1643,12 +1644,12 @@ router.post("/assignment/submit", auth, async (req, res) => {
   }
   // Find the specific assignment
   const assignment = school.assignments.find(
-    (a) => a._id.toString() === assignmentId
+    (a) => a._id.toString() === assignmentId,
   );
 
   // Check if user has already submitted
   const existingSubmission = assignment.submissions.find(
-    (sub) => sub.student.toString() === userId
+    (sub) => sub.student.toString() === userId,
   );
 
   if (existingSubmission) {
@@ -1731,7 +1732,7 @@ router.get("/assignment/history", auth, async (req, res) => {
 
     // Find the specific assignment
     const assignment = school.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     if (!assignment) {
@@ -1743,7 +1744,7 @@ router.get("/assignment/history", auth, async (req, res) => {
 
     // Find the specific history entry
     const historyEntry = assignment.history.find(
-      (h) => h._id.toString() === historyId
+      (h) => h._id.toString() === historyId,
     );
 
     if (!historyEntry) {
@@ -1831,7 +1832,7 @@ router.delete("/assignment", auth, async (req, res) => {
 
     // Find the specific assignment
     const assignment = school.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     // Verify user is the teacher of this assignment
@@ -1846,7 +1847,7 @@ router.delete("/assignment", auth, async (req, res) => {
     const updatedSchool = await School.findOneAndUpdate(
       { _id: schoolId, "assignments._id": assignmentId },
       { $pull: { assignments: { _id: assignmentId } } },
-      { new: true }
+      { new: true },
     );
 
     res.status(200).json({
@@ -1915,7 +1916,7 @@ router.put("/assignment", auth, async (req, res) => {
 
     // Find the specific assignment
     const assignment = school.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     // Verify user is the teacher of this assignment
@@ -1932,7 +1933,7 @@ router.put("/assignment", auth, async (req, res) => {
     for (const key in data) {
       if (key === "classes") {
         updater[key] = data[key]?.map((classItm) =>
-          classItm?.name?.toLowerCase()
+          classItm?.name?.toLowerCase(),
         );
         console.log({ updater });
       } else if (key === "subject") {
@@ -1948,12 +1949,12 @@ router.put("/assignment", auth, async (req, res) => {
     const updatedSchool = await School.findOneAndUpdate(
       { _id: schoolId, "assignments._id": assignmentId },
       { $set: { "assignments.$": updater } },
-      { new: true }
+      { new: true },
     );
 
     // Find the updated assignment to return
     const updatedAssignment = updatedSchool.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     res.status(200).json({
@@ -2031,7 +2032,7 @@ router.patch("/assignment", auth, async (req, res) => {
 
     // Find the specific assignment
     const assignment = school.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     // Verify user is the teacher of this assignment
@@ -2046,12 +2047,12 @@ router.patch("/assignment", auth, async (req, res) => {
     const updatedSchool = await School.findOneAndUpdate(
       { _id: schoolId, "assignments._id": assignmentId },
       { $set: { "assignments.$.status": status } },
-      { new: true }
+      { new: true },
     );
 
     // Find the updated assignment to return
     const updatedAssignment = updatedSchool.assignments.find(
-      (a) => a._id.toString() === assignmentId
+      (a) => a._id.toString() === assignmentId,
     );
 
     res.status(200).json({
@@ -2241,10 +2242,10 @@ router.get("/leaderboard", auth, async (req, res) => {
             sortBy === "points"
               ? { points: -1 }
               : sortBy === "streak"
-              ? { streak: -1 }
-              : sortBy === "schoolPoints"
-              ? { schoolPoints: -1 }
-              : { totalPoints: -1 },
+                ? { streak: -1 }
+                : sortBy === "schoolPoints"
+                  ? { schoolPoints: -1 }
+                  : { totalPoints: -1 },
           output: {
             schoolRank: {
               $rank: {},
@@ -2353,10 +2354,10 @@ router.get("/leaderboard", auth, async (req, res) => {
             sortBy === "points"
               ? { points: -1 }
               : sortBy === "streak"
-              ? { streak: -1 }
-              : sortBy === "schoolPoints"
-              ? { schoolPoints: -1 }
-              : { totalPoints: -1 },
+                ? { streak: -1 }
+                : sortBy === "schoolPoints"
+                  ? { schoolPoints: -1 }
+                  : { totalPoints: -1 },
           output: {
             schoolRank: {
               $rank: {},
@@ -2591,10 +2592,10 @@ router.get("/leaderboard/:schoolId", auth, async (req, res) => {
             sortBy === "points"
               ? { points: -1 }
               : sortBy === "streak"
-              ? { streak: -1 }
-              : sortBy === "schoolPoints"
-              ? { schoolPoints: -1 }
-              : { totalPoints: -1 },
+                ? { streak: -1 }
+                : sortBy === "schoolPoints"
+                  ? { schoolPoints: -1 }
+                  : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},
@@ -2711,5 +2712,741 @@ router.get("/leaderboard/:schoolId", auth, async (req, res) => {
     });
   }
 });
+
+// ==========================================
+// FETCH ALL CLASSES FOR A SCHOOL
+// ==========================================
+
+/**
+ * GET /api/school/:schoolId/classes
+ * Fetch all classes for a specific school
+ */
+router.get("/:schoolId/classes", auth, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const userId = req.user.userId;
+
+    await syncSchoolClassesWithStudents(schoolId);
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    const school = await School.findById(schoolId)
+      .select("classes teachers students")
+      .populate({
+        path: "classes.students",
+        select: "firstName lastName avatar class username email",
+      })
+      .populate({
+        path: "classes.teachers",
+        select: "firstName lastName avatar username email",
+      });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Check if user is authorized (teacher, rep, or student of this school)
+    // const user = await User.findById(userId);
+    const isRep = school.rep?.toString() === userId;
+
+    const isTeacher = school?.teachers?.some(
+      (t) => t.user?.toString() === userId,
+    );
+
+    const isStudent = school?.students?.some(
+      (s) => s.user?.toString() === userId,
+    );
+
+    if (!isRep && !isTeacher && !isStudent) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to view this school's classes",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        classes: school.classes || [],
+        totalClasses: school.classes?.length || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Fetch classes error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch classes",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// FETCH SINGLE CLASS DETAILS
+// ==========================================
+
+/**
+ * GET /api/school/:schoolId/classes/:classId
+ * Fetch details for a specific class
+ */
+router.get("/:schoolId/classes/:classId", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(schoolId) ||
+      !mongoose.Types.ObjectId.isValid(classId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID or class ID",
+      });
+    }
+
+    const school = await School.findById(schoolId)
+      .populate({
+        path: "classes.students",
+        select: "firstName lastName avatar username email accountType",
+      })
+      .populate({
+        path: "classes.teachers",
+        select: "firstName lastName avatar username email accountType",
+      });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    const classData = school.classes.id(classId);
+
+    if (!classData) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: classData,
+    });
+  } catch (error) {
+    console.error("Fetch class error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch class details",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// CREATE NEW CLASS
+// ==========================================
+
+/**
+ * POST /api/school/:schoolId/classes
+ * Create a new class for a school
+ */
+router.post("/:schoolId/classes", auth, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const userId = req.user.userId;
+    const { name, class: classLevel, type } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Check if user is authorized (only rep or teachers can create classes)
+    const isRep = school.rep?.toString() === userId;
+    const isTeacher = school.teachers.some(
+      (t) => t.user?.toString() === userId,
+    );
+
+    if (!isRep && !isTeacher) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to create classes for this school",
+      });
+    }
+
+    // Handle "all" type - create all class levels
+    if (type === "all") {
+      const allLevels = ["jss1", "jss2", "jss3", "sss1", "sss2", "sss3"];
+
+      // Check which classes already exist
+      const existingLevels = school.classes.map((c) => c.level);
+      const newLevels = allLevels.filter(
+        (level) => !existingLevels.includes(level),
+      );
+
+      if (newLevels.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "All class levels already exist",
+        });
+      }
+
+      // Create all missing class levels
+      newLevels.forEach((level) => {
+        school.classes.push({
+          level,
+          alias: null,
+          teachers: [],
+          students: [],
+        });
+      });
+
+      await school.save();
+
+      return res.status(201).json({
+        status: "success",
+        success: true,
+        message: `${newLevels.length} classes created successfully`,
+        data: {
+          classesCreated: newLevels.length,
+          classes: school.classes,
+        },
+      });
+    }
+
+    // Handle single class creation
+    if (!classLevel) {
+      return res.status(400).json({
+        success: false,
+        message: "Class level is required",
+      });
+    }
+
+    // Check if class already exists
+    const existingClass = school.classes.find(
+      (c) => c.level === classLevel.toLowerCase(),
+    );
+
+    if (existingClass) {
+      return res.status(400).json({
+        success: false,
+        message: `${classLevel.toUpperCase()} already exists`,
+      });
+    }
+
+    // Create new class
+    const newClass = {
+      level: classLevel.toLowerCase(),
+      alias: name || null,
+      teachers: [],
+      students: [],
+    };
+
+    school.classes.push(newClass);
+    await school.save();
+
+    // Get the newly created class
+    const createdClass = school.classes[school.classes.length - 1];
+
+    res.status(201).json({
+      status: "success",
+      success: true,
+      message: "Class created successfully",
+      data: createdClass,
+    });
+  } catch (error) {
+    console.error("Create class error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create class",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// UPDATE CLASS
+// ==========================================
+
+/**
+ * PUT /api/school/:schoolId/classes/:classId
+ * Update a class (alias, level, etc.)
+ */
+router.put("/:schoolId/classes/:classId", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+    const { alias, level } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Check if user is authorized
+    const isRep = school.rep?.toString() === userId;
+    const isTeacher = school.teachers.some(
+      (t) => t.user?.toString() === userId,
+    );
+
+    if (!isRep && !isTeacher) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to update classes for this school",
+      });
+    }
+
+    const classData = school.classes.id(classId);
+
+    if (!classData) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    // Update alias if provided
+    if (alias !== undefined) {
+      classData.alias = alias.trim() || null;
+    }
+
+    // Update level if provided and different
+    if (level && level !== classData.level) {
+      // Check if new level already exists
+      const levelExists = school.classes.some(
+        (c) => c.level === level.toLowerCase() && c._id.toString() !== classId,
+      );
+
+      if (levelExists) {
+        return res.status(400).json({
+          success: false,
+          message: `${level.toUpperCase()} already exists`,
+        });
+      }
+
+      classData.level = level.toLowerCase();
+    }
+
+    await school.save();
+
+    res.json({
+      success: true,
+      message: "Class updated successfully",
+      data: classData,
+    });
+  } catch (error) {
+    console.error("Update class error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update class",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// DELETE CLASS
+// ==========================================
+
+/**
+ * DELETE /api/school/:schoolId/classes/:classId
+ * Delete a class from a school
+ */
+router.delete("/:schoolId/classes/:classId", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(schoolId) ||
+      !mongoose.Types.ObjectId.isValid(classId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Only rep can delete classes
+    if (school.rep?.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only school representative can delete classes",
+      });
+    }
+
+    const classExists = school.classes.some(
+      (c) => c._id.toString() === classId,
+    );
+
+    if (!classExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    // ✅ Proper subdocument removal
+    school.classes = school.classes.filter((c) => c._id.toString() !== classId);
+
+    await school.save();
+
+    res.json({
+      success: true,
+      message: "Class deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete class error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete class",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// ADD STUDENT TO CLASS
+// ==========================================
+
+/**
+ * POST /api/school/:schoolId/classes/:classId/students
+ * Add a student to a class
+ */
+router.post("/:schoolId/classes/:classId/students", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+    const { studentId } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(schoolId) ||
+      !mongoose.Types.ObjectId.isValid(studentId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Check authorization
+    const isRep = school.rep?.toString() === userId;
+    const isTeacher = school.teachers.some(
+      (t) => t.user?.toString() === userId,
+    );
+
+    if (!isRep && !isTeacher) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized",
+      });
+    }
+
+    const classData = school.classes.id(classId);
+
+    if (!classData) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    // Check if student already in class
+    const alreadyInClass = classData.students.some(
+      (s) => s.toString() === studentId,
+    );
+
+    if (alreadyInClass) {
+      return res.status(400).json({
+        success: false,
+        message: "Student already in this class",
+      });
+    }
+
+    classData.students.push(studentId);
+    await school.save();
+
+    res.json({
+      success: true,
+      message: "Student added to class successfully",
+      data: classData,
+    });
+  } catch (error) {
+    console.error("Add student error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add student",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// REMOVE STUDENT FROM CLASS
+// ==========================================
+
+/**
+ * DELETE /api/school/:schoolId/classes/:classId/students/:studentId
+ * Remove a student from a class
+ */
+router.delete(
+  "/:schoolId/classes/:classId/students/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { schoolId, classId, studentId } = req.params;
+      const userId = req.user.userId;
+
+      const school = await School.findById(schoolId);
+
+      if (!school) {
+        return res.status(404).json({
+          success: false,
+          message: "School not found",
+        });
+      }
+
+      // Check authorization
+      const isRep = school.rep?.toString() === userId;
+      const isTeacher = school.teachers.some(
+        (t) => t.user?.toString() === userId,
+      );
+
+      if (!isRep && !isTeacher) {
+        return res.status(403).json({
+          success: false,
+          message: "Not authorized",
+        });
+      }
+
+      const classData = school.classes.id(classId);
+
+      if (!classData) {
+        return res.status(404).json({
+          success: false,
+          message: "Class not found",
+        });
+      }
+
+      // Remove student
+      classData.students = classData.students.filter(
+        (s) => s.toString() !== studentId,
+      );
+
+      await school.save();
+
+      res.json({
+        success: true,
+        message: "Student removed from class successfully",
+      });
+    } catch (error) {
+      console.error("Remove student error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to remove student",
+        error: error.message,
+      });
+    }
+  },
+);
+
+// ==========================================
+// ADD TEACHER TO CLASS
+// ==========================================
+
+/**
+ * POST /api/school/:schoolId/classes/:classId/teachers
+ * Add a teacher to a class
+ */
+router.post("/:schoolId/classes/:classId/teachers", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+    const { teacherId } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(schoolId) ||
+      !mongoose.Types.ObjectId.isValid(teacherId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Only rep can add teachers to classes
+    const isRep = school.rep?.toString() === userId;
+
+    if (!isRep) {
+      return res.status(403).json({
+        success: false,
+        message: "Only school representative can add teachers to classes",
+      });
+    }
+
+    const classData = school.classes.id(classId);
+
+    if (!classData) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    // Check if teacher already in class
+    const alreadyInClass = classData.teachers.some(
+      (t) => t.toString() === teacherId,
+    );
+
+    if (alreadyInClass) {
+      return res.status(400).json({
+        success: false,
+        message: "Teacher already assigned to this class",
+      });
+    }
+
+    classData.teachers.push(teacherId);
+    await school.save();
+
+    res.json({
+      success: true,
+      message: "Teacher added to class successfully",
+      data: classData,
+    });
+  } catch (error) {
+    console.error("Add teacher error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add teacher",
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// REMOVE TEACHER FROM CLASS
+// ==========================================
+
+/**
+ * DELETE /api/school/:schoolId/classes/:classId/teachers/:teacherId
+ * Remove a teacher from a class
+ */
+router.delete(
+  "/:schoolId/classes/:classId/teachers/:teacherId",
+  auth,
+  async (req, res) => {
+    try {
+      const { schoolId, classId, teacherId } = req.params;
+      const userId = req.user.userId;
+
+      const school = await School.findById(schoolId);
+
+      if (!school) {
+        return res.status(404).json({
+          success: false,
+          message: "School not found",
+        });
+      }
+
+      // Only rep can remove teachers from classes
+      const isRep = school.rep?.toString() === userId;
+
+      if (!isRep) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Only school representative can remove teachers from classes",
+        });
+      }
+
+      const classData = school.classes.id(classId);
+
+      if (!classData) {
+        return res.status(404).json({
+          success: false,
+          message: "Class not found",
+        });
+      }
+
+      // Remove teacher
+      classData.teachers = classData.teachers.filter(
+        (t) => t.toString() !== teacherId,
+      );
+
+      await school.save();
+
+      res.json({
+        success: true,
+        message: "Teacher removed from class successfully",
+      });
+    } catch (error) {
+      console.error("Remove teacher error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to remove teacher",
+        error: error.message,
+      });
+    }
+  },
+);
 
 module.exports = router;

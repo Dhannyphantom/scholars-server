@@ -3,6 +3,8 @@ const _NET = process.env.NET_DEV;
 const fs = require("fs");
 const path = require("path");
 const expoNotifications = require("./expoNotifications");
+const { School } = require("../models/School");
+const { default: mongoose } = require("mongoose");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
@@ -190,7 +192,7 @@ const getClasses = () => {
 
 module.exports.sendPushInBatches = async (
   userFilter,
-  { title, message, image }
+  { title, message, image },
 ) => {
   const cursor = User.find(userFilter)
     .select("_id expoPushToken")
@@ -264,6 +266,74 @@ const getFullName = (user, usernameFallback) => {
   }
 };
 
+/**
+ * Sync school.classes.students using school.students[].user.class.level
+ * @param {String|ObjectId} schoolId
+ */
+const syncSchoolClassesWithStudents = async (schoolId) => {
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    throw new Error("Invalid school ID");
+  }
+
+  const school = await School.findById(schoolId).populate(
+    "students.user",
+    "class.level",
+  );
+
+  if (!school) {
+    throw new Error("School not found");
+  }
+
+  // Map class level -> class document
+  const classMap = new Map();
+  school.classes.forEach((cls) => {
+    classMap.set(cls.level, cls);
+  });
+
+  // // Ensure all class levels exist
+  // classsSchoolEnums.forEach((level) => {
+  //   if (!classMap.has(level)) {
+  //     const newClass = {
+  //       level,
+  //       alias: null,
+  //       teachers: [],
+  //       students: [],
+  //     };
+  //     school.classes.push(newClass);
+  //     classMap.set(level, newClass);
+  //   }
+  // });
+
+  // Clear all students from classes (we will rebuild cleanly)
+  school.classes.forEach((cls) => {
+    cls.students = [];
+  });
+
+  // Assign students to correct class
+  for (const entry of school.students) {
+    const studentUser = entry.user;
+
+    if (!studentUser || !studentUser.class?.level) continue;
+
+    const level = studentUser.class.level.toLowerCase();
+
+    if (!classMap.has(level)) continue;
+
+    classMap.get(level).students.push(studentUser._id);
+  }
+
+  await school.save();
+
+  return {
+    success: true,
+    message: "School classes synced successfully",
+    data: {
+      totalClasses: school.classes.length,
+      totalStudents: school.students.length,
+    },
+  };
+};
+
 const getGrade = (score) => {
   let grade = "";
   if (score >= 95) {
@@ -313,7 +383,7 @@ const checkDailyLimits = (userInfo, newQuestions) => {
   // Count new questions
   const newQuestionsCount = newQuestions.reduce(
     (total, subj) => total + subj.questions.length,
-    0
+    0,
   );
 
   // Check total daily limit
@@ -330,7 +400,7 @@ const checkDailyLimits = (userInfo, newQuestions) => {
 
   // Check subject limits
   const subjectCounts = new Map(
-    dailySubjects.map((s) => [s.subject.toString(), s.questions_count])
+    dailySubjects.map((s) => [s.subject.toString(), s.questions_count]),
   );
 
   for (const subj of newQuestions) {
@@ -354,10 +424,10 @@ const checkDailyLimits = (userInfo, newQuestions) => {
 
   // Check maximum subjects per day (2 subjects)
   const uniqueNewSubjects = new Set(
-    newQuestions.map((s) => s.subject._id.toString())
+    newQuestions.map((s) => s.subject._id.toString()),
   );
   const existingSubjects = new Set(
-    dailySubjects.map((s) => s.subject.toString())
+    dailySubjects.map((s) => s.subject.toString()),
   );
 
   uniqueNewSubjects.forEach((s) => existingSubjects.add(s));
@@ -437,6 +507,7 @@ module.exports = {
   getGrade,
   getUploadUri,
   checkDailyLimits,
+  syncSchoolClassesWithStudents,
   calculatePoints,
   getUserPoint,
   reconcileSchool,

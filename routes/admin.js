@@ -79,7 +79,7 @@ router.get(
         message: error.message,
       });
     }
-  }
+  },
 );
 
 // Reconcile wallet
@@ -187,7 +187,7 @@ router.post("/wallets/adjust", adminAuth, async (req, res) => {
         {
           description: `Admin adjustment: ${reason}`,
           adminId: req.admin.id,
-        }
+        },
       );
     } else {
       result = await walletService.debit(
@@ -198,7 +198,7 @@ router.post("/wallets/adjust", adminAuth, async (req, res) => {
         {
           description: `Admin adjustment: ${reason}`,
           adminId: req.admin.id,
-        }
+        },
       );
     }
 
