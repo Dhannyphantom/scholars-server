@@ -48,17 +48,17 @@ router.post("/ticket", auth, async (req, res) => {
 
     const userMessage = {
       sender: "user",
-      senderModel: "User",
       senderId: userId,
       text: `${subject?.toUpperCase()}\n\n${description}`,
       status: "delivered",
+      timestamp: new Date(),
       isHeader: true,
     };
 
     // Create welcome message
     const welcomeMessage = {
       sender: "system",
-      // senderModel: "Admin",
+      timestamp: new Date(),
       senderId: null, // System message
       text: `Thank you ${capCapitalize(
         getFullName(user),
@@ -283,9 +283,9 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
     const newMessage = {
       _id: new mongoose.Types.ObjectId(),
       sender: "user",
-      senderModel: "User",
       senderId: userId,
       text: text.trim(),
+      timestamp: new Date(),
       status: "sent",
       attachments: attachments || [],
     };
@@ -303,7 +303,7 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
       setTimeout(async () => {
         const supportMessage = {
           sender: "support",
-          senderModel: "Admin",
+          timestamp: new Date(),
           senderId: null,
           text: autoResponse,
           status: "delivered",
@@ -589,7 +589,7 @@ router.get("/admin/tickets", adminAuth, async (req, res) => {
 router.post("/admin/ticket/:ticketId/reply", adminAuth, async (req, res) => {
   try {
     const io = req.app.get("io");
-    const adminId = req.admin.id;
+    const adminId = req.user.userId;
     const { ticketId } = req.params;
     const { text } = req.body;
 
@@ -611,11 +611,12 @@ router.post("/admin/ticket/:ticketId/reply", adminAuth, async (req, res) => {
 
     // Add support message
     const supportMessage = {
+      _id: new mongoose.Types.ObjectId(),
       sender: "support",
-      senderModel: "Admin",
       senderId: adminId,
       text: text.trim(),
       status: "delivered",
+      timestamp: new Date(),
     };
 
     await ticket.addMessage(supportMessage);
