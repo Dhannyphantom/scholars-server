@@ -473,42 +473,41 @@ router.get("/topic", auth, async (req, res) => {
   const userId = req.user.userId;
   const { subjectId } = req.query;
 
-  // const userInfo = await User.findById(userId).select("qBank").lean();
-  // if (!userInfo)
-  //   return res
-  //     .status(422)
-  //     .send({ status: "failed", message: "User not found!" });
+  const userInfo = await User.findById(userId).select("qBank").lean();
+  if (!userInfo)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "User not found!" });
 
-  // const userQBank = userInfo.qBank.map((q) => q.toString());
+  const userQBank = userInfo.qBank.map((q) => q.toString());
 
   let subject = await Subject.findById(subjectId)
     .populate([
       {
         path: "topics",
-        model: "Topic",
         select: "name questions",
       },
     ])
     .select("-image -__v")
     .lean();
 
-  // subject.topics = subject.topics.map((topic) => {
-  //   // Calculate questions in the user's qBank
-  //   const totalQuestions = topic.questions.length;
-  //   const qBankQuestions = topic.questions.filter((question) =>
-  //     userQBank.includes(question._id.toString())
-  //   );
+  const topics = subject.topics.map((topic) => {
+    // Calculate questions in the user's qBank
+    const totalQuestions = topic.questions.length;
+    const qBankQuestions = topic.questions.filter((question) =>
+      userQBank.includes(question._id.toString()),
+    );
 
-  //   return {
-  //     _id: topic._id,
-  //     name: topic.name,
-  //     totalQuestions,
-  //     qBankQuestions: qBankQuestions.length, // Count of matched questions
-  //     progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
-  //   };
-  // });
+    return {
+      _id: topic._id,
+      name: topic.name,
+      totalQuestions,
+      qBankQuestions: qBankQuestions.length, // Count of matched questions
+      progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+    };
+  });
 
-  res.send({ status: "success", data: subject?.topics });
+  res.send({ status: "success", data: topics });
 });
 
 router.get("/questions", auth, async (req, res) => {
@@ -537,6 +536,148 @@ router.get("/questions", auth, async (req, res) => {
   }
 
   res.send({ status: "success", data: questions });
+});
+
+router.get("/my_questions", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { subjectId, topicId, page = 1, limit = 20 } = req.query;
+
+    // Validate pagination parameters
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build aggregation pipeline for efficient filtering and pagination
+    const pipeline = [
+      { $match: { _id: new mongoose.Types.ObjectId(userId) } },
+      { $project: { qBank: 1 } },
+      { $unwind: "$qBank" },
+    ];
+
+    // Add subject filter if provided
+    if (subjectId) {
+      pipeline.push({
+        $lookup: {
+          from: "questions",
+          localField: "qBank",
+          foreignField: "_id",
+          as: "questionData",
+        },
+      });
+      pipeline.push({ $unwind: "$questionData" });
+      pipeline.push({
+        $match: {
+          "questionData.subject": new mongoose.Types.ObjectId(subjectId),
+        },
+      });
+    }
+
+    // Add topic filter if provided
+    if (topicId) {
+      if (!subjectId) {
+        // Add lookup only if not already added
+        pipeline.push({
+          $lookup: {
+            from: "questions",
+            localField: "qBank",
+            foreignField: "_id",
+            as: "questionData",
+          },
+        });
+        pipeline.push({ $unwind: "$questionData" });
+      }
+      pipeline.push({
+        $match: {
+          "questionData.topic": new mongoose.Types.ObjectId(topicId),
+        },
+      });
+    }
+
+    // Get total count
+    const countPipeline = [...pipeline];
+    countPipeline.push({ $count: "total" });
+    const countResult = await User.aggregate(countPipeline);
+    const totalQuestions = countResult[0]?.total || 0;
+
+    // Add pagination and final projection
+    pipeline.push({ $skip: skip });
+    pipeline.push({ $limit: limitNum });
+    pipeline.push({
+      $lookup: {
+        from: "questions",
+        let: { questionId: "$qBank" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$_id", "$$questionId"] } } },
+          {
+            $lookup: {
+              from: "topics",
+              localField: "topic",
+              foreignField: "_id",
+              as: "topicData",
+            },
+          },
+          {
+            $lookup: {
+              from: "subjects",
+              localField: "subject",
+              foreignField: "_id",
+              as: "subjectData",
+            },
+          },
+          {
+            $lookup: {
+              from: "categories",
+              localField: "categories",
+              foreignField: "_id",
+              as: "categoriesData",
+            },
+          },
+          {
+            $project: {
+              question: 1,
+              answers: 1,
+              point: 1,
+              timer: 1,
+              isTheory: 1,
+              image: 1,
+              topic: { $arrayElemAt: ["$topicData", 0] },
+              subject: { $arrayElemAt: ["$subjectData", 0] },
+              categories: "$categoriesData",
+            },
+          },
+        ],
+        as: "questionDetails",
+      },
+    });
+    pipeline.push({
+      $replaceRoot: { newRoot: { $arrayElemAt: ["$questionDetails", 0] } },
+    });
+
+    const questions = await User.aggregate(pipeline);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalQuestions / limitNum);
+
+    res.send({
+      success: true,
+      data: questions,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalQuestions,
+        questionsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching user qBank questions:", error);
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch questions",
+    });
+  }
 });
 
 router.put(
