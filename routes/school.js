@@ -2945,7 +2945,7 @@ router.post("/:schoolId/classes", auth, async (req, res) => {
 
     // Check if class already exists
     const existingClass = school.classes.find(
-      (c) => c.level === classLevel.toLowerCase(),
+      (c) => c.alias?.toLowerCase() === name.toLowerCase(),
     );
 
     if (existingClass) {
@@ -3448,5 +3448,196 @@ router.delete(
     }
   },
 );
+
+// ==========================================
+// TRANSFER STUDENT(S) TO HIGHER CLASS
+// ==========================================
+
+/**
+ * POST /api/school/:schoolId/classes/:classId/upgrade
+ * Upgrade a single student or all students to a higher class level
+ * Body: { studentId?: string, targetLevel: string, upgradeAll?: boolean }
+ */
+router.post("/:schoolId/classes/:classId/transfer", auth, async (req, res) => {
+  try {
+    const { schoolId, classId } = req.params;
+    const userId = req.user.userId;
+    const { studentId, targetLevelId, upgradeAll } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    if (!targetLevelId) {
+      return res.status(400).json({
+        success: false,
+        message: "Target level is required",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Check authorization
+    const isRep = school.rep?.toString() === userId;
+    const isTeacher = school.teachers.some(
+      (t) => t.user?.toString() === userId,
+    );
+
+    if (!isRep && !isTeacher) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to transfer students",
+      });
+    }
+
+    const sourceClass = school.classes.id(classId);
+
+    if (!sourceClass) {
+      return res.status(404).json({
+        success: false,
+        message: "Source class not found",
+      });
+    }
+
+    // Find target class
+    const targetClass = school.classes.find(
+      (c) => c._id?.toString() === targetLevelId,
+    );
+
+    if (!targetClass) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Transfer class not found. Please create the transfer class first.",
+      });
+    }
+
+    // Validate that target level is higher than source level
+    // const classLevels = ["jss1", "jss2", "jss3", "sss1", "sss2", "sss3"];
+    // const sourceIndex = classLevels.indexOf(sourceClass.level);
+    // const targetIndex = classLevels.indexOf(targetLevel.toLowerCase());
+
+    // if (targetIndex <= sourceIndex) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message:
+    //       "Target level must be higher than current level. Use downgrade for lower levels.",
+    //   });
+    // }
+
+    let studentsToUpgrade = [];
+    let upgradeCount = 0;
+
+    if (upgradeAll) {
+      // Upgrade all students
+      studentsToUpgrade = [...sourceClass.students];
+      upgradeCount = studentsToUpgrade.length;
+
+      if (upgradeCount === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No students to transfer in this class",
+        });
+      }
+
+      // Add all students to target class
+      studentsToUpgrade.forEach((student) => {
+        if (
+          !targetClass.students.some((s) => s.toString() === student.toString())
+        ) {
+          targetClass.students.push(student);
+        }
+      });
+
+      // Remove all students from source class
+      sourceClass.students = [];
+    } else {
+      // Upgrade single student
+      if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid student ID is required",
+        });
+      }
+
+      const studentIndex = sourceClass.students.findIndex(
+        (s) => s.toString() === studentId,
+      );
+
+      if (studentIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          message: "Student not found in this class",
+        });
+      }
+
+      // Check if student already in target class
+      const alreadyInTarget = targetClass.students.some(
+        (s) => s.toString() === studentId,
+      );
+
+      if (alreadyInTarget) {
+        return res.status(400).json({
+          success: false,
+          message: "Student is already in the target class",
+        });
+      }
+
+      // Move student
+      targetClass.students.push(studentId);
+      sourceClass.students.splice(studentIndex, 1);
+      upgradeCount = 1;
+    }
+
+    // Update student's class level in User model
+    if (upgradeAll) {
+      await User.updateMany(
+        { _id: { $in: studentsToUpgrade } },
+        { $set: { "class.level": targetClass?.level.toLowerCase() } },
+      );
+    } else {
+      await User.findByIdAndUpdate(studentId, {
+        $set: { "class.level": targetClass?.level.toLowerCase() },
+      });
+    }
+
+    await school.save();
+
+    res.json({
+      success: true,
+      message: `Successfully transferred ${upgradeCount} student${upgradeCount > 1 ? "s" : ""} from ${sourceClass.level.toUpperCase()} to ${targetClass?.level.toUpperCase()}(${targetClass?.alias})`,
+      data: {
+        studentsUpgraded: upgradeCount,
+        sourceClass: {
+          id: sourceClass._id,
+          level: sourceClass.level,
+          remainingStudents: sourceClass.students.length,
+        },
+        targetClass: {
+          id: targetClass._id,
+          level: targetClass.level,
+          totalStudents: targetClass.students.length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Upgrade students error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to upgrade students",
+      error: error.message,
+    });
+  }
+});
 
 module.exports = router;

@@ -1,12 +1,20 @@
 const mongoose = require("mongoose");
 const Joi = require("joi");
 const jwt = require("jsonwebtoken");
-const { classsSchoolEnums } = require("../controllers/helpers");
 
 const schema = mongoose.Schema;
 
 //
 const DEFAULT_SUB_MILLI = 1000 * 60 * 60 * 24 * 2; // 2 DAYS
+
+const classsSchoolEnums = [
+  "jss 1",
+  "jss 2",
+  "jss 3",
+  "sss 1",
+  "sss 2",
+  "sss 3",
+];
 
 const mediaDataSchema = new schema({
   uri: {
@@ -508,6 +516,9 @@ const userSchema = new schema({
       type: String,
       enum: classsSchoolEnums,
       required: false,
+    },
+    alias: {
+      type: String,
     },
     hasChanged: {
       type: Boolean,

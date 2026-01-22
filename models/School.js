@@ -1,10 +1,17 @@
 const mongoose = require("mongoose");
 const Joi = require("joi");
 const { txHistorySchema } = require("./User");
-const { classsSchoolEnums } = require("../controllers/helpers");
 
 const schema = mongoose.Schema;
 
+const classsSchoolEnums = [
+  "jss 1",
+  "jss 2",
+  "jss 3",
+  "sss 1",
+  "sss 2",
+  "sss 3",
+];
 const DEFAULT_SUB_MILLI = 1000 * 60 * 60 * 24 * 2; // 2 DAYS
 
 const classSchema = new schema({

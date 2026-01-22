@@ -17,7 +17,6 @@ const classsSchoolEnums = [
   "sss 1",
   "sss 2",
   "sss 3",
-  "grad",
 ];
 const userSelector =
   "avatar firstName lastName username class gender preffix state lga points rank verified accountType";
