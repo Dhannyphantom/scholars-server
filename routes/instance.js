@@ -44,24 +44,195 @@ router.get("/subject_category", auth, async (req, res) => {
   const { categoryId } = req.query;
   const userId = req.user.userId;
 
-  const userInfo = await User.findById(userId).select("subjects accountType");
+  try {
+    // Validate categoryId
+    if (!categoryId) {
+      return res.status(400).send({
+        status: "failed",
+        message: "Category ID is required",
+      });
+    }
 
-  if (!userInfo)
-    return res
-      .status(422)
-      .send({ status: "failed", message: "User not found!" });
+    // Fetch user info with qBank
+    const userInfo = await User.findById(userId)
+      .select("subjects accountType qBank")
+      .lean();
 
-  const category = await Category.findById(categoryId)
-    .populate([
+    if (!userInfo) {
+      return res.status(404).send({
+        status: "failed",
+        message: "User not found",
+      });
+    }
+
+    // Verify category exists
+    const category =
+      await Category.findById(categoryId).select("name subjects");
+
+    if (!category) {
+      return res.status(404).send({
+        status: "failed",
+        message: "Category not found",
+      });
+    }
+
+    // Convert user's qBank to ObjectIds for matching
+    const userQBank = (userInfo?.qBank || []).map(
+      (q) => new mongoose.Types.ObjectId(q.toString()),
+    );
+
+    // Aggregate subjects with progress tracking for this category
+    const subjects = await Subject.aggregate([
+      // Filter to only subjects in this category
       {
-        path: "subjects",
-        model: "Subject",
-        select: "name image",
+        $match: { _id: { $in: category.subjects } },
       },
-    ])
-    .select("subjects");
 
-  res.send({ status: "success", data: category.subjects });
+      // Lookup all questions for this subject
+      {
+        $lookup: {
+          from: "questions",
+          localField: "_id",
+          foreignField: "subject",
+          as: "allQuestions",
+        },
+      },
+
+      // Lookup categories this subject belongs to
+      {
+        $lookup: {
+          from: "categories",
+          localField: "_id",
+          foreignField: "subjects",
+          as: "categories",
+        },
+      },
+
+      // Add computed fields
+      {
+        $addFields: {
+          // Total number of questions for this subject
+          numberOfQuestions: { $size: "$allQuestions" },
+
+          // Topic count
+          topicCount: { $size: "$topics" },
+
+          // Filter questions that user has answered
+          answeredQuestions: {
+            $filter: {
+              input: "$allQuestions",
+              as: "question",
+              cond: { $in: ["$$question._id", userQBank] },
+            },
+          },
+        },
+      },
+
+      // Add count of answered questions and progress
+      {
+        $addFields: {
+          questionsAnswered: { $size: "$answeredQuestions" },
+          progressPercentage: {
+            $cond: {
+              if: { $eq: ["$numberOfQuestions", 0] },
+              then: 0,
+              else: {
+                $multiply: [
+                  {
+                    $divide: [
+                      { $size: "$answeredQuestions" },
+                      "$numberOfQuestions",
+                    ],
+                  },
+                  100,
+                ],
+              },
+            },
+          },
+        },
+      },
+
+      // Clean up - remove unnecessary fields
+      {
+        $project: {
+          allQuestions: 0,
+          answeredQuestions: 0,
+          topics: 0,
+        },
+      },
+
+      // Final projection - shape the output
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          image: 1,
+          numberOfQuestions: 1,
+          questionsAnswered: 1,
+          questionsRemaining: {
+            $subtract: ["$numberOfQuestions", "$questionsAnswered"],
+          },
+          progressPercentage: {
+            $round: ["$progressPercentage", 2],
+          },
+          topicCount: 1,
+          categories: {
+            _id: 1,
+            name: 1,
+          },
+          isCompleted: {
+            $eq: ["$numberOfQuestions", "$questionsAnswered"],
+          },
+          hasStarted: {
+            $gt: ["$questionsAnswered", 0],
+          },
+        },
+      },
+
+      // Sort by progress (subjects in progress first, then by name)
+      {
+        $sort: {
+          hasStarted: -1, // Started subjects first
+          progressPercentage: -1, // Then by progress
+          name: 1, // Then alphabetically
+        },
+      },
+    ]);
+
+    // Calculate category-specific statistics
+    const stats = {
+      totalSubjects: subjects.length,
+      completedSubjects: subjects.filter((s) => s.isCompleted).length,
+      inProgressSubjects: subjects.filter((s) => s.hasStarted && !s.isCompleted)
+        .length,
+      notStartedSubjects: subjects.filter((s) => !s.hasStarted).length,
+      totalQuestions: subjects.reduce((sum, s) => sum + s.numberOfQuestions, 0),
+      totalAnswered: subjects.reduce((sum, s) => sum + s.questionsAnswered, 0),
+    };
+
+    stats.overallProgress =
+      stats.totalQuestions > 0
+        ? ((stats.totalAnswered / stats.totalQuestions) * 100).toFixed(2)
+        : 0;
+
+    res.send({
+      status: "success",
+      data: subjects,
+      meta: {
+        categoryId: category._id,
+        categoryName: category.name,
+        userType: userInfo.accountType,
+        stats,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching category subjects:", error);
+    return res.status(500).send({
+      status: "failed",
+      message: "Failed to fetch category subjects",
+      error: error.message,
+    });
+  }
 });
 
 router.get("/subjects", auth, async (req, res) => {
