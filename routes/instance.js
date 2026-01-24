@@ -13,6 +13,9 @@ const { default: mongoose } = require("mongoose");
 const { AppInfo } = require("../models/AppInfo");
 const { Quiz } = require("../models/Quiz");
 
+const { GoogleGenAI } = require("@google/genai");
+const ai = new GoogleGenAI({ apiKey: process.env.GEN_KEY });
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     return cb(null, "./uploads/assets/");
@@ -507,7 +510,7 @@ router.get("/topic", auth, async (req, res) => {
     };
   });
 
-  res.send({ status: "success", data: topics });
+  res.send({ status: "success", data: topics, id: subjectId });
 });
 
 router.get("/questions", auth, async (req, res) => {
@@ -541,135 +544,145 @@ router.get("/questions", auth, async (req, res) => {
 router.get("/my_questions", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { subjectId, topicId, page = 1, limit = 20 } = req.query;
 
-    // Validate pagination parameters
-    const pageNum = Math.max(1, parseInt(page));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
-    const skip = (pageNum - 1) * limitNum;
-
-    // Build aggregation pipeline for efficient filtering and pagination
     const pipeline = [
       { $match: { _id: new mongoose.Types.ObjectId(userId) } },
       { $project: { qBank: 1 } },
       { $unwind: "$qBank" },
-    ];
-
-    // Add subject filter if provided
-    if (subjectId) {
-      pipeline.push({
+      {
         $lookup: {
           from: "questions",
-          localField: "qBank",
-          foreignField: "_id",
-          as: "questionData",
+          let: { questionId: "$qBank" },
+          pipeline: [
+            { $match: { $expr: { $eq: ["$_id", "$$questionId"] } } },
+            {
+              $lookup: {
+                from: "topics",
+                localField: "topic",
+                foreignField: "_id",
+                as: "topicData",
+              },
+            },
+            {
+              $lookup: {
+                from: "subjects",
+                localField: "subject",
+                foreignField: "_id",
+                as: "subjectData",
+              },
+            },
+            {
+              $lookup: {
+                from: "categories",
+                localField: "categories",
+                foreignField: "_id",
+                as: "categoriesData",
+              },
+            },
+            {
+              $project: {
+                question: 1,
+                answers: 1,
+                point: 1,
+                timer: 1,
+                isTheory: 1,
+                image: 1,
+                topic: { $arrayElemAt: ["$topicData", 0] },
+                subject: { $arrayElemAt: ["$subjectData", 0] },
+                categories: "$categoriesData",
+              },
+            },
+          ],
+          as: "questionDetails",
         },
-      });
-      pipeline.push({ $unwind: "$questionData" });
-      pipeline.push({
-        $match: {
-          "questionData.subject": new mongoose.Types.ObjectId(subjectId),
-        },
-      });
-    }
-
-    // Add topic filter if provided
-    if (topicId) {
-      if (!subjectId) {
-        // Add lookup only if not already added
-        pipeline.push({
-          $lookup: {
-            from: "questions",
-            localField: "qBank",
-            foreignField: "_id",
-            as: "questionData",
-          },
-        });
-        pipeline.push({ $unwind: "$questionData" });
-      }
-      pipeline.push({
-        $match: {
-          "questionData.topic": new mongoose.Types.ObjectId(topicId),
-        },
-      });
-    }
-
-    // Get total count
-    const countPipeline = [...pipeline];
-    countPipeline.push({ $count: "total" });
-    const countResult = await User.aggregate(countPipeline);
-    const totalQuestions = countResult[0]?.total || 0;
-
-    // Add pagination and final projection
-    pipeline.push({ $skip: skip });
-    pipeline.push({ $limit: limitNum });
-    pipeline.push({
-      $lookup: {
-        from: "questions",
-        let: { questionId: "$qBank" },
-        pipeline: [
-          { $match: { $expr: { $eq: ["$_id", "$$questionId"] } } },
-          {
-            $lookup: {
-              from: "topics",
-              localField: "topic",
-              foreignField: "_id",
-              as: "topicData",
-            },
-          },
-          {
-            $lookup: {
-              from: "subjects",
-              localField: "subject",
-              foreignField: "_id",
-              as: "subjectData",
-            },
-          },
-          {
-            $lookup: {
-              from: "categories",
-              localField: "categories",
-              foreignField: "_id",
-              as: "categoriesData",
-            },
-          },
-          {
-            $project: {
-              question: 1,
-              answers: 1,
-              point: 1,
-              timer: 1,
-              isTheory: 1,
-              image: 1,
-              topic: { $arrayElemAt: ["$topicData", 0] },
-              subject: { $arrayElemAt: ["$subjectData", 0] },
-              categories: "$categoriesData",
-            },
-          },
-        ],
-        as: "questionDetails",
       },
-    });
-    pipeline.push({
-      $replaceRoot: { newRoot: { $arrayElemAt: ["$questionDetails", 0] } },
+      {
+        $replaceRoot: { newRoot: { $arrayElemAt: ["$questionDetails", 0] } },
+      },
+      // Add random field for shuffling
+      {
+        $addFields: {
+          randomSort: { $rand: {} },
+        },
+      },
+      // Group questions by subject and topic
+      {
+        $group: {
+          _id: {
+            subjectId: "$subject._id",
+            subjectName: "$subject.name",
+            topicId: "$topic._id",
+            topicName: "$topic.name",
+          },
+          questions: {
+            $push: {
+              _id: "$_id",
+              question: "$question",
+              answers: "$answers",
+              point: "$point",
+              timer: "$timer",
+              isTheory: "$isTheory",
+              image: "$image",
+              categories: "$categories",
+              randomSort: "$randomSort",
+            },
+          },
+        },
+      },
+      // Group topics within subjects
+      {
+        $group: {
+          _id: {
+            subjectId: "$_id.subjectId",
+            subjectName: "$_id.subjectName",
+          },
+          topics: {
+            $push: {
+              _id: "$_id.topicId",
+              name: "$_id.topicName",
+              questions: "$questions",
+              questionCount: { $size: "$questions" },
+            },
+          },
+          totalQuestions: { $sum: { $size: "$questions" } },
+        },
+      },
+      // Format the final output
+      {
+        $project: {
+          _id: "$_id.subjectId",
+          name: "$_id.subjectName",
+          topics: 1,
+          totalQuestions: 1,
+        },
+      },
+      // Sort subjects by name
+      { $sort: { name: 1 } },
+    ];
+
+    const subjects = await User.aggregate(pipeline);
+
+    // Randomize questions within each topic and remove randomSort field
+    subjects.forEach((subject) => {
+      subject.topics.forEach((topic) => {
+        // Sort by the random field
+        topic.questions.sort((a, b) => a.randomSort - b.randomSort);
+        // Remove the randomSort field from each question
+        topic.questions.forEach((q) => delete q.randomSort);
+      });
     });
 
-    const questions = await User.aggregate(pipeline);
-
-    // Calculate pagination metadata
-    const totalPages = Math.ceil(totalQuestions / limitNum);
+    // Calculate total questions across all subjects
+    const totalQuestions = subjects.reduce(
+      (sum, subject) => sum + subject.totalQuestions,
+      0,
+    );
 
     res.send({
       success: true,
-      data: questions,
-      pagination: {
-        currentPage: pageNum,
-        totalPages,
-        totalQuestions,
-        questionsPerPage: limitNum,
-        hasNextPage: pageNum < totalPages,
-        hasPrevPage: pageNum > 1,
-      },
+      data: subjects,
+      totalQuestions,
+      totalSubjects: subjects.length,
     });
   } catch (error) {
     console.error("Error fetching user qBank questions:", error);
@@ -1266,7 +1279,10 @@ router.post("/submit_premium", auth, async (req, res) => {
 
         questionData.push({
           question: question.question,
-          answers: question.answers,
+          answers: question.answers?.map((ans) => ({
+            ...ans,
+            name: ans?.name || "null",
+          })),
           answered: question.answered,
           timer: question.timer,
           point: question.point,
@@ -1411,10 +1427,24 @@ router.post("/submit_premium", auth, async (req, res) => {
       (userInfo.quizStats.totalQuestionsAnswered || 0) + totalQuestions;
 
     // ========================================
+    // SAVE QUIZ DOCUMENT
+    // ========================================
+    const newQuiz = new Quiz({
+      user: userId,
+      mode,
+      type,
+      questions: questionData,
+      subjects: subjectIds,
+      topics: topicIds,
+      sessionId: sessionId,
+    });
+
+    await newQuiz.save();
+    // ========================================
     // ADD TO QUIZ HISTORY
     // ========================================
     const quizSession = {
-      quizId: null, // Set after creating Quiz document
+      quizId: newQuiz?._id, // Set after creating Quiz document
       sessionId: sessionId || new mongoose.Types.ObjectId().toString(),
       mode,
       type,
@@ -1433,21 +1463,6 @@ router.post("/submit_premium", auth, async (req, res) => {
     userInfo.quizHistory.push(quizSession);
 
     await userInfo.save();
-
-    // ========================================
-    // SAVE QUIZ DOCUMENT
-    // ========================================
-    const newQuiz = new Quiz({
-      user: userId,
-      mode,
-      type,
-      questions: questionData,
-      subjects: subjectIds,
-      topics: topicIds,
-      sessionId: quizSession.sessionId,
-    });
-
-    await newQuiz.save();
 
     res.send({
       status: "success",
@@ -1473,6 +1488,99 @@ router.post("/submit_premium", auth, async (req, res) => {
     return res.status(422).send({
       status: "failed",
       message: "Something went wrong",
+      error: err.message,
+    });
+  }
+});
+
+/**
+ * POST /api/questions/generate-explanations
+ * Body (optional):
+ * {
+ *   "limit": 10
+ * }
+ */
+
+router.post("/generate-explanations", async (req, res) => {
+  const limit = Math.min(Number(req.body.limit) || 5, 5); // stay within free tier
+
+  try {
+    const questions = await Question.find({
+      explanation: { $exists: false },
+    }).limit(limit);
+
+    if (!questions.length) {
+      return res.json({
+        success: true,
+        updated: 0,
+        message: "No questions pending explanation",
+      });
+    }
+
+    let updated = 0;
+    const errors = [];
+
+    for (const question of questions) {
+      try {
+        const correctAnswers = question.answers.filter((a) => a.correct);
+        if (correctAnswers.length !== 1) continue;
+
+        const prompt = `
+          You are an expert exam tutor.
+
+          Explain the correct answer and briefly explain why the other options are incorrect.
+
+          Rules:
+          - Use plain text only
+          - Do NOT use markdown
+          - Do NOT use asterisks, bullet points, or headings
+          - Do NOT use bold or italics
+          - Do NOT add extra information.
+          - Keep explanations concise and student-friendly
+
+          Question:
+          ${question.question}
+
+          Options:
+          ${question.answers.map((a) => `- ${a.name}`).join("\n")}
+          `;
+
+        const result = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+        });
+
+        const text = result.text?.trim();
+
+        // Detect quota or empty response
+        if (!text || text.includes("Quota exceeded")) {
+          errors.push({
+            questionId: question._id,
+            error: "Rate limit reached",
+          });
+          break; // stop processing further
+        }
+
+        question.explanation = text;
+        await question.save();
+        updated++;
+      } catch (err) {
+        errors.push({
+          questionId: question._id,
+          error: err.message,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: questions.length,
+      updated,
+      errors,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
       error: err.message,
     });
   }

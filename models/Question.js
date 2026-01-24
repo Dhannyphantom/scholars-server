@@ -53,6 +53,10 @@ const QuestionSchema = new schema({
   //   type: String,
   //   required: true,
   // },
+  explanation: {
+    type: String,
+    trim: true,
+  },
   point: {
     type: Number,
     default: 40,
