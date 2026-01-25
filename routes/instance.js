@@ -16,6 +16,12 @@ const { Quiz } = require("../models/Quiz");
 const { GoogleGenAI } = require("@google/genai");
 const ai = new GoogleGenAI({ apiKey: process.env.GEN_KEY });
 
+const Groq = require("groq-sdk");
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_KEY,
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     return cb(null, "./uploads/assets/");
@@ -1546,7 +1552,7 @@ router.post("/generate-explanations", async (req, res) => {
           `;
 
         const result = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-1.5-flash",
           contents: prompt,
         });
 
@@ -1584,6 +1590,116 @@ router.post("/generate-explanations", async (req, res) => {
       error: err.message,
     });
   }
+});
+
+function sanitizeText(text) {
+  return text.replace(/\*\*/g, "").replace(/\*/g, "").trim();
+}
+
+function buildPrompt(question) {
+  return `
+You are an expert exam tutor.
+
+Explain the correct answer and briefly explain why the other options are incorrect.
+
+Rules:
+- Use plain text only
+- Use proper line breaks and spacing
+- Use proper line breaks also for the options
+- Do not use markdown
+- Do not use bullet points
+- Do not use asterisks or formatting
+- Use proper mathematical notation where necessary
+- Keep explanations concise and student-friendly
+
+Question:
+${question.question}
+
+Options:
+${question.answers.map((a) => `- ${a.name}`).join("\n")}
+`;
+}
+
+router.post("/generate-explanations-groq", async (req, res) => {
+  const limit = Math.min(Number(req.body.limit) || 2, 200);
+
+  try {
+    const questions = await Question.find({
+      explanation: { $exists: false },
+    }).limit(limit);
+
+    if (!questions.length) {
+      return res.json({
+        success: true,
+        updated: 0,
+        message: "No questions pending explanation",
+      });
+    }
+
+    let updated = 0;
+    const errors = [];
+
+    for (const question of questions) {
+      try {
+        if (!question.answers || question.answers.length < 2) continue;
+
+        const correctAnswers = question.answers.filter((a) => a.correct);
+        if (correctAnswers.length !== 1) continue;
+
+        const completion = await groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "user",
+              content: buildPrompt(question),
+            },
+          ],
+          temperature: 0.3,
+        });
+
+        const text = completion.choices[0]?.message?.content;
+
+        if (!text) {
+          errors.push({
+            questionId: question._id,
+            error: "Empty response from Groq",
+          });
+          continue;
+        }
+
+        question.explanation = sanitizeText(text);
+        await question.save();
+        updated++;
+      } catch (err) {
+        errors.push({
+          questionId: question._id,
+          error: err.message,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: questions.length,
+      updated,
+      errors,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+router.get("/ai_ques", async (req, res) => {
+  // await Question.updateMany({}, { $unset: { explanation: "" } });
+
+  const questions = await Question.find({
+    explanation: { $exists: true },
+  }).countDocuments();
+
+  res.send({ questions });
 });
 
 // router.get("/mod_data", async (req, res) => {
