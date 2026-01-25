@@ -1621,7 +1621,7 @@ ${question.answers.map((a) => `- ${a.name}`).join("\n")}
 }
 
 router.post("/generate-explanations-groq", async (req, res) => {
-  const limit = Math.min(Number(req.body.limit) || 2, 200);
+  const limit = Math.min(Number(req.body.limit) || 30, 200);
 
   try {
     const questions = await Question.find({
