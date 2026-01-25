@@ -1287,7 +1287,7 @@ router.post("/submit_premium", auth, async (req, res) => {
           question: question.question,
           answers: question.answers?.map((ans) => ({
             ...ans,
-            name: ans?.name || "null",
+            name: ans?.name || "None",
           })),
           answered: question.answered,
           timer: question.timer,
@@ -1303,7 +1303,7 @@ router.post("/submit_premium", auth, async (req, res) => {
       });
     });
 
-    totalPoints = Math.max(0, totalPoints);
+    // totalPoints = Math.max(0, totalPoints);
 
     // ========================================
     // UPDATE QUOTA (ONLY FOR SOLO MODE)
@@ -1391,7 +1391,7 @@ router.post("/submit_premium", auth, async (req, res) => {
     // ========================================
     // UPDATE USER POINTS & qBank
     // ========================================
-    userInfo.points += totalPoints;
+    userInfo.points = Math.max(0, totalPoints + userInfo.points);
     userInfo.totalPoints += totalPoints;
     userInfo.qBank = userInfo.qBank.concat(newQuestionIds);
 
