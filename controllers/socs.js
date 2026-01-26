@@ -2,6 +2,7 @@ const uuid = require("uuid");
 const { User } = require("../models/User");
 const { Quiz } = require("../models/Quiz");
 const expoNotifications = require("./expoNotifications");
+const { AppInfo } = require("../models/AppInfo");
 
 const sessions = {};
 const nanoid = uuid.v4;
@@ -247,7 +248,7 @@ module.exports = (io) => {
 
       // Update user status
       session.users = session.users.map((u) =>
-        u._id === user._id ? { ...u, status } : u
+        u._id === user._id ? { ...u, status } : u,
       );
 
       const leaderboard = buildLeaderboard(session);
@@ -335,17 +336,35 @@ module.exports = (io) => {
         session.hasEnded = true;
         session.endedAt = Date.now();
 
-        // Emit FINAL leaderboard
-        io.to(sessionId).emit("leaderboard_update", {
-          leaderboard,
-          isFinal: true,
-          endedAt: session.endedAt,
-        });
-
         // Persist quiz results to database
-        persistQuizResults(session, leaderboard).catch((err) => {
-          console.error("Failed to persist quiz results:", err);
-        });
+
+        persistQuizResults(session, leaderboard)
+          .then((results) => {
+            console.log({ results });
+
+            // Check if it succeeded
+            if (results.success) {
+              console.log("✅ Quiz results persisted");
+              io.to(sessionId).emit("leaderboard_update", {
+                stats: results?.results,
+                leaderboard,
+                isFinal: true,
+                endedAt: session.endedAt,
+              });
+            } else {
+              console.error("Failed:", results.error);
+            }
+          })
+          .catch((err) => {
+            console.error("Failed to persist quiz results:", err);
+          });
+
+        // Emit FINAL leaderboard
+        // io.to(sessionId).emit("leaderboard_update", {
+        //   leaderboard,
+        //   isFinal: true,
+        //   endedAt: session.endedAt,
+        // });
 
         // Clean up session after 5 minutes
         setTimeout(() => {
@@ -393,12 +412,12 @@ module.exports = (io) => {
 
       const allReady = areAllNonHostReady(session);
       const acceptedUsers = session.users.filter(
-        (u) => u.status === "accepted"
+        (u) => u.status === "accepted",
       );
       const readyUsers = acceptedUsers.filter((u) => u.isReady);
 
       console.log(
-        `Ready check for session ${sessionId}: ${readyUsers.length}/${acceptedUsers.length} ready`
+        `Ready check for session ${sessionId}: ${readyUsers.length}/${acceptedUsers.length} ready`,
       );
 
       if (allReady && session.quizData) {
@@ -406,7 +425,7 @@ module.exports = (io) => {
         session.startedAt = Date.now();
 
         console.log(
-          `🚀 Starting quiz for session ${sessionId} with ${acceptedUsers.length} players`
+          `🚀 Starting quiz for session ${sessionId} with ${acceptedUsers.length} players`,
         );
 
         io.to(sessionId).emit("quiz_start", {
@@ -427,7 +446,7 @@ module.exports = (io) => {
         console.log(
           `User ${removedUser?.username || toUserId} removed from session ${
             session.sessionId
-          }`
+          }`,
         );
       }
 
@@ -471,7 +490,7 @@ module.exports = (io) => {
       session.subjects = subjects;
       console.log(
         `Subjects set for session ${sessionId}:`,
-        subjects.map((s) => s.name).join(", ")
+        subjects.map((s) => s.name).join(", "),
       );
 
       const leaderboard = buildLeaderboard(session);
@@ -539,16 +558,21 @@ async function persistQuizResults(session, leaderboard) {
   try {
     console.log("💾 Persisting quiz results to database...");
 
+    // Get app info for point deduction on wrong answers
+    const appInfo = await AppInfo.findOne({ ID: "APP" });
+
     // Extract metadata from quiz data
     const { subjects, topics } = extractMetadata(session.quizData);
 
     // Flatten all questions from the quiz data
     const allQuestions = [];
+    const allQuestionIds = []; // Track question IDs separately
+
     if (Array.isArray(session.quizData)) {
       session.quizData.forEach((subject) => {
         if (subject.questions && Array.isArray(subject.questions)) {
-          allQuestions.push(
-            ...subject.questions.map((q) => ({
+          subject.questions.forEach((q) => {
+            allQuestions.push({
               question: q.question,
               answers: q.answers || [],
               answered: q.answered || null,
@@ -557,8 +581,13 @@ async function persistQuizResults(session, leaderboard) {
               categories: q.categories || [],
               point: q.point || 40,
               timer: q.timer || 40,
-            }))
-          );
+            });
+
+            // Store the actual question ID for qBank tracking
+            if (q._id) {
+              allQuestionIds.push(q._id);
+            }
+          });
         }
       });
     }
@@ -567,13 +596,16 @@ async function persistQuizResults(session, leaderboard) {
     const quizDuration = session.endedAt - session.startedAt;
     const winner = leaderboard[0];
 
+    const REPEATED_QUESTION_POINTS = 0.2;
+    let playerResults = {};
+
     // Create Quiz document for each participant
     const quizDocs = [];
     for (const player of leaderboard) {
       try {
         const quizDoc = await Quiz.create({
           mode: session.mode || "friends",
-          type: "premium", // or determine based on your logic
+          type: "premium",
           user: player._id,
           subjects: subjects,
           topics: topics,
@@ -590,57 +622,117 @@ async function persistQuizResults(session, leaderboard) {
       } catch (quizErr) {
         console.error(
           `Failed to save quiz for ${player.username}:`,
-          quizErr.message
+          quizErr.message,
         );
       }
     }
 
-    // Update User points, stats, history, and invites
+    // Update User points, stats, history, qBank, and invites
     for (const [index, player] of leaderboard.entries()) {
-      const pointsEarned = player.points || 0;
-      const correctAnswers = player.correctCount || 0;
       const rank = index + 1;
       const isWinner = player._id.toString() === winner._id.toString();
 
       try {
-        const user = await User.findById(player._id);
+        const user = await User.findById(player._id).select(
+          "qBank quizStats quizHistory points totalPoints invites",
+        );
         if (!user) continue;
+
+        // ========================================
+        // CALCULATE POINTS BASED ON THIS USER'S qBank
+        // ========================================
+        const userQBank = (user.qBank || []).map((q) => q.toString());
+        const qBankSet = new Set(userQBank);
+
+        let totalPoints = 0;
+        const newQuestionIds = [];
+        const answeredQuestionIds = [];
+        let correctAnswers = 0;
+
+        // Get this player's answers from session data
+        const playerAnswers = player.answers || []; // Assume answers stored in player object
+
+        allQuestionIds.forEach((questionId, idx) => {
+          const questionIdStr = questionId.toString();
+
+          const isNewQuestion = !qBankSet.has(questionIdStr);
+          const playerAnswer = playerAnswers[idx];
+          const isCorrect = playerAnswer?.correct || false;
+
+          // Get point value from corresponding question
+          const question = allQuestions[idx];
+
+          if (isCorrect) {
+            correctAnswers++;
+            if (isNewQuestion) {
+              // Award full points for NEW correct answers
+              totalPoints += question.point;
+              newQuestionIds.push(questionId);
+            } else {
+              // Award 0.2 points for REPEATED correct answers
+              totalPoints += REPEATED_QUESTION_POINTS;
+              answeredQuestionIds.push(questionId);
+            }
+          } else {
+            // Wrong answer - deduct points
+            totalPoints -= appInfo.POINT_FAIL;
+            if (isNewQuestion) {
+              newQuestionIds.push(questionId);
+            } else {
+              answeredQuestionIds.push(questionId);
+            }
+          }
+        });
+
+        // ========================================
+        // UPDATE USER POINTS & qBank
+        // ========================================
+        const updatedPoints = Math.max(0, totalPoints + user.points);
+        const updatedTotalPoints = user.totalPoints + totalPoints;
+        const updatedQBank = user.qBank.concat(newQuestionIds);
 
         // Find the quiz doc for this player
         const playerQuiz = quizDocs.find(
-          (q) => q.playerId.toString() === player._id.toString()
+          (q) => q.playerId.toString() === player._id.toString(),
         );
 
-        // Calculate new stats
-        const totalQuizzes = (user.quizStats?.totalQuizzes || 0) + 1;
-        const totalSoloQuizzes = user.quizStats?.totalSoloQuizzes || 0;
+        // ========================================
+        // CALCULATE QUIZ STATS
+        // ========================================
+        if (!user.quizStats) {
+          user.quizStats = {};
+        }
+
+        const totalQuizzes = (user.quizStats.totalQuizzes || 0) + 1;
         const totalMultiplayerQuizzes =
-          (user.quizStats?.totalMultiplayerQuizzes || 0) + 1;
+          (user.quizStats.totalMultiplayerQuizzes || 0) + 1;
         const totalCorrect =
-          (user.quizStats?.totalCorrectAnswers || 0) + correctAnswers;
+          (user.quizStats.totalCorrectAnswers || 0) + correctAnswers;
         const totalAnswered =
-          (user.quizStats?.totalQuestionsAnswered || 0) + totalQuestions;
+          (user.quizStats.totalQuestionsAnswered || 0) + totalQuestions;
         const newAverageScore =
-          ((user.quizStats?.averageScore || 0) * (totalQuizzes - 1) +
-            pointsEarned) /
+          ((user.quizStats.averageScore || 0) * (totalQuizzes - 1) +
+            totalPoints) /
           totalQuizzes;
         const newAccuracyRate =
           totalAnswered > 0 ? (totalCorrect / totalAnswered) * 100 : 0;
 
         // Multiplayer stats
         const multiplayerWins =
-          (user.quizStats?.multiplayerStats?.wins || 0) + (isWinner ? 1 : 0);
+          (user.quizStats.multiplayerStats?.wins || 0) + (isWinner ? 1 : 0);
         const multiplayerGames = totalMultiplayerQuizzes;
         const winRate =
           multiplayerGames > 0 ? (multiplayerWins / multiplayerGames) * 100 : 0;
 
-        // Build quiz history entry
+        // ========================================
+        // BUILD QUIZ HISTORY ENTRY
+        // ========================================
         const historyEntry = {
           quizId: playerQuiz?.quizId,
           sessionId: session.sessionId,
           mode: session.mode || "friends",
           type: "premium",
-          pointsEarned,
+          pointsEarned: totalPoints,
           correctAnswers,
           totalQuestions,
           rank,
@@ -660,21 +752,22 @@ async function persistQuizResults(session, leaderboard) {
           duration: quizDuration,
         };
 
-        // Update operations
+        // ========================================
+        // UPDATE OPERATIONS
+        // ========================================
         const updateOps = {
-          $inc: {
-            points: pointsEarned,
-            totalPoints: pointsEarned,
-            "quizStats.totalQuizzes": 1,
-            "quizStats.totalMultiplayerQuizzes": 1,
-            "quizStats.totalCorrectAnswers": correctAnswers,
-            "quizStats.totalQuestionsAnswered": totalQuestions,
-            "quizStats.multiplayerStats.totalGames": 1,
-          },
           $set: {
+            points: updatedPoints,
+            totalPoints: updatedTotalPoints,
+            qBank: updatedQBank,
+            "quizStats.totalQuizzes": totalQuizzes,
+            "quizStats.totalMultiplayerQuizzes": totalMultiplayerQuizzes,
+            "quizStats.totalCorrectAnswers": totalCorrect,
+            "quizStats.totalQuestionsAnswered": totalAnswered,
             "quizStats.averageScore": newAverageScore,
             "quizStats.accuracyRate": newAccuracyRate,
             "quizStats.lastQuizDate": new Date(),
+            "quizStats.multiplayerStats.totalGames": multiplayerGames,
             "quizStats.multiplayerStats.winRate": winRate,
           },
           $push: {
@@ -688,18 +781,21 @@ async function persistQuizResults(session, leaderboard) {
 
         // Conditionally increment win counters
         if (isWinner) {
-          updateOps.$inc["quizStats.multiplayerStats.wins"] = 1;
-          updateOps.$inc["quizStats.totalWins"] = 1;
+          updateOps.$set["quizStats.multiplayerStats.wins"] = multiplayerWins;
+          updateOps.$set["quizStats.totalWins"] =
+            (user.quizStats.totalWins || 0) + 1;
         } else if (rank === 2) {
-          updateOps.$inc["quizStats.multiplayerStats.secondPlace"] = 1;
+          updateOps.$set["quizStats.multiplayerStats.secondPlace"] =
+            (user.quizStats.multiplayerStats?.secondPlace || 0) + 1;
         } else if (rank === 3) {
-          updateOps.$inc["quizStats.multiplayerStats.thirdPlace"] = 1;
+          updateOps.$set["quizStats.multiplayerStats.thirdPlace"] =
+            (user.quizStats.multiplayerStats?.thirdPlace || 0) + 1;
         }
 
         // Update best score if this is better
-        if (pointsEarned > (user.quizStats?.bestScore?.points || 0)) {
+        if (totalPoints > (user.quizStats?.bestScore?.points || 0)) {
           updateOps.$set["quizStats.bestScore"] = {
-            points: pointsEarned,
+            points: totalPoints,
             quizId: playerQuiz?.quizId,
             sessionId: session.sessionId,
             date: new Date(),
@@ -722,7 +818,7 @@ async function persistQuizResults(session, leaderboard) {
         if (session.category) {
           const categoryIndex = user.quizStats?.categoryStats?.findIndex(
             (cs) =>
-              cs.category._id.toString() === session.category._id.toString()
+              cs.category._id.toString() === session.category._id.toString(),
           );
 
           if (categoryIndex >= 0) {
@@ -730,20 +826,20 @@ async function persistQuizResults(session, leaderboard) {
             const catStats = user.quizStats.categoryStats[categoryIndex];
             const newCatAvg =
               (catStats.averageScore * catStats.quizzesCompleted +
-                pointsEarned) /
+                totalPoints) /
               (catStats.quizzesCompleted + 1);
 
-            updateOps.$inc[
+            updateOps.$set[
               `quizStats.categoryStats.${categoryIndex}.quizzesCompleted`
-            ] = 1;
+            ] = catStats.quizzesCompleted + 1;
             updateOps.$set[
               `quizStats.categoryStats.${categoryIndex}.averageScore`
             ] = newCatAvg;
 
-            if (pointsEarned > catStats.bestScore) {
+            if (totalPoints > catStats.bestScore) {
               updateOps.$set[
                 `quizStats.categoryStats.${categoryIndex}.bestScore`
-              ] = pointsEarned;
+              ] = totalPoints;
             }
           } else {
             // Add new category stats
@@ -754,13 +850,15 @@ async function persistQuizResults(session, leaderboard) {
                 name: session.category.name,
               },
               quizzesCompleted: 1,
-              averageScore: pointsEarned,
-              bestScore: pointsEarned,
+              averageScore: totalPoints,
+              bestScore: totalPoints,
             };
           }
         }
 
-        // Update invite status to completed
+        // ========================================
+        // UPDATE INVITE STATUS
+        // ========================================
         await User.updateOne(
           {
             _id: player._id,
@@ -773,20 +871,68 @@ async function persistQuizResults(session, leaderboard) {
               "invites.$.quizId": playerQuiz?.quizId,
               "invites.$.completedAt": new Date(),
             },
-          }
+          },
         );
 
         // Apply all updates
         await User.findByIdAndUpdate(player._id, updateOps, { new: true });
+
+        // ========================================
+        // STORE PLAYER RESULT DATA (similar to submit_premium response)
+        // ========================================
+        playerResults[player._id.toString()] = {
+          userId: player._id,
+          username: player.username,
+          pointsEarned: totalPoints,
+          newQuestionsAnswered: newQuestionIds.length,
+          repeatedQuestions: answeredQuestionIds.length,
+          correctAnswers,
+          totalQuestions,
+          accuracy: ((correctAnswers / totalQuestions) * 100).toFixed(2),
+          rank,
+          isWinner,
+          quizId: playerQuiz?.quizId,
+          // Updated totals
+          totalPointsNow: updatedPoints,
+          totalQuestionsInQBank: updatedQBank.length,
+        };
+
+        console.log(
+          `✅ Updated ${player.username}: Points: ${totalPoints}, New Questions: ${newQuestionIds.length}, Correct: ${correctAnswers}/${totalQuestions}`,
+        );
       } catch (userErr) {
         console.error(
           `Failed to update user ${player.username}:`,
-          userErr.message
+          userErr.message,
         );
+        // Store error result
+        playerResults[player._id.toString()] = {
+          userId: player._id,
+          username: player.username,
+          error: userErr.message,
+        };
       }
     }
+
+    console.log("✅ Quiz results persisted successfully");
+
+    // ========================================
+    // RETURN RESULTS FOR ALL PLAYERS
+    // ========================================
+    return {
+      success: true,
+      sessionId: session.sessionId,
+      totalPlayers: leaderboard.length,
+      quizDuration,
+      results: playerResults,
+    };
   } catch (error) {
-    throw error;
+    console.error("❌ Error persisting quiz results:", error);
+    return {
+      success: false,
+      error: error.message,
+      sessionId: session?.sessionId,
+    };
   }
 }
 
@@ -816,7 +962,7 @@ async function updateUserInvite({
           ...updateObj,
         },
       },
-    }
+    },
   );
 
   // 2️⃣ If no invite matched, push a new one
@@ -830,7 +976,7 @@ async function updateUserInvite({
             ...updateObj,
           },
         },
-      }
+      },
     );
   }
 
@@ -839,7 +985,7 @@ async function updateUserInvite({
     if (userInfo) {
       await expoNotifications([userInfo.expoPushToken], {
         title: "New Quiz Invite",
-        message: `${session.host.username} is inviting you for a quiz session`,
+        message: `${session?.host?.username} is inviting you for a quiz session`,
         data: updateObj,
       });
     }
