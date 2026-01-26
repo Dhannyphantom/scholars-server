@@ -8,7 +8,6 @@ const sessions = {};
 const nanoid = uuid.v4;
 
 const areAllNonHostReady = (session) => {
-  // Check only accepted users
   const acceptedUsers =
     session?.users?.filter((u) => u.status === "accepted") || [];
   if (acceptedUsers.length === 0) return false;
@@ -18,25 +17,24 @@ const areAllNonHostReady = (session) => {
 const buildLeaderboard = (session) => {
   const players = [];
 
-  // Include host in the players array consistently
   if (session.host) {
     players.push({
       ...session.host,
       isHost: true,
       points: session.host.points || 0,
       correctCount: session.host.correctCount || 0,
+      answeredQuestions: session.host.answeredQuestions || [],
     });
   }
 
-  // Include all users
   session.users.forEach((u) => {
-    // Only include accepted users in leaderboard
     if (u.status === "accepted") {
       players.push({
         ...u,
         isHost: false,
         points: u.points || 0,
         correctCount: u.correctCount || 0,
+        answeredQuestions: u.answeredQuestions || [],
       });
     }
   });
@@ -44,26 +42,51 @@ const buildLeaderboard = (session) => {
   return players.sort((a, b) => (b.points || 0) - (a.points || 0));
 };
 
-const updatePlayerPoints = (session, user, point, isCorrect) => {
-  // Try to find in users array first
+const updatePlayerPoints = (session, user, question, isCorrect) => {
+  const point = isCorrect ? question?.point : -2;
   const userIdx = session.users.findIndex((u) => u._id === user._id);
+
+  // Create answered question object
+  const answeredQuestion = {
+    questionId: question._id,
+    answered: question.answered,
+    isCorrect: isCorrect,
+    point: point,
+    timestamp: Date.now(),
+  };
 
   if (userIdx >= 0) {
     session.users[userIdx].points =
       (session.users[userIdx].points || 0) + point;
+
     if (isCorrect) {
       session.users[userIdx].correctCount =
         (session.users[userIdx].correctCount || 0) + 1;
     }
+
+    // Track answered questions
+    if (!session.users[userIdx].answeredQuestions) {
+      session.users[userIdx].answeredQuestions = [];
+    }
+    session.users[userIdx].answeredQuestions.push(answeredQuestion);
+
     return session.users[userIdx];
   }
 
   // Check if it's the host
   if (session.host && user._id === session.host._id) {
     session.host.points = (session.host.points || 0) + point;
+
     if (isCorrect) {
       session.host.correctCount = (session.host.correctCount || 0) + 1;
     }
+
+    // Track answered questions
+    if (!session.host.answeredQuestions) {
+      session.host.answeredQuestions = [];
+    }
+    session.host.answeredQuestions.push(answeredQuestion);
+
     return session.host;
   }
 
@@ -78,7 +101,6 @@ const checkIfAllFinished = (session) => {
   return hostFinished && allUsersFinished && acceptedUsers.length > 0;
 };
 
-// Extract unique subjects and topics from quizData
 const extractMetadata = (quizData) => {
   const subjects = new Set();
   const topics = new Set();
@@ -117,11 +139,12 @@ module.exports = (io) => {
           ...host,
           points: 0,
           correctCount: 0,
-          isReady: true, // Host is auto-ready
+          answeredQuestions: [],
+          isReady: true,
           hasFinished: false,
         },
         users: [],
-        mode: "friends", // Set default mode
+        mode: "friends",
         hasStarted: false,
         hasEnded: false,
         createdAt: Date.now(),
@@ -133,16 +156,23 @@ module.exports = (io) => {
     });
 
     socket.on("join_session", ({ sessionId, user }) => {
-      socket.join(sessionId);
-
       if (!sessions[sessionId]) {
         console.log(`Session ${sessionId} not found for join_session`);
-        sessions[sessionId] = {
+        io.to(user?._id).emit("active_session", { active: false });
+        updateUserInvite({
+          userId: user?._id,
           sessionId,
-          users: [],
-          mode: "friends",
-        };
+          status: "missed",
+        }).catch((err) => console.log(err));
+        // sessions[sessionId] = {
+        //   sessionId,
+        //   users: [],
+        //   mode: "friends",
+        // };
+        return;
       }
+
+      socket.join(sessionId);
 
       const exists = sessions[sessionId].users.find((u) => u._id === user._id);
 
@@ -152,13 +182,13 @@ module.exports = (io) => {
           status: "pending",
           points: 0,
           correctCount: 0,
+          answeredQuestions: [],
           isReady: false,
           hasFinished: false,
         });
         console.log(`User ${user.username} joined session ${sessionId}`);
       }
 
-      // Send full session snapshot including current leaderboard
       const leaderboard = buildLeaderboard(sessions[sessionId]);
       io.to(sessionId).emit("session_snapshot", {
         ...sessions[sessionId],
@@ -192,6 +222,7 @@ module.exports = (io) => {
           status: "pending",
           points: 0,
           correctCount: 0,
+          answeredQuestions: [],
           isReady: false,
           hasFinished: false,
         });
@@ -203,7 +234,6 @@ module.exports = (io) => {
         leaderboard,
       });
 
-      // update DB
       updateUserInvite({
         userId: user?._id,
         sessionId,
@@ -216,11 +246,24 @@ module.exports = (io) => {
       const session = sessions[sessionId];
       if (!session) {
         console.log("No session found:", sessionId);
+        io.to(user?._id).emit("active_session", { active: false });
+        updateUserInvite({
+          userId: user?._id,
+          sessionId,
+          status: "missed",
+        }).catch((err) => console.log(err));
         return;
       }
 
-      // Handle host leaving
-      if (session.host._id === user?._id && status === "rejected") {
+      if (status === "accepted") {
+        io.to(user?._id).emit("active_session", {
+          active: true,
+          sessionId,
+          host: session?.host,
+        });
+      }
+
+      if (session?.host?._id === user?._id && status === "rejected") {
         console.log("Host is leaving session - transferring to next user");
 
         const nextUser = session.users.find((u) => u.status === "accepted");
@@ -230,6 +273,7 @@ module.exports = (io) => {
             status: "host",
             points: nextUser.points || 0,
             correctCount: nextUser.correctCount || 0,
+            answeredQuestions: nextUser.answeredQuestions || [],
             isReady: nextUser.isReady || false,
           };
           session.users = session.users.filter((u) => u._id !== nextUser._id);
@@ -246,7 +290,6 @@ module.exports = (io) => {
         }
       }
 
-      // Update user status
       session.users = session.users.map((u) =>
         u._id === user._id ? { ...u, status } : u,
       );
@@ -258,13 +301,11 @@ module.exports = (io) => {
         sessionId,
       });
 
-      // Send updated session
       io.to(sessionId).emit("session_snapshot", {
         ...session,
         leaderboard,
       });
 
-      // update DB
       updateUserInvite({
         userId: user?._id,
         sessionId,
@@ -272,52 +313,52 @@ module.exports = (io) => {
       }).catch((err) => console.log(err));
     });
 
-    socket.on("answer_question", ({ sessionId, answer, user, row, point }) => {
+    socket.on("answer_question", ({ sessionId, question, user, row }) => {
       const session = sessions[sessionId];
       if (!session) {
         console.log("No session found:", sessionId);
         return;
       }
 
-      const isCorrect = answer?.correct === true;
+      const isCorrect = question?.answered?.correct === true;
+      const point = isCorrect ? question?.point : -2;
 
-      // Update player points consistently
-      const updatedPlayer = updatePlayerPoints(session, user, point, isCorrect);
+      const updatedPlayer = updatePlayerPoints(
+        session,
+        user,
+        question,
+        isCorrect,
+      );
 
       if (!updatedPlayer) {
         return;
       }
 
-      // Build message
       const message = isCorrect
         ? `${user?.username} got ${point}GT`
         : `${user?.username} lost ${Math.abs(point)}GT`;
 
-      // Emit answer notification
       io.to(sessionId).emit("session_answers", {
         message,
         userId: user._id,
       });
 
-      // Build and emit leaderboard after each answer
       const leaderboard = buildLeaderboard(session);
       io.to(sessionId).emit("leaderboard_update", {
         leaderboard,
         timestamp: Date.now(),
       });
 
-      // Emit session snapshot for state sync
       io.to(sessionId).emit("session_snapshots", session);
     });
 
-    socket.on("quiz_end", ({ sessionId, user }) => {
+    socket.on("quiz_end", async ({ sessionId, user }) => {
       const session = sessions[sessionId];
       if (!session) {
         console.log("No session found:", sessionId);
         return;
       }
 
-      // Mark user as finished
       const userIdx = session.users.findIndex((u) => u._id === user._id);
 
       if (userIdx >= 0) {
@@ -326,23 +367,17 @@ module.exports = (io) => {
         session.host.hasFinished = true;
       }
 
-      // Check if ALL players have finished
       const allFinished = checkIfAllFinished(session);
-
-      // Build current leaderboard
       const leaderboard = buildLeaderboard(session);
 
       if (allFinished && !session.hasEnded) {
         session.hasEnded = true;
         session.endedAt = Date.now();
 
-        // Persist quiz results to database
-
         persistQuizResults(session, leaderboard)
           .then((results) => {
             console.log({ results });
 
-            // Check if it succeeded
             if (results.success) {
               console.log("✅ Quiz results persisted");
               io.to(sessionId).emit("leaderboard_update", {
@@ -359,20 +394,10 @@ module.exports = (io) => {
             console.error("Failed to persist quiz results:", err);
           });
 
-        // Emit FINAL leaderboard
-        // io.to(sessionId).emit("leaderboard_update", {
-        //   leaderboard,
-        //   isFinal: true,
-        //   endedAt: session.endedAt,
-        // });
-
-        // Clean up session after 5 minutes
         setTimeout(() => {
           delete sessions[sessionId];
         }, 300000);
       } else {
-        // Just update leaderboard - not everyone finished yet
-
         io.to(sessionId).emit("leaderboard_update", {
           leaderboard,
           timestamp: Date.now(),
@@ -387,7 +412,6 @@ module.exports = (io) => {
         return;
       }
 
-      // Update ready status
       const idx = session.users.findIndex((u) => u._id === user._id);
       if (idx >= 0) {
         session.users[idx].isReady = true;
@@ -397,14 +421,12 @@ module.exports = (io) => {
 
       io.to(user._id).emit("player_ready", user);
 
-      // Send updated session to all
       const leaderboard = buildLeaderboard(session);
       io.to(sessionId).emit("session_snapshots", {
         ...session,
         leaderboard,
       });
 
-      // Start quiz if everyone is ready
       if (session.hasStarted) {
         console.log("Quiz already started");
         return;
@@ -453,7 +475,6 @@ module.exports = (io) => {
       io.to(toUserId).emit("un_invite", session);
       io.to(session.sessionId).emit("remove_invited", session);
 
-      // Update leaderboard after removal
       if (sessionData) {
         const leaderboard = buildLeaderboard(sessionData);
         io.to(session.sessionId).emit("session_snapshot", {
@@ -524,9 +545,6 @@ module.exports = (io) => {
       });
     });
 
-    //============== CAHTS SOCKETS ========================
-    //============== CAHTS SOCKETS ========================
-    //============== CAHTS SOCKETS ========================
     socket.on("join_ticket", (ticketId) => {
       socket.join(ticketId);
       console.log(`Joined ticket room: ${ticketId}`);
@@ -550,27 +568,16 @@ module.exports = (io) => {
   });
 };
 
-/**
- * Persist quiz results to database using existing Quiz model
- * This is called when ALL players finish the quiz
- */
-/**
- * Persist quiz results to database using existing Quiz model
- * This is called when ALL players finish the quiz
- */
 async function persistQuizResults(session, leaderboard) {
-  const playerResults = {}; // Store results for each player to return
+  const playerResults = {};
 
   try {
     console.log("💾 Persisting quiz results to database...");
 
-    // Get app info for point deduction on wrong answers
     const appInfo = await AppInfo.findOne({ ID: "APP" });
-
-    // Extract metadata from quiz data
     const { subjects, topics } = extractMetadata(session.quizData);
 
-    // Flatten all questions from the quiz data with their IDs
+    // Flatten all questions with their IDs
     const allQuestions = [];
     const allQuestionIds = [];
 
@@ -586,10 +593,9 @@ async function persistQuizResults(session, leaderboard) {
               subject: q.subject || subject.subject || null,
               categories: q.categories || [],
               point: q.point || 5,
-              timer: q.timer || 5,
+              timer: q.timer || 40,
             });
 
-            // Store the actual question ID for qBank tracking
             if (q._id) {
               allQuestionIds.push(q._id);
             }
@@ -601,10 +607,9 @@ async function persistQuizResults(session, leaderboard) {
     const totalQuestions = allQuestions.length;
     const quizDuration = session.endedAt - session.startedAt;
     const winner = leaderboard[0];
-
     const REPEATED_QUESTION_POINTS = 0.2;
 
-    // Create Quiz document for each participant
+    // Create Quiz documents
     const quizDocs = [];
     for (const player of leaderboard) {
       try {
@@ -632,14 +637,10 @@ async function persistQuizResults(session, leaderboard) {
       }
     }
 
-    // Update User points, stats, history, qBank, quota, and invites
+    // Update each player's data
     for (const [index, player] of leaderboard.entries()) {
       const rank = index + 1;
       const isWinner = player._id.toString() === winner._id.toString();
-
-      // Points already tracked in session (from updatePlayerPoints)
-      const sessionPoints = player.points || 0;
-      const sessionCorrectCount = player.correctCount || 0;
 
       try {
         const user = await User.findById(player._id).select(
@@ -648,8 +649,7 @@ async function persistQuizResults(session, leaderboard) {
         if (!user) continue;
 
         // ========================================
-        // RECALCULATE POINTS BASED ON THIS USER'S qBank
-        // The session tracked raw points, but we need to adjust for new vs repeated questions
+        // CALCULATE POINTS BASED ON ACTUAL ANSWERS & qBank
         // ========================================
         const userQBank = (user.qBank || []).map((q) => q.toString());
         const qBankSet = new Set(userQBank);
@@ -659,48 +659,35 @@ async function persistQuizResults(session, leaderboard) {
         const answeredQuestionIds = [];
         let correctAnswers = 0;
 
-        // We need to recalculate based on what questions they got right
-        // Since we don't have individual answer tracking, we'll use the session correctCount
-        // and apply new/repeated logic to all questions answered
+        // Use player's tracked answered questions
+        const playerAnsweredQuestions = player.answeredQuestions || [];
 
-        allQuestionIds.forEach((questionId) => {
-          const questionIdStr = questionId.toString();
-          const isNewQuestion = !qBankSet.has(questionIdStr);
+        playerAnsweredQuestions.forEach((answered) => {
+          const questionId = answered.questionId.toString();
+          const isNewQuestion = !qBankSet.has(questionId);
+          const isCorrect = answered.isCorrect;
 
-          if (isNewQuestion) {
-            newQuestionIds.push(questionId);
+          if (isCorrect) {
+            correctAnswers++;
+            if (isNewQuestion) {
+              // Award full points for NEW correct answers
+              totalPoints += answered.point > 0 ? answered.point : 5;
+              newQuestionIds.push(answered.questionId);
+            } else {
+              // Award 0.2 points for REPEATED correct answers
+              totalPoints += REPEATED_QUESTION_POINTS;
+              answeredQuestionIds.push(answered.questionId);
+            }
           } else {
-            answeredQuestionIds.push(questionId);
+            // Wrong answer - already deducted in session, but track for qBank
+            totalPoints += answered.point; // This will be negative (-2)
+            if (isNewQuestion) {
+              newQuestionIds.push(answered.questionId);
+            } else {
+              answeredQuestionIds.push(answered.questionId);
+            }
           }
         });
-
-        // Calculate actual points based on qBank logic
-        // Use session correctCount to determine how many were correct
-        correctAnswers = sessionCorrectCount;
-        const incorrectAnswers = totalQuestions - correctAnswers;
-
-        // Award points for correct answers
-        // Distribute correct answers proportionally between new and repeated questions
-        const newQuestionsCount = newQuestionIds.length;
-        const repeatedQuestionsCount = answeredQuestionIds.length;
-        const totalQuestionsCount = newQuestionsCount + repeatedQuestionsCount;
-
-        if (totalQuestionsCount > 0) {
-          // Estimate how many correct answers were new vs repeated (proportional distribution)
-          const newCorrectEstimate = Math.round(
-            (correctAnswers * newQuestionsCount) / totalQuestionsCount,
-          );
-          const repeatedCorrectEstimate = correctAnswers - newCorrectEstimate;
-
-          // Award full points for new correct answers (assuming 5 points per question)
-          totalPoints += newCorrectEstimate * 5;
-
-          // Award 0.2 points for repeated correct answers
-          totalPoints += repeatedCorrectEstimate * REPEATED_QUESTION_POINTS;
-
-          // Deduct points for incorrect answers
-          totalPoints -= incorrectAnswers * appInfo.POINT_FAIL;
-        }
 
         // ========================================
         // UPDATE USER POINTS & qBank
@@ -709,57 +696,117 @@ async function persistQuizResults(session, leaderboard) {
         const updatedTotalPoints = user.totalPoints + totalPoints;
         const updatedQBank = user.qBank.concat(newQuestionIds);
 
-        // Find the quiz doc for this player
         const playerQuiz = quizDocs.find(
           (q) => q.playerId.toString() === player._id.toString(),
         );
 
         // ========================================
-        // UPDATE QUOTA (MULTIPLAYER MODE)
+        // UPDATE QUOTA
         // ========================================
-        // Note: Multiplayer quizzes don't update daily quota limits,
-        // but we still track the activity
         const A_DAY = 1000 * 60 * 60 * 24;
         const A_WEEK = 1000 * 60 * 60 * 24 * 7;
 
-        const currentQuota = user.quota;
-        let updatedQuota = currentQuota;
+        const currentQuota = user.quota || {};
+        let updatedQuota;
 
-        // Track subjects practiced (without quota limits for multiplayer)
-        if (currentQuota && session.subjects) {
+        // Build subject data from session
+        const studentSubjects = [];
+        if (session.subjects) {
+          session.subjects.forEach((subject) => {
+            studentSubjects.push({
+              subject: subject._id,
+              questions: newQuestionIds, // Only new questions count
+              date: Date.now(),
+            });
+          });
+        }
+
+        // Check if within same day
+        if (
+          currentQuota.daily_update &&
+          new Date() - new Date(currentQuota.daily_update) < A_DAY
+        ) {
           const dailySubjects = currentQuota.daily_subjects || [];
 
-          session.subjects.forEach((subject) => {
-            const subjId = subject._id.toString();
-            const existingSubj = dailySubjects.find(
-              (s) => s.subject.toString() === subjId,
-            );
+          // Update daily subjects
+          if (session.subjects) {
+            session.subjects.forEach((subject) => {
+              const subjId = subject._id.toString();
+              const existingSubj = dailySubjects.find(
+                (s) => s.subject.toString() === subjId,
+              );
 
-            if (existingSubj) {
-              existingSubj.questions_count += totalQuestions;
-            } else {
+              if (existingSubj) {
+                existingSubj.questions_count += totalQuestions;
+              } else {
+                dailySubjects.push({
+                  subject: subject._id,
+                  questions_count: totalQuestions,
+                  date: Date.now(),
+                });
+              }
+            });
+          }
+
+          updatedQuota = {
+            last_update: Date.now(),
+            daily_update: currentQuota.daily_update,
+            weekly_update: currentQuota.weekly_update || Date.now(),
+            point_per_week: totalPoints + (currentQuota.point_per_week || 0),
+            subjects: (currentQuota.subjects || []).concat(studentSubjects),
+            daily_questions: (currentQuota.daily_questions || []).concat(
+              newQuestionIds,
+            ),
+            daily_questions_count:
+              (currentQuota.daily_questions_count || 0) + newQuestionIds.length,
+            daily_subjects: dailySubjects,
+          };
+
+          // Check if we need to archive weekly quota
+          if (
+            currentQuota.weekly_update &&
+            new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+          ) {
+            if (!user.quotas) user.quotas = [];
+            user.quotas.push(currentQuota);
+            updatedQuota.weekly_update = Date.now();
+            updatedQuota.point_per_week = totalPoints;
+          }
+        } else {
+          // New day - reset daily counters
+          const dailySubjects = [];
+          if (session.subjects) {
+            session.subjects.forEach((subject) => {
               dailySubjects.push({
                 subject: subject._id,
                 questions_count: totalQuestions,
                 date: Date.now(),
               });
-            }
-          });
+            });
+          }
 
           updatedQuota = {
-            ...currentQuota,
             last_update: Date.now(),
+            daily_update: Date.now(),
+            weekly_update: currentQuota.weekly_update || Date.now(),
+            point_per_week: currentQuota.point_per_week
+              ? totalPoints + currentQuota.point_per_week
+              : totalPoints,
+            subjects: studentSubjects,
+            daily_questions: newQuestionIds,
+            daily_questions_count: newQuestionIds.length,
             daily_subjects: dailySubjects,
           };
 
-          // Check if we need to archive weekly quota
-          if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
-            user.quotas?.push(currentQuota);
+          // Check weekly archive
+          if (
+            currentQuota.weekly_update &&
+            new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+          ) {
+            if (!user.quotas) user.quotas = [];
+            user.quotas.push(currentQuota);
             updatedQuota.weekly_update = Date.now();
             updatedQuota.point_per_week = totalPoints;
-          } else {
-            updatedQuota.point_per_week =
-              totalPoints + (currentQuota.point_per_week || 0);
           }
         }
 
@@ -784,7 +831,6 @@ async function persistQuizResults(session, leaderboard) {
         const newAccuracyRate =
           totalAnswered > 0 ? (totalCorrect / totalAnswered) * 100 : 0;
 
-        // Multiplayer stats
         const multiplayerWins =
           (user.quizStats.multiplayerStats?.wins || 0) + (isWinner ? 1 : 0);
         const multiplayerGames = totalMultiplayerQuizzes;
@@ -847,7 +893,6 @@ async function persistQuizResults(session, leaderboard) {
           },
         };
 
-        // Conditionally increment win counters
         if (isWinner) {
           updateOps.$set["quizStats.multiplayerStats.wins"] = multiplayerWins;
           updateOps.$set["quizStats.totalWins"] =
@@ -860,7 +905,6 @@ async function persistQuizResults(session, leaderboard) {
             (user.quizStats.multiplayerStats?.thirdPlace || 0) + 1;
         }
 
-        // Update best score if this is better
         if (totalPoints > (user.quizStats?.bestScore?.points || 0)) {
           updateOps.$set["quizStats.bestScore"] = {
             points: totalPoints,
@@ -870,7 +914,6 @@ async function persistQuizResults(session, leaderboard) {
           };
         }
 
-        // Update fastest completion if applicable
         if (
           !user.quizStats?.fastestCompletion?.duration ||
           quizDuration < user.quizStats.fastestCompletion.duration
@@ -882,7 +925,6 @@ async function persistQuizResults(session, leaderboard) {
           };
         }
 
-        // Update category stats
         if (session.category) {
           const categoryIndex = user.quizStats?.categoryStats?.findIndex(
             (cs) =>
@@ -944,7 +986,7 @@ async function persistQuizResults(session, leaderboard) {
         await User.findByIdAndUpdate(player._id, updateOps, { new: true });
 
         // ========================================
-        // STORE PLAYER RESULT DATA (similar to submit_premium response)
+        // STORE PLAYER RESULT DATA
         // ========================================
         playerResults[player._id.toString()] = {
           userId: player._id,
@@ -980,9 +1022,6 @@ async function persistQuizResults(session, leaderboard) {
 
     console.log("✅ Quiz results persisted successfully");
 
-    // ========================================
-    // RETURN RESULTS FOR ALL PLAYERS
-    // ========================================
     return {
       success: true,
       sessionId: session.sessionId,
@@ -1009,11 +1048,11 @@ async function updateUserInvite({
 }) {
   const updateObj = { status };
   const session = sessions[sessionId];
+  updateObj.host = sessions[sessionId]?.host?._id;
 
   if (startedAt) updateObj.startedAt = startedAt;
   if (quizCompleted !== undefined) updateObj.quizCompleted = quizCompleted;
 
-  // 1️⃣ Try to update existing invite
   const result = await User.updateOne(
     {
       _id: userId,
@@ -1029,7 +1068,6 @@ async function updateUserInvite({
     },
   );
 
-  // 2️⃣ If no invite matched, push a new one
   if (result.matchedCount === 0) {
     await User.updateOne(
       { _id: userId },

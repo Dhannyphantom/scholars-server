@@ -159,13 +159,8 @@ const inviteSchema = new schema({
     index: true,
   },
   host: {
-    _id: {
-      type: schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    username: String,
-    avatar: Object,
+    type: schema.Types.ObjectId,
+    ref: "User",
   },
   invitedUsers: [
     {
@@ -185,7 +180,7 @@ const inviteSchema = new schema({
   ],
   status: {
     type: String,
-    enum: ["pending", "accepted", "completed", "rejected"],
+    enum: ["pending", "accepted", "completed", "rejected", "missed"],
     default: "pending",
   },
   category: {

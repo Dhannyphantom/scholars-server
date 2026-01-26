@@ -130,7 +130,7 @@ router.post("/register", async (req, res) => {
         $set: {
           PRO_TOKEN: `mosdan@gurupro${randInt}`,
         },
-      }
+      },
     );
   }
 
@@ -602,8 +602,8 @@ router.get("/leaderboard/global", auth, async (req, res) => {
             sortBy === "points"
               ? { points: -1 }
               : sortBy === "streak"
-              ? { streak: -1 }
-              : { totalPoints: -1 },
+                ? { streak: -1 }
+                : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},
@@ -708,8 +708,8 @@ router.get("/leaderboard/global", auth, async (req, res) => {
             sortBy === "points"
               ? { points: -1 }
               : sortBy === "streak"
-              ? { streak: -1 }
-              : { totalPoints: -1 },
+                ? { streak: -1 }
+                : { totalPoints: -1 },
           output: {
             rank: {
               $rank: {},
@@ -1385,7 +1385,7 @@ router.put("/rewards", auth, async (req, res) => {
         totalPoints: point,
         "rewards.point": point,
       },
-    }
+    },
   );
 
   res.send({ status: "success" });
@@ -1413,13 +1413,13 @@ router.put("/students", auth, async (req, res) => {
       // Add target to my following
       await User.updateOne(
         { _id: currentUserId },
-        { $addToSet: { following: targetUserId } }
+        { $addToSet: { following: targetUserId } },
       );
 
       // Add me to target's followers
       await User.updateOne(
         { _id: targetUserId },
-        { $addToSet: { followers: currentUserId } }
+        { $addToSet: { followers: currentUserId } },
       );
     }
 
@@ -1427,13 +1427,13 @@ router.put("/students", auth, async (req, res) => {
       // Remove target from my following
       await User.updateOne(
         { _id: currentUserId },
-        { $pull: { following: targetUserId } }
+        { $pull: { following: targetUserId } },
       );
 
       // Remove me from target's followers
       await User.updateOne(
         { _id: targetUserId },
-        { $pull: { followers: currentUserId } }
+        { $pull: { followers: currentUserId } },
       );
     }
 
@@ -1476,7 +1476,7 @@ router.put("/professional", auth, async (req, res) => {
             verified: true,
             subjects: subjects?.map((item) => item?._id),
           },
-        }
+        },
       );
       break;
     case "revoke":
@@ -1487,7 +1487,7 @@ router.put("/professional", auth, async (req, res) => {
             verified: false,
             subjects: [],
           },
-        }
+        },
       );
       break;
     case "reject":
@@ -1524,7 +1524,7 @@ router.post(
     }
 
     res.json({ avatar: user.avatar });
-  }
+  },
 );
 
 router.post("/generate_appinfo", async (req, res) => {
@@ -1586,7 +1586,7 @@ router.get("/transactions", auth, async (req, res) => {
       .limit(parseInt(limit))
       .skip(skip)
       .select(
-        "transactionType category amount reference description metadata createdAt status"
+        "transactionType category amount reference description metadata createdAt status",
       );
 
     const total = await WalletTransaction.countDocuments(query);
@@ -1761,7 +1761,7 @@ router.put("/updateProfile", auth, async (req, res) => {
     },
     {
       new: true,
-    }
+    },
   ).select(fullUserSelector);
 
   res.json({ user: updatedUser });
@@ -1774,9 +1774,10 @@ router.get("/user_stats", auth, async (req, res) => {
 
   try {
     const userInfo = await User.findById(userId)
-      .select("quota quotas points totalPoints qBank")
+      .select("quota quotas points invites totalPoints qBank")
       .populate("quota.subjects.subject", "name")
       .populate("quota.daily_subjects.subject", "name")
+      .populate("invites.host", "username avatar firstName lastName")
       .lean();
 
     if (!userInfo) {
@@ -1836,6 +1837,18 @@ router.get("/user_stats", auth, async (req, res) => {
         })) || [],
     };
 
+    const pendingInvites = userInfo.invites.filter(
+      (invite) => invite.status === "pending",
+    );
+
+    let invite = null;
+    if (pendingInvites[0]) {
+      const sorted = [...pendingInvites].sort(
+        (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+      );
+      invite = sorted[0];
+    }
+
     res.send({
       status: "success",
       data: {
@@ -1843,6 +1856,7 @@ router.get("/user_stats", auth, async (req, res) => {
         weekly: weeklyStats,
         overall: overallStats,
       },
+      invite,
     });
   } catch (err) {
     console.error(err);
@@ -1945,7 +1959,7 @@ router.get("/suggestions", auth, async (req, res) => {
         $match: {
           _id: {
             $nin: Array.from(excludedUserIds).map(
-              (id) => new mongoose.Types.ObjectId(id)
+              (id) => new mongoose.Types.ObjectId(id),
             ),
           },
           accountType: "student", // Only students
@@ -2357,7 +2371,7 @@ router.get("/suggestions", auth, async (req, res) => {
         $match: {
           _id: {
             $nin: Array.from(excludedUserIds).map(
-              (id) => new mongoose.Types.ObjectId(id)
+              (id) => new mongoose.Types.ObjectId(id),
             ),
           },
           accountType: "student",
