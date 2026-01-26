@@ -554,7 +554,13 @@ module.exports = (io) => {
  * Persist quiz results to database using existing Quiz model
  * This is called when ALL players finish the quiz
  */
+/**
+ * Persist quiz results to database using existing Quiz model
+ * This is called when ALL players finish the quiz
+ */
 async function persistQuizResults(session, leaderboard) {
+  const playerResults = {}; // Store results for each player to return
+
   try {
     console.log("💾 Persisting quiz results to database...");
 
@@ -564,9 +570,9 @@ async function persistQuizResults(session, leaderboard) {
     // Extract metadata from quiz data
     const { subjects, topics } = extractMetadata(session.quizData);
 
-    // Flatten all questions from the quiz data
+    // Flatten all questions from the quiz data with their IDs
     const allQuestions = [];
-    const allQuestionIds = []; // Track question IDs separately
+    const allQuestionIds = [];
 
     if (Array.isArray(session.quizData)) {
       session.quizData.forEach((subject) => {
@@ -579,8 +585,8 @@ async function persistQuizResults(session, leaderboard) {
               topic: q.topic || null,
               subject: q.subject || subject.subject || null,
               categories: q.categories || [],
-              point: q.point || 40,
-              timer: q.timer || 40,
+              point: q.point || 5,
+              timer: q.timer || 5,
             });
 
             // Store the actual question ID for qBank tracking
@@ -597,7 +603,6 @@ async function persistQuizResults(session, leaderboard) {
     const winner = leaderboard[0];
 
     const REPEATED_QUESTION_POINTS = 0.2;
-    let playerResults = {};
 
     // Create Quiz document for each participant
     const quizDocs = [];
@@ -627,19 +632,24 @@ async function persistQuizResults(session, leaderboard) {
       }
     }
 
-    // Update User points, stats, history, qBank, and invites
+    // Update User points, stats, history, qBank, quota, and invites
     for (const [index, player] of leaderboard.entries()) {
       const rank = index + 1;
       const isWinner = player._id.toString() === winner._id.toString();
 
+      // Points already tracked in session (from updatePlayerPoints)
+      const sessionPoints = player.points || 0;
+      const sessionCorrectCount = player.correctCount || 0;
+
       try {
         const user = await User.findById(player._id).select(
-          "qBank quizStats quizHistory points totalPoints invites",
+          "qBank quizStats quizHistory points totalPoints invites quota quotas",
         );
         if (!user) continue;
 
         // ========================================
-        // CALCULATE POINTS BASED ON THIS USER'S qBank
+        // RECALCULATE POINTS BASED ON THIS USER'S qBank
+        // The session tracked raw points, but we need to adjust for new vs repeated questions
         // ========================================
         const userQBank = (user.qBank || []).map((q) => q.toString());
         const qBankSet = new Set(userQBank);
@@ -649,40 +659,48 @@ async function persistQuizResults(session, leaderboard) {
         const answeredQuestionIds = [];
         let correctAnswers = 0;
 
-        // Get this player's answers from session data
-        const playerAnswers = player.answers || []; // Assume answers stored in player object
+        // We need to recalculate based on what questions they got right
+        // Since we don't have individual answer tracking, we'll use the session correctCount
+        // and apply new/repeated logic to all questions answered
 
-        allQuestionIds.forEach((questionId, idx) => {
+        allQuestionIds.forEach((questionId) => {
           const questionIdStr = questionId.toString();
-
           const isNewQuestion = !qBankSet.has(questionIdStr);
-          const playerAnswer = playerAnswers[idx];
-          const isCorrect = playerAnswer?.correct || false;
 
-          // Get point value from corresponding question
-          const question = allQuestions[idx];
-
-          if (isCorrect) {
-            correctAnswers++;
-            if (isNewQuestion) {
-              // Award full points for NEW correct answers
-              totalPoints += question.point;
-              newQuestionIds.push(questionId);
-            } else {
-              // Award 0.2 points for REPEATED correct answers
-              totalPoints += REPEATED_QUESTION_POINTS;
-              answeredQuestionIds.push(questionId);
-            }
+          if (isNewQuestion) {
+            newQuestionIds.push(questionId);
           } else {
-            // Wrong answer - deduct points
-            totalPoints -= appInfo.POINT_FAIL;
-            if (isNewQuestion) {
-              newQuestionIds.push(questionId);
-            } else {
-              answeredQuestionIds.push(questionId);
-            }
+            answeredQuestionIds.push(questionId);
           }
         });
+
+        // Calculate actual points based on qBank logic
+        // Use session correctCount to determine how many were correct
+        correctAnswers = sessionCorrectCount;
+        const incorrectAnswers = totalQuestions - correctAnswers;
+
+        // Award points for correct answers
+        // Distribute correct answers proportionally between new and repeated questions
+        const newQuestionsCount = newQuestionIds.length;
+        const repeatedQuestionsCount = answeredQuestionIds.length;
+        const totalQuestionsCount = newQuestionsCount + repeatedQuestionsCount;
+
+        if (totalQuestionsCount > 0) {
+          // Estimate how many correct answers were new vs repeated (proportional distribution)
+          const newCorrectEstimate = Math.round(
+            (correctAnswers * newQuestionsCount) / totalQuestionsCount,
+          );
+          const repeatedCorrectEstimate = correctAnswers - newCorrectEstimate;
+
+          // Award full points for new correct answers (assuming 5 points per question)
+          totalPoints += newCorrectEstimate * 5;
+
+          // Award 0.2 points for repeated correct answers
+          totalPoints += repeatedCorrectEstimate * REPEATED_QUESTION_POINTS;
+
+          // Deduct points for incorrect answers
+          totalPoints -= incorrectAnswers * appInfo.POINT_FAIL;
+        }
 
         // ========================================
         // UPDATE USER POINTS & qBank
@@ -695,6 +713,55 @@ async function persistQuizResults(session, leaderboard) {
         const playerQuiz = quizDocs.find(
           (q) => q.playerId.toString() === player._id.toString(),
         );
+
+        // ========================================
+        // UPDATE QUOTA (MULTIPLAYER MODE)
+        // ========================================
+        // Note: Multiplayer quizzes don't update daily quota limits,
+        // but we still track the activity
+        const A_DAY = 1000 * 60 * 60 * 24;
+        const A_WEEK = 1000 * 60 * 60 * 24 * 7;
+
+        const currentQuota = user.quota;
+        let updatedQuota = currentQuota;
+
+        // Track subjects practiced (without quota limits for multiplayer)
+        if (currentQuota && session.subjects) {
+          const dailySubjects = currentQuota.daily_subjects || [];
+
+          session.subjects.forEach((subject) => {
+            const subjId = subject._id.toString();
+            const existingSubj = dailySubjects.find(
+              (s) => s.subject.toString() === subjId,
+            );
+
+            if (existingSubj) {
+              existingSubj.questions_count += totalQuestions;
+            } else {
+              dailySubjects.push({
+                subject: subject._id,
+                questions_count: totalQuestions,
+                date: Date.now(),
+              });
+            }
+          });
+
+          updatedQuota = {
+            ...currentQuota,
+            last_update: Date.now(),
+            daily_subjects: dailySubjects,
+          };
+
+          // Check if we need to archive weekly quota
+          if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
+            user.quotas?.push(currentQuota);
+            updatedQuota.weekly_update = Date.now();
+            updatedQuota.point_per_week = totalPoints;
+          } else {
+            updatedQuota.point_per_week =
+              totalPoints + (currentQuota.point_per_week || 0);
+          }
+        }
 
         // ========================================
         // CALCULATE QUIZ STATS
@@ -760,6 +827,7 @@ async function persistQuizResults(session, leaderboard) {
             points: updatedPoints,
             totalPoints: updatedTotalPoints,
             qBank: updatedQBank,
+            quota: updatedQuota,
             "quizStats.totalQuizzes": totalQuizzes,
             "quizStats.totalMultiplayerQuizzes": totalMultiplayerQuizzes,
             "quizStats.totalCorrectAnswers": totalCorrect,
@@ -773,8 +841,8 @@ async function persistQuizResults(session, leaderboard) {
           $push: {
             quizHistory: {
               $each: [historyEntry],
-              $position: 0, // Add to beginning
-              $slice: 50, // Keep only last 50 quizzes
+              $position: 0,
+              $slice: 50,
             },
           },
         };
@@ -822,7 +890,6 @@ async function persistQuizResults(session, leaderboard) {
           );
 
           if (categoryIndex >= 0) {
-            // Update existing category stats
             const catStats = user.quizStats.categoryStats[categoryIndex];
             const newCatAvg =
               (catStats.averageScore * catStats.quizzesCompleted +
@@ -842,7 +909,6 @@ async function persistQuizResults(session, leaderboard) {
               ] = totalPoints;
             }
           } else {
-            // Add new category stats
             updateOps.$push = updateOps.$push || {};
             updateOps.$push["quizStats.categoryStats"] = {
               category: {
@@ -892,7 +958,6 @@ async function persistQuizResults(session, leaderboard) {
           rank,
           isWinner,
           quizId: playerQuiz?.quizId,
-          // Updated totals
           totalPointsNow: updatedPoints,
           totalQuestionsInQBank: updatedQBank.length,
         };
@@ -905,7 +970,6 @@ async function persistQuizResults(session, leaderboard) {
           `Failed to update user ${player.username}:`,
           userErr.message,
         );
-        // Store error result
         playerResults[player._id.toString()] = {
           userId: player._id,
           username: player.username,

@@ -6,7 +6,7 @@ const schema = mongoose.Schema;
 const answerSchema = new schema({
   name: {
     type: String,
-    required: true,
+    required: false,
   },
   correct: {
     type: Boolean,
