@@ -717,6 +717,10 @@ userSchema.virtual("fullName").get(function () {
 userSchema.set("toJSON", { virtuals: true });
 userSchema.set("toObject", { virtuals: true });
 userSchema.index({ "invites.expiresAt": 1 }, { expireAfterSeconds: 0 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ "subscription.isActive": 1 });
+userSchema.index({ points: -1 });
+userSchema.index({ streak: -1 });
 
 const validateReg = (user) => {
   const schema = Joi.object({

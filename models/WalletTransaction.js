@@ -60,7 +60,10 @@ const walletTransactionSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
+
+walletTransactionSchema.index({ createdAt: -1 });
+walletTransactionSchema.index({ status: 1 });
 
 module.exports = mongoose.model("WalletTransaction", walletTransactionSchema);

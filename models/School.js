@@ -379,6 +379,9 @@ const SchoolSchema = new schema({
   quiz: [quizSchema],
 });
 
+SchoolSchema.index({ createdAt: -1 });
+SchoolSchema.index({ "subscription.isActive": 1 });
+
 const School = mongoose.model("School", SchoolSchema);
 
 module.exports.School = School;

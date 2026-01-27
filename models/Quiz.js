@@ -83,6 +83,9 @@ const QuizSchema = new schema({
   },
 });
 
+QuizSchema.index({ date: -1 });
+QuizSchema.index({ mode: 1, type: 1 });
+
 const Quiz = mongoose.model("Quiz", QuizSchema);
 
 module.exports.Quiz = Quiz;

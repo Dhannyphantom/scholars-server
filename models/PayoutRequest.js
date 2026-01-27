@@ -46,7 +46,10 @@ const payoutRequestSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
+
+payoutRequestSchema.index({ createdAt: -1 });
+payoutRequestSchema.index({ status: 1 });
 
 module.exports = mongoose.model("PayoutRequest", payoutRequestSchema);
