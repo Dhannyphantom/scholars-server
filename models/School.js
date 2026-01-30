@@ -4,6 +4,15 @@ const { txHistorySchema } = require("./User");
 
 const schema = mongoose.Schema;
 
+const defaultClasses = [
+  { alias: "", level: "jss 1", teachers: [], students: [] },
+  { alias: "", level: "jss 2", teachers: [], students: [] },
+  { alias: "", level: "jss 3", teachers: [], students: [] },
+  { alias: "", level: "sss 1", teachers: [], students: [] },
+  { alias: "", level: "sss 2", teachers: [], students: [] },
+  { alias: "", level: "sss 3", teachers: [], students: [] },
+];
+
 const classsSchoolEnums = [
   "jss 1",
   "jss 2",
@@ -304,7 +313,10 @@ const schLevelSchema = new schema({
 const SchoolSchema = new schema({
   announcements: [announcementSchema],
   assignments: [assignmentSchema],
-  classes: [classSchema],
+  classes: {
+    type: [classSchema],
+    default: defaultClasses,
+  },
   country: {
     type: String,
     minlength: 4,

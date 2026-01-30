@@ -94,7 +94,7 @@ router.post("/withdraw", authMiddleware, async (req, res) => {
     // Verify account
     const verification = await flutterwaveService.verifyAccount(
       accountNumber,
-      accountBank
+      accountBank,
     );
     if (!verification.success) {
       return res.status(400).json({
@@ -196,7 +196,7 @@ router.post("/recharge", authMiddleware, async (req, res) => {
     // ✅ VALIDATE PHONE NUMBER AND NETWORK MATCH
     const validation = PhoneValidator.validatePhoneNetwork(
       phoneNumber,
-      network
+      network,
     );
 
     if (!validation.valid) {
@@ -334,7 +334,7 @@ router.post("/data", authMiddleware, async (req, res) => {
     // Validate phone and network
     const validation = PhoneValidator.validatePhoneNetwork(
       phoneNumber,
-      network
+      network,
     );
 
     if (!validation.valid) {
@@ -604,9 +604,8 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     }
 
     // Check if transaction already processed
-    const existingTransaction = await walletService.getTransactionByReference(
-      tx_ref
-    );
+    const existingTransaction =
+      await walletService.getTransactionByReference(tx_ref);
     if (existingTransaction) {
       return res.json({
         success: true,
@@ -619,9 +618,8 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     }
 
     // Verify transaction with Flutterwave
-    const verification = await flutterwaveService.verifyTransaction(
-      transaction_id
-    );
+    const verification =
+      await flutterwaveService.verifyTransaction(transaction_id);
 
     if (!verification.success) {
       return res.status(400).json({
@@ -696,16 +694,17 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
     } else if (accountType === "school") {
       // School Sub
       const schoolData = await School.findById(schoolId);
+
       const today = new Date();
       const millisToAdd = days * 24 * 60 * 60 * 1000;
 
       let startDate;
 
       if (
-        schoolData.subscription?.expiry &&
+        schoolData?.subscription?.expiry &&
         today < schoolData.subscription.expiry
       ) {
-        startDate = new Date(schoolData.subscription.expiry);
+        startDate = new Date(schoolData?.subscription?.expiry);
       } else {
         startDate = today;
         schoolData.subscription.current = today;
@@ -719,6 +718,19 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
 
       const schoolObj = schoolData.toObject();
       const teacherIds = schoolObj.teachers.map((teach) => teach.user);
+      schoolData.teachers = schoolObj?.teachers?.map((teacher) => {
+        if (
+          teacher?.user?.toString() === schoolObj.rep?.toString() &&
+          !teacher.verified
+        ) {
+          return {
+            ...teacher,
+            verified: true,
+          };
+        } else {
+          return teacher;
+        }
+      });
 
       await schoolData.save();
       await User.updateMany(
@@ -727,7 +739,7 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
           $set: {
             subscription: schoolObj.subscription,
           },
-        }
+        },
       );
     }
 
@@ -737,6 +749,7 @@ router.post("/verify-subscription", authMiddleware, async (req, res) => {
       data: {
         amount,
         accountType,
+        days,
         // pointsAdded,
         // currentPoints: user.points,
         transactionRef: tx_ref,
@@ -956,7 +969,7 @@ async function handleTransferFailed(payload) {
       userId: payout.userId,
       description: `Refund for failed withdrawal: ${complete_message}`,
       originalReference: reference,
-    }
+    },
   );
 }
 
@@ -1010,7 +1023,7 @@ async function handleBillPaymentFailed(payload) {
       userId: payout.userId,
       description: `Refund for failed ${payout.payoutType}: ${response_message}`,
       originalReference: reference,
-    }
+    },
   );
 }
 

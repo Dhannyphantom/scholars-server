@@ -1837,16 +1837,18 @@ router.get("/user_stats", auth, async (req, res) => {
         })) || [],
     };
 
-    const pendingInvites = userInfo.invites.filter(
-      (invite) => invite.status === "pending",
-    );
-
     let invite = null;
-    if (pendingInvites[0]) {
-      const sorted = [...pendingInvites].sort(
-        (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+    if (userInfo.accountType === "student") {
+      const pendingInvites = userInfo?.invites?.filter(
+        (invite) => invite.status === "pending",
       );
-      invite = sorted[0];
+
+      if (pendingInvites[0]) {
+        const sorted = [...pendingInvites].sort(
+          (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+        );
+        invite = sorted[0];
+      }
     }
 
     res.send({
