@@ -10,7 +10,7 @@ module.exports = async (req, res, next) => {
     if (!payload) return res.status(400).json("Invalid token provided!");
     const userInfo = await User.findById(payload?.userId);
     if (!userInfo) return res.status(404).send("User account not found");
-    if (userInfo.accountType !== "professional")
+    if (!["professional", "manager"].includes(userInfo.accountType))
       return res.status(422).send("Unauthorized request!!!");
     req.user = payload;
     next();

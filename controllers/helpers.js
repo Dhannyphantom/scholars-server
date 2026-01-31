@@ -5,6 +5,7 @@ const path = require("path");
 const expoNotifications = require("./expoNotifications");
 const { School } = require("../models/School");
 const { default: mongoose } = require("mongoose");
+const { User } = require("../models/User");
 
 const ADDRESS = process.env.ADDRESS;
 const PORT = process.env.PORT;
@@ -233,6 +234,8 @@ module.exports.checkUserSub = async (userInfo) => {
 const reconcileSchool = async (school) => {
   // CHECK AND UPDATE ASSIGNMENT SUBMISSINOS;
   try {
+    const schoolObj = school?.toObject();
+
     const expiryDate = new Date(school?.subscription?.expiry);
     const today = new Date();
 
@@ -246,7 +249,20 @@ const reconcileSchool = async (school) => {
       school.subscription.isActive = true;
     }
 
-    const schoolObj = school?.toObject();
+    // update all school teachers subscription
+
+    const teacherIds = schoolObj.teachers.map((item) =>
+      item?.user?._id?.toString(),
+    );
+    await User.updateMany(
+      { _id: { $in: teacherIds } },
+      {
+        $set: {
+          subscription: school.subscription,
+        },
+      },
+    );
+
     school.assignments = schoolObj.assignments.map((assignment) => {
       if (
         today > new Date(assignment?.expiry) &&
