@@ -233,8 +233,20 @@ module.exports.checkUserSub = async (userInfo) => {
 const reconcileSchool = async (school) => {
   // CHECK AND UPDATE ASSIGNMENT SUBMISSINOS;
   try {
-    const schoolObj = school?.toObject();
+    const expiryDate = new Date(school?.subscription?.expiry);
     const today = new Date();
+
+    if (expiryDate < today && school?.subscription?.isActive) {
+      // subscription expired
+      school.subscription.isActive = false;
+    }
+
+    if (expiryDate >= today && !school?.subscription?.isActive) {
+      // subscription renewed
+      school.subscription.isActive = true;
+    }
+
+    const schoolObj = school?.toObject();
     school.assignments = schoolObj.assignments.map((assignment) => {
       if (
         today > new Date(assignment?.expiry) &&

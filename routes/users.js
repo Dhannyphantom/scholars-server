@@ -176,6 +176,12 @@ router.get("/user", auth, async (req, res) => {
     await userData.save();
   }
 
+  if (expiryDate >= today && !userData?.subscription?.isActive) {
+    // subscription renewed
+    userData.subscription.isActive = true;
+    await userData.save();
+  }
+
   res.json({ user: userData });
 });
 
