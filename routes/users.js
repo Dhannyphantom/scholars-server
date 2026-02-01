@@ -55,7 +55,13 @@ function generateReferralToken(username) {
 }
 
 router.post("/register", async (req, res) => {
-  const { username, email, password, accountType, token: proToken } = req.body;
+  const {
+    username,
+    contact,
+    password,
+    accountType,
+    token: proToken,
+  } = req.body;
 
   const appInfo = await AppInfo.findOne({ ID: "APP" });
 
@@ -73,13 +79,16 @@ router.post("/register", async (req, res) => {
   const aUser = await User.findOne({ username });
   if (aUser)
     return res.status(400).json("Username has been used already, Try another");
-  const eEmail = await User.findOne({ email });
-  if (eEmail)
-    return res.status(400).json("Email has already been registered, Sign in!");
+
+  const phoneNumber = contact?.startsWith("0") ? contact?.slice(1) : contact;
+
+  const usrContact = await User.findOne({ contact: phoneNumber });
+  if (usrContact)
+    return res.status(400).json("Phone number registered already, Sign in!");
 
   const user = new User({
     username,
-    email,
+    contact: phoneNumber,
     accountType,
     password,
   });

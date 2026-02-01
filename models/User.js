@@ -525,7 +525,7 @@ const userSchema = new schema({
   }, // store user's device push token here
   email: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
     minlength: 4,
     maxlength: 255,
@@ -553,10 +553,19 @@ const userSchema = new schema({
     lowercase: true,
     trim: true,
   },
+  contactCode: {
+    type: String,
+    minlength: 4,
+    maxlength: 15,
+    default: "+234",
+    trim: true,
+  },
   contact: {
     type: String,
     minlength: 4,
     maxlength: 15,
+    required: true,
+    unique: true,
     trim: true,
   },
   points: {
@@ -727,7 +736,15 @@ const validateReg = (user) => {
     username: Joi.string().required().min(4).max(15).trim().lowercase(),
     accountType: Joi.string().required().max(255).alphanum(),
     referral: Joi.string().optional().max(255).alphanum(),
-    email: Joi.string().required().min(4).max(255).email().trim(),
+    contact: Joi.string()
+      .trim()
+      .pattern(/^[789]\d{9}$/)
+      .required()
+      .messages({
+        "string.pattern.base":
+          "Phone number must be 10 digits (e.g. 7081234567)",
+        "string.empty": "Phone number is required",
+      }),
     password: Joi.string().required().min(8).max(255).trim(),
     token: Joi.string().optional().min(4).max(25).trim(),
   });
