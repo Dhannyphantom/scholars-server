@@ -515,6 +515,10 @@ const userSchema = new schema({
     alias: {
       type: String,
     },
+    id: {
+      type: schema.Types.ObjectId,
+      required: false,
+    },
     hasChanged: {
       type: Boolean,
       default: false,

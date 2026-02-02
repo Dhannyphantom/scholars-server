@@ -69,7 +69,7 @@ router.post("/verify", auth, async (req, res) => {
     "firstName lastName preffix",
   );
   const instanceInfo = await User.findById(instanceId).select(
-    "firstName lastName preffix",
+    "firstName lastName expoPushToken preffix",
   );
 
   const school = await School.findOne({
@@ -87,8 +87,18 @@ router.post("/verify", auth, async (req, res) => {
       .send({ status: "failed", message: "Unauthorized request" });
   }
 
+  let title, body;
+
   if (type === "accept") {
     if (instance == "teacher") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has verified ${capFirstLetter(
+        instanceInfo?.preffix,
+      )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+        instanceInfo?.lastName,
+      )} as a fellow colleaque`;
+
       await School.updateOne(
         { _id: schoolId, "teachers.user": instanceId },
         {
@@ -98,23 +108,23 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has verified ${capFirstLetter(
-                instanceInfo?.preffix,
-              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName,
-              )} as a fellow colleaque`,
+              message,
               visibility: "all",
             },
           },
         },
       );
+
       instanceInfo.verified = true;
       await instanceInfo.save();
+      title = "Account Verified";
+      body = message;
     } else if (instance === "student") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has verified ${capFirstLetter(
+        instanceInfo.firstName,
+      )} ${capFirstLetter(instanceInfo?.lastName)} as a valid student`;
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
         {
@@ -124,13 +134,7 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has verified ${capFirstLetter(
-                instanceInfo.firstName,
-              )} ${capFirstLetter(instanceInfo?.lastName)} as a valid student`,
+              message,
               visibility: "all",
             },
           },
@@ -138,9 +142,18 @@ router.post("/verify", auth, async (req, res) => {
       );
       instanceInfo.verified = true;
       await instanceInfo.save();
+      title = "Account Verified";
+      body = message;
     }
   } else if (type == "reject") {
     if (instance == "teacher") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has rejected ${capFirstLetter(
+        instanceInfo?.preffix,
+      )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+        instanceInfo?.lastName,
+      )} as a fellow colleaque`;
       await School.updateOne(
         { _id: schoolId, "teachers.user": instanceId },
         {
@@ -150,15 +163,7 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has rejected ${capFirstLetter(
-                instanceInfo?.preffix,
-              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName,
-              )} as a fellow colleaque`,
+              message,
               visibility: "all",
             },
           },
@@ -166,7 +171,14 @@ router.post("/verify", auth, async (req, res) => {
       );
       instanceInfo.verified = true;
       await instanceInfo.save();
+      title = "Account Rejected";
+      body = message;
     } else if (instance == "student") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has rejected ${capFirstLetter(
+        instanceInfo.firstName,
+      )} ${capFirstLetter(instanceInfo?.lastName)} as a invalid student`;
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
         {
@@ -176,15 +188,7 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has rejected ${capFirstLetter(
-                instanceInfo.firstName,
-              )} ${capFirstLetter(
-                instanceInfo?.lastName,
-              )} as a invalid student`,
+              message,
               visibility: "all",
             },
           },
@@ -192,9 +196,18 @@ router.post("/verify", auth, async (req, res) => {
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
+      title = "Account Rejected";
+      body = message;
     }
   } else if (type == "unverify") {
     if (instance == "teacher") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has un-verified ${capFirstLetter(
+        instanceInfo?.preffix,
+      )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
+        instanceInfo?.lastName,
+      )} as a fellow colleaque`;
       await School.updateOne(
         { _id: schoolId, "teachers.user": instanceId },
         {
@@ -204,15 +217,7 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has un-verified ${capFirstLetter(
-                instanceInfo?.preffix,
-              )} ${capFirstLetter(instanceInfo.firstName)} ${capFirstLetter(
-                instanceInfo?.lastName,
-              )} as a fellow colleaque`,
+              message,
               visibility: "all",
             },
           },
@@ -220,7 +225,15 @@ router.post("/verify", auth, async (req, res) => {
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
+      title = "Teacher Account Suspended";
+      body = message;
     } else if (instance === "student") {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has un-verified ${capFirstLetter(
+        instanceInfo.firstName,
+      )} ${capFirstLetter(instanceInfo?.lastName)} as a student in probation`;
+
       await School.updateOne(
         { _id: schoolId, "students.user": instanceId },
         {
@@ -230,15 +243,7 @@ router.post("/verify", auth, async (req, res) => {
           $push: {
             announcements: {
               type: "system",
-              message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-                userInfo.firstName,
-              )} ${capFirstLetter(
-                userInfo?.lastName,
-              )} has un-verified ${capFirstLetter(
-                instanceInfo.firstName,
-              )} ${capFirstLetter(
-                instanceInfo?.lastName,
-              )} as a student in probation`,
+              message,
               visibility: "all",
             },
           },
@@ -246,10 +251,18 @@ router.post("/verify", auth, async (req, res) => {
       );
       instanceInfo.verified = false;
       await instanceInfo.save();
+      title = "Student Account Suspended";
+      body = message;
     }
   }
 
   res.send({ status: "success" });
+  await expoNotifications([instanceInfo.expoPushToken], {
+    title,
+    message: body,
+    data: {},
+    // image: userInfo?.avatar?.image?.uri
+  });
 });
 
 router.post("/join", auth, async (req, res) => {
@@ -280,6 +293,8 @@ router.post("/join", auth, async (req, res) => {
   const isTeacher = userInfo?.accountType == "teacher";
   const isStudent = userInfo?.accountType == "student";
 
+  let title, body;
+
   if (isTeacher) {
     // check if teacher has joined other schools
     const teachSchool = await School.findOne({
@@ -300,17 +315,20 @@ router.post("/join", auth, async (req, res) => {
       (item) => item?.user?.toString() == userId,
     );
     if (checker < 0) {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
+        school.name
+      } as a teacher, you may verify or decline this request`;
       school.teachers.push({ user: userId });
       school.announcements.push({
         type: "system",
-        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo.firstName,
-        )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
-          school.name
-        } as a teacher, you may verify or decline this request`,
+        message,
         visibility: "all",
       });
       await school.save();
+      title = "New Teacher Join Request";
+      body = message;
     }
   } else if (isStudent) {
     // check if student has joined other schools
@@ -326,17 +344,44 @@ router.post("/join", auth, async (req, res) => {
       await stdSchool.save();
     }
 
-    // Check if student already has this teacher
+    // Check if school already has this student
     const checker = school.students.findIndex(
       (item) => item?.user?.toString() == userId,
     );
     if (checker < 0) {
+      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+        userInfo.firstName,
+      )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
+        school.name
+      } as a student, you may verify or decline this request`;
       school.students.push({ user: userId });
+      school.announcements.push({
+        type: "system",
+        message,
+        visibility: "all",
+      });
       await school.save();
+      title = "New Student Join Request";
+      body = message;
     }
   }
 
   res.send({ status: "success" });
+  const schoolObject = school.toObject();
+  const verifiedTeachers = schoolObject.teachers
+    .filter((teach) => teach.verified)
+    .map((teach) => teach.user);
+  const teachersArr = await User.findMany({ _id: { $in: verifiedTeachers } })
+    .select("expoPushToken")
+    .lean();
+  const tokens = teachersArr.map((teach) => teach.expoPushToken);
+
+  await expoNotifications(tokens, {
+    title,
+    message: body,
+    data: {},
+    // image: userInfo?.avatar?.image?.uri
+  });
 });
 
 router.post("/class", auth, async (req, res) => {
@@ -355,13 +400,14 @@ router.post("/class", auth, async (req, res) => {
 
   await school.save();
 
+  await syncSchoolClassesWithStudents();
+
   res.send({ status: "success" });
 });
 
 router.post("/announcement", auth, async (req, res) => {
   const userId = req.user.userId;
-  const data = req.body;
-  const { title, classes, schoolId } = data;
+  const { title, classes = [], schoolId } = req.body;
 
   if (!schoolId) {
     return res.status(422).send({ status: "failed", message: "No school ID" });
@@ -376,18 +422,79 @@ router.post("/announcement", auth, async (req, res) => {
             teacher: userId,
             message: title,
             visibility: "class",
-            classes: classes.map((item) => item.name?.toLowerCase()),
+            classes: classes.map((c) => c.name?.toLowerCase()),
           },
         },
       },
     );
-  } catch (error) {
-    return res
-      .status(422)
-      .send({ status: "failed", message: error?.data ?? error?.message });
-  }
 
-  res.send({ status: "success" });
+    res.send({ status: "success" });
+
+    /**
+     * 3. Fetch school (classes + teachers)
+     */
+    const school = await School.findById(schoolId)
+      .select("classes teachers")
+      .lean();
+
+    if (!school) return;
+
+    /**
+     * 4. Collect students from ALL classes
+     *    that match the selected levels
+     */
+    const studentIds = [];
+
+    school.classes.forEach((cls) => {
+      if (levels.includes(cls.level)) {
+        studentIds.push(...cls.students);
+      }
+    });
+
+    const uniqueStudentIds = [...new Set(studentIds.map(String))];
+
+    /**
+     * 5. Collect verified teachers
+     */
+    const verifiedTeacherIds = school.teachers
+      .filter((t) => t.verified)
+      .map((t) => t.user?.toString())
+      .filter(Boolean);
+
+    /**
+     * 6. Fetch Expo push tokens
+     */
+    const usersToNotify = await User.find({
+      _id: {
+        $in: [...verifiedTeacherIds, ...uniqueStudentIds],
+      },
+      expoPushToken: { $exists: true, $ne: null },
+    })
+      .select("expoPushToken")
+      .lean();
+
+    const tokens = usersToNotify.map((u) => u.expoPushToken).filter(Boolean);
+
+    if (!tokens.length) return;
+
+    /**
+     * 7. Send notification
+     */
+    await expoNotifications(tokens, {
+      title: "School Announcement",
+      message: title,
+      data: {
+        type: "announcement",
+        schoolId,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send({
+      status: "failed",
+      message: error?.message ?? "Server error",
+    });
+  }
 });
 
 router.post("/get_quiz", auth, async (req, res) => {
@@ -482,7 +589,7 @@ router.post("/submit_quiz", auth, async (req, res) => {
         total += question.point;
       } else {
         total += question.point;
-        point -= 15;
+        point -= 2;
         // setStat({ ...stat, point: statPoints });
       }
     });

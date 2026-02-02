@@ -294,8 +294,10 @@ const getFullName = (user, usernameFallback) => {
 };
 
 /**
- * Sync school.classes.students using school.students[].user.class.level
- * @param {String|ObjectId} schoolId
+ * Sync school.classes.students using:
+ * 1) user.class.id (primary)
+ * 2) user.class.level (fallback → first matching class)
+ * Also keeps User.class in sync with School.classes
  */
 const syncSchoolClassesWithStudents = async (schoolId) => {
   if (!mongoose.Types.ObjectId.isValid(schoolId)) {
@@ -304,56 +306,89 @@ const syncSchoolClassesWithStudents = async (schoolId) => {
 
   const school = await School.findById(schoolId).populate(
     "students.user",
-    "class.level",
+    "class.level class.alias class.id",
   );
 
   if (!school) {
     throw new Error("School not found");
   }
 
-  // Map class level -> class document
-  const classMap = new Map();
+  /**
+   * Build maps
+   */
+  const classById = new Map();
+  const classesByLevel = new Map(); // level -> [classDocs]
+
   school.classes.forEach((cls) => {
-    classMap.set(cls.level, cls);
+    const id = cls._id.toString();
+    classById.set(id, cls);
+
+    const level = cls.level.toLowerCase();
+    if (!classesByLevel.has(level)) {
+      classesByLevel.set(level, []);
+    }
+    classesByLevel.get(level).push(cls);
   });
 
-  // // Ensure all class levels exist
-  // classsSchoolEnums.forEach((level) => {
-  //   if (!classMap.has(level)) {
-  //     const newClass = {
-  //       level,
-  //       alias: null,
-  //       teachers: [],
-  //       students: [],
-  //     };
-  //     school.classes.push(newClass);
-  //     classMap.set(level, newClass);
-  //   }
-  // });
-
-  // Clear all students from classes (we will rebuild cleanly)
+  /**
+   * Clear students from all classes
+   */
   school.classes.forEach((cls) => {
     cls.students = [];
   });
 
-  // Assign students to correct class
+  /**
+   * Assign students
+   */
   for (const entry of school.students) {
     const studentUser = entry.user;
+    if (!studentUser?.class?.level) continue;
 
-    if (!studentUser || !studentUser.class?.level) continue;
+    let targetClass = null;
 
-    const level = studentUser.class.level.toLowerCase();
+    /**
+     * 1. Primary: class.id
+     */
+    if (studentUser.class.id) {
+      targetClass = classById.get(studentUser.class.id.toString());
+    }
 
-    if (!classMap.has(level)) continue;
+    /**
+     * 2. Fallback: first class with same level
+     */
+    if (!targetClass) {
+      const level = studentUser.class.level.toLowerCase();
+      const candidates = classesByLevel.get(level);
+      if (candidates?.length) {
+        targetClass = candidates[0]; // deterministic fallback
+      }
+    }
 
-    classMap.get(level).students.push(studentUser._id);
+    if (!targetClass) continue;
+
+    /**
+     * Push student into class
+     */
+    targetClass.students.push(studentUser._id);
+
+    /**
+     * Backfill & sync User.class
+     */
+    studentUser.class = {
+      level: targetClass.level,
+      alias: targetClass.alias,
+      id: targetClass._id,
+      hasChanged: false,
+    };
+
+    await studentUser.save({ validateBeforeSave: false });
   }
 
   await school.save();
 
   return {
     success: true,
-    message: "School classes synced successfully",
+    message: "School classes synced successfully (with fallback)",
     data: {
       totalClasses: school.classes.length,
       totalStudents: school.students.length,

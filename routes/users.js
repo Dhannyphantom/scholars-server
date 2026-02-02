@@ -16,10 +16,12 @@ const {
   createDir,
   userSelector,
   checkUserSub,
+  getFullName,
 } = require("../controllers/helpers");
 const { AppInfo } = require("../models/AppInfo");
 const WalletTransaction = require("../models/WalletTransaction");
 const walletService = require("../controllers/walletService");
+const expoNotifications = require("../controllers/expoNotifications");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -144,6 +146,18 @@ router.post("/register", async (req, res) => {
   }
 
   res.header("x-auth-token", token).json({ token, user: userData });
+
+  const professionals = await User.find({
+    accountType: { $in: ["manager", "professional"] },
+  }).select("expoPushToken");
+
+  const tokens = professionals.map((p) => p.expoPushToken);
+
+  await expoNotifications(tokens, {
+    title: `New ${accountType} registered`,
+    message: `${username} has just created an account`,
+    data: {},
+  });
 });
 
 router.post("/login", async (req, res) => {
@@ -1455,10 +1469,23 @@ router.put("/students", auth, async (req, res) => {
     // await session.commitTransaction();
     // session.endSession();
 
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
       action: type,
     });
+
+    if (type === "follow") {
+      const currentUserInfo = await User.findById(userId).select(
+        "username firstName lastName",
+      );
+      const targetUserInfo = await User.findById(user).select("expoPushToken");
+
+      await expoNotifications([targetUserInfo.expoPushToken], {
+        title: `New follower`,
+        message: `${getFullName(currentUserInfo, true)} follows you now. Follow back now to become friends`,
+        data: {},
+      });
+    }
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Something went wrong" });
@@ -1470,7 +1497,9 @@ router.put("/professional", auth, async (req, res) => {
   const { proId, subjects, action } = req.body;
   // action = 'verify' | 'reject' | 'revoke'
 
-  const userInfo = await User.findById(userId).select("accountType");
+  const userInfo = await User.findById(userId).select(
+    "accountType firstName lastName avatar username",
+  );
 
   if (userInfo.accountType !== "manager")
     return res
@@ -1514,6 +1543,39 @@ router.put("/professional", auth, async (req, res) => {
   }
 
   res.send({ status: "success" });
+  const targetUserInfo = await User.findById(proId).select("expoPushToken");
+
+  switch (action) {
+    case "verify":
+      await expoNotifications([targetUserInfo.expoPushToken], {
+        title: "Verification Success",
+        message:
+          "Your account is now verified with access to professional featurs. Welcome to the Team",
+        data: {},
+        // image: userInfo?.avatar?.image?.uri
+      });
+      break;
+    case "revoke":
+      await expoNotifications([targetUserInfo.expoPushToken], {
+        title: "Pro Access Revoked",
+        message: "You can no longer access Pro Features. Please contact admin",
+        data: {},
+        // image: userInfo?.avatar?.image?.uri
+      });
+      break;
+    case "reject":
+      await expoNotifications([targetUserInfo.expoPushToken], {
+        title: "Pro Access Rejected",
+        message:
+          "Sorry, You're not eligible to access Pro Features. Please contact admin",
+        data: {},
+        // image: userInfo?.avatar?.image?.uri
+      });
+      break;
+
+    default:
+      break;
+  }
 });
 
 router.post(
@@ -1542,14 +1604,6 @@ router.post(
   },
 );
 
-router.post("/generate_appinfo", async (req, res) => {
-  const appInfo = new AppInfo({ ID: "APP" });
-
-  await appInfo.save();
-
-  res.send({ status: "success" });
-});
-
 router.post("/pro_reset", async (req, res) => {
   const { key, email } = req.body;
 
@@ -1561,7 +1615,7 @@ router.post("/pro_reset", async (req, res) => {
   if (!userInfo)
     return res
       .status(422)
-      .send({ status: "failed", message: "Email not found!" });
+      .send({ status: "failed", message: "Professional Email not found!" });
 
   const newPass = "Gurupro1234";
 
@@ -1574,8 +1628,6 @@ router.post("/pro_reset", async (req, res) => {
 
   res.send({ status: "success", message: `Password reset successful` });
 });
-
-// Add to routes/payouts.js
 
 // Get all user transactions (money + points)
 router.get("/transactions", auth, async (req, res) => {
