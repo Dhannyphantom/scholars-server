@@ -2,7 +2,7 @@ const express = require("express");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
-const path = require("path");
+// const path = require("path");
 const mongoose = require("mongoose");
 
 // const getUploadMeta = require("../controllers/getUploadMeta");
@@ -15,12 +15,14 @@ const {
   fullUserSelector,
   createDir,
   userSelector,
-  checkUserSub,
+  // checkUserSub,
   getFullName,
+  syncUserStreak,
+  logUserActivityDay,
 } = require("../controllers/helpers");
 const { AppInfo } = require("../models/AppInfo");
 const WalletTransaction = require("../models/WalletTransaction");
-const walletService = require("../controllers/walletService");
+// const walletService = require("../controllers/walletService");
 const expoNotifications = require("../controllers/expoNotifications");
 
 const storage = multer.diskStorage({
@@ -185,6 +187,7 @@ router.post("/login", async (req, res) => {
 router.get("/user", auth, async (req, res) => {
   const userId = req.user.userId;
 
+  await syncUserStreak(userId);
   const userData = await User.findById(userId).select(fullUserSelector);
 
   if (!userData)
@@ -481,6 +484,15 @@ router.get("/pro_leaderboard", auth, async (req, res) => {
       message: error.message,
     });
   }
+});
+
+router.post("/activity", auth, async (req, res) => {
+  const userId = req.user.userId;
+
+  await logUserActivityDay(userId);
+  await syncUserStreak(userId);
+
+  res.send({ status: "success" });
 });
 
 /**

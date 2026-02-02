@@ -3,6 +3,7 @@ const { User } = require("../models/User");
 const { Quiz } = require("../models/Quiz");
 const expoNotifications = require("./expoNotifications");
 const { AppInfo } = require("../models/AppInfo");
+const { logUserActivityDay, syncUserStreak } = require("./helpers");
 
 const sessions = {};
 const nanoid = uuid.v4;
@@ -984,6 +985,8 @@ async function persistQuizResults(session, leaderboard) {
 
         // Apply all updates
         await User.findByIdAndUpdate(player._id, updateOps, { new: true });
+        await logUserActivityDay(player._id);
+        await syncUserStreak(player._id);
 
         // ========================================
         // STORE PLAYER RESULT DATA

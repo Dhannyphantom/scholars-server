@@ -2,7 +2,12 @@ const express = require("express");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
-const { getUploadUri, writeToJSONConsole } = require("../controllers/helpers");
+const {
+  getUploadUri,
+  writeToJSONConsole,
+  logUserActivityDay,
+  syncUserStreak,
+} = require("../controllers/helpers");
 const auth = require("../middlewares/authRoutes");
 const { Category } = require("../models/Category");
 const { Subject } = require("../models/Subject");
@@ -1446,6 +1451,8 @@ router.post("/submit_premium", auth, async (req, res) => {
     userInfo.quizHistory.push(quizSession);
 
     await userInfo.save();
+    await logUserActivityDay(userId);
+    await syncUserStreak(userId);
 
     res.send({
       status: "success",

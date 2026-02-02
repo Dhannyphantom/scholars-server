@@ -597,6 +597,10 @@ const userSchema = new schema({
     min: 0,
     default: 0,
   },
+  activeDays: {
+    type: [Date],
+    default: [],
+  },
   school: {
     type: schema.Types.ObjectId,
     ref: "School",

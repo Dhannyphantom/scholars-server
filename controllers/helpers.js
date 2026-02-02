@@ -190,6 +190,65 @@ const getClasses = () => {
   return classsSchoolEnums.map((item) => ({ level: item, alias: "Class" }));
 };
 
+const day = (d = new Date()) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const logUserActivityDay = async (userId) => {
+  const today = day();
+
+  await User.updateOne(
+    {
+      _id: userId,
+      activeDays: { $ne: today }, // prevent duplicates
+    },
+    {
+      $push: { activeDays: today },
+    },
+  );
+};
+
+const calculateStreakFromDays = (activeDays = []) => {
+  if (!activeDays.length) return 0;
+
+  const days = activeDays.map((d) => day(d).getTime()).sort((a, b) => b - a); // newest → oldest
+
+  let streak = 0;
+  let cursor = day().getTime();
+
+  for (const d of days) {
+    if (d === cursor) {
+      streak += 1;
+      cursor -= 86400000; // go back one day
+    } else if (d < cursor) {
+      break; // gap → streak ends
+    }
+  }
+
+  return streak;
+};
+
+const syncUserStreak = async (userId) => {
+  const user = await User.findById(userId).select("activeDays");
+
+  if (!user) return;
+
+  const currentStreak = calculateStreakFromDays(user.activeDays);
+
+  user.streak = currentStreak;
+
+  // user.quizStats.longestStreak = Math.max(
+  //   user.quizStats.longestStreak || 0,
+  //   currentStreak,
+  // );
+
+  // user.quizStats.lastStreakDate = day();
+
+  await user.save();
+};
+
 module.exports.sendPushInBatches = async (
   userFilter,
   { title, message, image },
@@ -575,6 +634,8 @@ module.exports = {
   reconcileSchool,
   getClasses,
   getFullName,
+  logUserActivityDay,
+  syncUserStreak,
   userSelector,
   ensureDirectory,
   fullUserSelector,
