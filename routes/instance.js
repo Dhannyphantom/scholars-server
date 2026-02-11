@@ -1671,6 +1671,225 @@ router.post("/generate-explanations-groq", async (req, res) => {
   }
 });
 
+router.post("/verify-explanations-ai-batch", async (req, res) => {
+  const batchSize = 50; // Process 50 at a time
+  let skip = req?.body?.skip || 0;
+  let totalProcessed = 0;
+  let allMismatches = [];
+  let allErrors = [];
+  let batchResults = [];
+  let rateLimitHit = false;
+
+  try {
+    // Get total count first
+    const totalCount = await Question.countDocuments({
+      explanation: { $exists: true, $ne: null, $ne: "" },
+    });
+
+    console.log(`Total questions to verify: ${totalCount}`);
+
+    // Process in batches
+    while (skip < totalCount && !rateLimitHit) {
+      const batchStartTime = Date.now();
+      let batchMismatches = [];
+      let batchErrors = [];
+      let batchProcessed = 0;
+
+      const questions = await Question.find({
+        explanation: { $exists: true, $ne: null, $ne: "" },
+      })
+        .skip(skip)
+        .limit(batchSize);
+
+      if (questions.length === 0) break;
+
+      console.log(
+        `Processing batch: ${skip + 1} to ${skip + questions.length}`,
+      );
+
+      for (const question of questions) {
+        try {
+          const correctAnswer = question.answers.find((a) => a.correct);
+          if (!correctAnswer) {
+            batchProcessed++;
+            totalProcessed++;
+            continue;
+          }
+
+          const verificationPrompt = `
+Analyze this exam question and its explanation.
+
+Question: ${question.question}
+
+Options:
+${question.answers.map((a, idx) => `${String.fromCharCode(65 + idx)}. ${a.name}`).join("\n")}
+
+Explanation:
+${question.explanation}
+
+Which option does the explanation identify as correct? Respond in this exact JSON format:
+{
+  "identifiedCorrectAnswer": "the full text of the answer the explanation says is correct",
+  "confidence": "high|medium|low",
+  "reasoning": "brief explanation of your determination"
+}
+`;
+
+          const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "user",
+                content: verificationPrompt,
+              },
+            ],
+            temperature: 0.1,
+          });
+
+          const responseText = completion.choices[0]?.message?.content?.trim();
+
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            const error = {
+              questionId: question._id,
+              error: "Could not parse AI response",
+            };
+            batchErrors.push(error);
+            allErrors.push(error);
+            batchProcessed++;
+            totalProcessed++;
+            continue;
+          }
+
+          const analysis = JSON.parse(jsonMatch[0]);
+
+          const identifiedAnswer = analysis.identifiedCorrectAnswer
+            .toLowerCase()
+            .trim();
+          const markedAnswer = correctAnswer.name.toLowerCase().trim();
+
+          const isMatch =
+            identifiedAnswer.includes(markedAnswer) ||
+            markedAnswer.includes(identifiedAnswer) ||
+            identifiedAnswer === markedAnswer;
+
+          if (!isMatch) {
+            const mismatch = {
+              _id: question._id,
+              question: question.question,
+              markedCorrect: correctAnswer.name,
+              explanationSaysCorrect: analysis.identifiedCorrectAnswer,
+              confidence: analysis.confidence,
+              reasoning: analysis.reasoning,
+              allAnswers: question.answers.map((a) => ({
+                text: a.name,
+                isCorrect: a.correct,
+              })),
+              explanation: question.explanation,
+            };
+            batchMismatches.push(mismatch);
+            allMismatches.push(mismatch);
+          }
+
+          batchProcessed++;
+          totalProcessed++;
+        } catch (err) {
+          // Check for rate limit errors
+          const isRateLimit =
+            err.message?.toLowerCase().includes("rate limit") ||
+            err.message?.toLowerCase().includes("quota") ||
+            err.message?.toLowerCase().includes("429") ||
+            err.status === 429;
+
+          const error = {
+            questionId: question._id,
+            error: err.message,
+            isRateLimit: isRateLimit,
+          };
+
+          batchErrors.push(error);
+          allErrors.push(error);
+
+          if (isRateLimit) {
+            console.log("Rate limit hit! Stopping batch processing.");
+            rateLimitHit = true;
+            break;
+          }
+
+          batchProcessed++;
+          totalProcessed++;
+        }
+      }
+
+      const batchEndTime = Date.now();
+      const batchDuration = ((batchEndTime - batchStartTime) / 1000).toFixed(2);
+
+      // Record batch results
+      const batchResult = {
+        batchNumber: Math.floor(skip / batchSize) + 1,
+        range: `${skip + 1}-${skip + batchProcessed}`,
+        processed: batchProcessed,
+        mismatches: batchMismatches.length,
+        errors: batchErrors.length,
+        duration: `${batchDuration}s`,
+        mismatchIds: batchMismatches.map((m) => m._id),
+      };
+
+      batchResults.push(batchResult);
+
+      console.log(
+        `Batch ${batchResult.batchNumber} complete: ` +
+          `${batchProcessed} processed, ` +
+          `${batchMismatches.length} mismatches, ` +
+          `${batchErrors.length} errors, ` +
+          `${batchDuration}s`,
+      );
+
+      skip += batchSize;
+
+      // Don't delay if we hit rate limit
+      if (!rateLimitHit) {
+        // Optional: Add a small delay to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    const response = {
+      success: true,
+      completed: !rateLimitHit,
+      totalQuestions: totalCount,
+      totalProcessed: totalProcessed,
+      remaining: totalCount - totalProcessed,
+      mismatchesFound: allMismatches.length,
+      errorsFound: allErrors.length,
+      batchResults: batchResults,
+      mismatches: allMismatches,
+      errors: allErrors,
+    };
+
+    if (rateLimitHit) {
+      response.message =
+        "Processing stopped due to rate limit. Resume by calling with skip=" +
+        skip;
+      response.resumeFrom = skip;
+    }
+
+    res.json(response);
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      partialResults: {
+        processed: totalProcessed,
+        mismatches: allMismatches.length,
+        errors: allErrors.length,
+        batchResults: batchResults,
+        resumeFrom: skip,
+      },
+    });
+  }
+});
+
 router.get("/ai_ques", async (req, res) => {
   // await Question.updateMany({}, { $unset: { explanation: "" } });
 

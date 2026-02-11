@@ -22,7 +22,7 @@ class FlutterwaveService {
             Authorization: `Bearer ${this.secretKey}`,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       return {
@@ -58,7 +58,7 @@ class FlutterwaveService {
             Authorization: `Bearer ${this.secretKey}`,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       return {
@@ -164,7 +164,7 @@ class FlutterwaveService {
           customer_id: data.phoneNumber,
           amount: data.amount,
           reference: data.reference,
-          callback_url: `${process.env.BASE_URL}/api/payouts/webhooks/flutterwave`,
+          callback_url: `${process.env.BASE_URL}/payouts/webhooks/flutterwave`,
         },
         {
           headers: {
@@ -172,7 +172,7 @@ class FlutterwaveService {
             "Content-Type": "application/json",
             accept: "application/json",
           },
-        }
+        },
       );
 
       return {
@@ -225,7 +225,7 @@ class FlutterwaveService {
           headers: {
             Authorization: `Bearer ${this.secretKey}`,
           },
-        }
+        },
       );
 
       if (!response.data.data || response.data.data.length === 0) {
@@ -268,7 +268,7 @@ class FlutterwaveService {
     } catch (error) {
       console.error(
         "Get bundles error:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       return {
         success: false,
@@ -292,7 +292,7 @@ class FlutterwaveService {
           customer_id: data.phoneNumber, // Note: customer_id not customer
           amount: data.amount,
           reference: data.reference,
-          callback_url: `${process.env.BASE_URL}/api/payouts/webhooks/flutterwave`,
+          callback_url: `${process.env.BASE_URL}/payouts/webhooks/flutterwave`,
         },
         {
           headers: {
@@ -300,7 +300,7 @@ class FlutterwaveService {
             "Content-Type": "application/json",
             accept: "application/json",
           },
-        }
+        },
       );
 
       return {
@@ -364,7 +364,7 @@ class FlutterwaveService {
             Authorization: `Bearer ${this.secretKey}`,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       return {

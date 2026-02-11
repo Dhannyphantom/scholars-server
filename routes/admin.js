@@ -3,10 +3,13 @@
 // ==========================================
 
 const express = require("express");
+const mongoose = require("mongoose");
 const router = express.Router();
 const walletService = require("../controllers/walletService");
 const WalletTransaction = require("../models/WalletTransaction");
 const PayoutRequest = require("../models/PayoutRequest");
+const { Question } = require("../models/Question");
+const { Topic } = require("../models/Topic");
 
 // Middleware for admin authentication
 const adminAuth = require("../middlewares/adminRoutes");
@@ -272,6 +275,59 @@ router.get("/dashboard/stats", adminAuth, async (req, res) => {
       message: error.message,
     });
   }
+});
+
+router.put("/q_update", async (req, res) => {
+  // const result = await Topic.updateMany(
+  //   {
+  //     _id: "690e61734e72018502f38563",
+  //   },
+  //   {
+  //     $set: {
+  //       user: "6758b009146bd4915853caab",
+  //     },
+  //   },
+  // );
+
+  // const result = await Question.updateMany(
+  //   {
+  //     topic: {
+  //       $in: [new mongoose.Types.ObjectId("690e61734e72018502f38563")],
+  //     },
+  //     user: new mongoose.Types.ObjectId("6758b009146bd4915853caab"),
+  //   },
+  //   {
+  //     $set: {
+  //       categories: ["678d59448f4a1d454f2ce813"],
+  //     },
+  //   },
+  // );
+
+  // const result = await Topic.updateMany(
+  //   {
+  //     _id: {
+  //       $in: [
+  //         new mongoose.Types.ObjectId("69656935513e4e01dc60d949"),
+  //         new mongoose.Types.ObjectId("69656935513e4e01dc60d94a"),
+  //       ],
+  //     },
+  //   },
+  //   {
+  //     $set: {
+  //       categories: [
+  //         // JUNIORS
+  //         // "678d59448f4a1d454f2ce815",
+  //         // SENIORS
+  //         "678d59448f4a1d454f2ce813",
+  //         "678d59448f4a1d454f2ce811",
+  //         "678d59448f4a1d454f2ce80d",
+  //         "678d59448f4a1d454f2ce80f",
+  //       ],
+  //     },
+  //   },
+  // );
+
+  res.send({ success: true, update: result?.modifiedCount || 0 });
 });
 
 module.exports = router;
