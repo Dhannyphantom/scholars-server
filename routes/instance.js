@@ -1119,6 +1119,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
                 categories: "$$q.categories",
                 hasAnswered: "$$q.hasAnswered", // Only for host's reference
                 isTheory: "$$q.isTheory",
+                explanation: "$$q.explanation",
               },
             },
           },
