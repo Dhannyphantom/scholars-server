@@ -310,7 +310,7 @@ const reconcileSchool = async (school) => {
 
     // update all school teachers subscription
 
-    const teacherIds = schoolObj.teachers.map((item) =>
+    const teacherIds = schoolObj?.teachers?.map((item) =>
       item?.user?._id?.toString(),
     );
     await User.updateMany(

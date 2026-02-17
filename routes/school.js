@@ -1247,7 +1247,7 @@ router.get("/assignments", auth, async (req, res) => {
         select: "preffix firstName lastName username avatar",
       },
     ])
-    .select("assignments classes");
+    .select("assignments subscription teachers assignments classes");
 
   await reconcileSchool(school);
 

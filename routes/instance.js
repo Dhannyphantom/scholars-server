@@ -432,12 +432,17 @@ router.get("/subjects", auth, async (req, res) => {
 
 router.post("/subject_topics", auth, async (req, res) => {
   const userId = req.user.userId;
-  const { subjects } = req.body;
+  const { subjects, category } = req.body;
 
-  if (!subjects || (Boolean(subjects) && !subjects[0]))
+  if (!subjects || !Array.isArray(subjects) || !subjects[0])
     return res
       .status(422)
       .send({ status: "failed", message: "Provide subject data" });
+
+  if (!category)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Provide category data" });
 
   const userInfo = await User.findById(userId).select("qBank").lean();
   if (!userInfo)
@@ -446,21 +451,27 @@ router.post("/subject_topics", auth, async (req, res) => {
       .send({ status: "failed", message: "User not found!" });
 
   const banks = userInfo?.qBank || [];
-
   const userQBank = banks.map((q) => q.toString());
 
   let subjectList = await Subject.find({ _id: { $in: subjects } })
-    .populate([{ path: "topics", model: "Topic", select: "name questions" }])
+    .populate([
+      {
+        path: "topics",
+        model: "Topic",
+        select: "name questions categories",
+        match: { categories: category }, // Only fetch topics that include this category
+      },
+    ])
     .select("name topics")
     .lean();
 
   subjectList = subjectList.map((subject) => {
-    const topics = subject.topics.map((topic, idx) => {
-      // Calculate questions in the user's qBank
+    const topics = (subject.topics || []).map((topic, idx) => {
       const totalQuestions = topic.questions.length;
-      const qBankQuestions = topic.questions.filter((question) =>
-        userQBank.includes(question._id.toString()),
-      );
+
+      const qBankCount = topic.questions.filter((questionId) =>
+        userQBank.includes(questionId.toString()),
+      ).length;
 
       return {
         _id: topic._id,
@@ -468,8 +479,8 @@ router.post("/subject_topics", auth, async (req, res) => {
         visible: idx === 0,
         hasStudied: false,
         totalQuestions,
-        qBankQuestions: qBankQuestions.length, // Count of matched questions
-        progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+        qBankQuestions: qBankCount,
+        progress: totalQuestions > 0 ? (qBankCount / totalQuestions) * 100 : 0,
       };
     });
 
