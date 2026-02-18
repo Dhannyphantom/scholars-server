@@ -3,33 +3,33 @@ class PhoneValidator {
   // Nigerian network prefixes
   static networkPrefixes = {
     MTN: [
-      "0803",
-      "0806",
-      "0703",
-      "0706",
-      "0813",
-      "0816",
-      "0810",
-      "0814",
-      "0903",
-      "0906",
-      "0913",
-      "0916",
+      "803",
+      "806",
+      "703",
+      "706",
+      "813",
+      "816",
+      "810",
+      "814",
+      "903",
+      "906",
+      "913",
+      "916",
     ],
-    GLO: ["0805", "0807", "0705", "0815", "0811", "0905", "0915"],
+    GLO: ["805", "807", "705", "815", "811", "905", "915"],
     AIRTEL: [
-      "0802",
-      "0808",
-      "0708",
-      "0812",
-      "0701",
-      "0902",
-      "0901",
-      "0904",
-      "0907",
-      "0912",
+      "802",
+      "808",
+      "708",
+      "812",
+      "701",
+      "902",
+      "901",
+      "904",
+      "907",
+      "912",
     ],
-    "9MOBILE": ["0809", "0817", "0818", "0909", "0908"],
+    "9MOBILE": ["809", "817", "818", "909", "908"],
   };
 
   // Validate phone number format and network match
@@ -38,7 +38,7 @@ class PhoneValidator {
     let normalizedPhone = phoneNumber.replace(/^\+234/, "0").replace(/\s/g, "");
 
     // Check if it's a valid Nigerian number
-    if (!/^0[789]\d{9}$/.test(normalizedPhone)) {
+    if (!/^[789]\d{9}$/.test(normalizedPhone)) {
       return {
         valid: false,
         error: "Invalid Nigerian phone number format",
@@ -46,7 +46,7 @@ class PhoneValidator {
     }
 
     // Get first 4 digits (prefix)
-    const prefix = normalizedPhone.substring(0, 4);
+    const prefix = normalizedPhone.substring(0, 3);
     const networkUpper = network.toUpperCase();
 
     // Check if prefix matches the selected network
@@ -73,7 +73,7 @@ class PhoneValidator {
 
     return {
       valid: true,
-      normalizedPhone,
+      normalizedPhone: "0" + normalizedPhone, // Ensure it starts with 0,
     };
   }
 

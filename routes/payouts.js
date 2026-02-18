@@ -427,7 +427,7 @@ router.post("/data", authMiddleware, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Data purchase error:", error);
+    console.log("Data purchase error:", error);
     res.status(500).json({
       success: false,
       message: error.message,
