@@ -3801,7 +3801,7 @@ router.post("/:id/class-shift", auth, async (req, res) => {
               school: "",
             },
             $set: {
-              "class.hasChanged": true,
+              "class.hasChanged": false,
             },
           },
         );
