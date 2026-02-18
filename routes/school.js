@@ -3747,4 +3747,166 @@ router.post("/:schoolId/classes/:classId/transfer", auth, async (req, res) => {
   }
 });
 
+router.post("/:id/class-shift", auth, async (req, res) => {
+  const { action } = req.body;
+
+  if (!["upgrade", "downgrade"].includes(action))
+    return res.status(400).send({
+      success: false,
+      message: "Invalid action. Must be 'upgrade' or 'downgrade'.",
+    });
+
+  try {
+    const school = await School.findById(req.params.id);
+
+    if (!school)
+      return res
+        .status(404)
+        .send({ success: false, message: "School not found" });
+
+    const CLASS_ORDER = ["jss 1", "jss 2", "jss 3", "sss 1", "sss 2", "sss 3"];
+
+    const getStudentDocs = async (studentIds) => {
+      if (!studentIds.length) return [];
+      return await User.find(
+        { _id: { $in: studentIds } },
+        "_id firstName lastName",
+      );
+    };
+
+    const updateUserClass = async (studentIds, newLevel) => {
+      if (!studentIds.length) return;
+
+      if (newLevel) {
+        const targetClass = school.classes.find((c) => c.level === newLevel);
+        await User.updateMany(
+          { _id: { $in: studentIds } },
+          {
+            $set: {
+              "class.level": newLevel,
+              "class.id": targetClass?._id ?? null,
+              "class.hasChanged": true,
+              school: school._id,
+            },
+          },
+        );
+      } else {
+        await User.updateMany(
+          { _id: { $in: studentIds } },
+          {
+            $unset: {
+              "class.level": "",
+              "class.alias": "",
+              "class.id": "",
+              school: "",
+            },
+            $set: {
+              "class.hasChanged": true,
+            },
+          },
+        );
+      }
+    };
+
+    const removeFromSchoolStudents = (school, studentIds) => {
+      const idStrings = studentIds.map((id) => id.toString());
+      school.students = school.students.filter(
+        (s) => !idStrings.includes(s.user.toString()),
+      );
+    };
+
+    // Returns only studentIds not already in any alumni entry
+    const filterAlreadyInAlumni = (studentIds) => {
+      const existingAlumniUserIds = new Set(
+        school.alumni.flatMap((entry) =>
+          entry.students.map((s) => s.user.toString()),
+        ),
+      );
+      return studentIds.filter(
+        (id) => !existingAlumniUserIds.has(id.toString()),
+      );
+    };
+
+    const pushToAlumni = async (studentIds, type, fromClass) => {
+      const newStudentIds = filterAlreadyInAlumni(studentIds);
+      if (!newStudentIds.length) return;
+
+      const studentDocs = await getStudentDocs(newStudentIds);
+
+      school.alumni.push({
+        type,
+        fromClass,
+        students: studentDocs.map((s) => ({
+          user: s._id,
+          name: `${s.firstName || ""} ${s.lastName || ""}`.trim(),
+        })),
+      });
+
+      removeFromSchoolStudents(school, newStudentIds);
+      await updateUserClass(newStudentIds, null);
+    };
+
+    if (action === "upgrade") {
+      for (let i = CLASS_ORDER.length - 1; i >= 0; i--) {
+        const level = CLASS_ORDER[i];
+        const currentClass = school.classes.find((c) => c.level === level);
+        if (!currentClass || !currentClass.students.length) continue;
+
+        const studentIds = [...currentClass.students];
+
+        if (level === "sss 3") {
+          await pushToAlumni(studentIds, "graduated", level);
+          currentClass.students = [];
+          continue;
+        }
+
+        const nextLevel = CLASS_ORDER[i + 1];
+        const nextClass = school.classes.find((c) => c.level === nextLevel);
+        if (!nextClass) continue;
+
+        nextClass.students.push(...studentIds);
+        await updateUserClass(studentIds, nextLevel);
+        currentClass.students = [];
+      }
+    }
+
+    if (action === "downgrade") {
+      for (let i = 0; i < CLASS_ORDER.length; i++) {
+        const level = CLASS_ORDER[i];
+        const currentClass = school.classes.find((c) => c.level === level);
+        if (!currentClass || !currentClass.students.length) continue;
+
+        const studentIds = [...currentClass.students];
+
+        if (level === "jss 1") {
+          await pushToAlumni(studentIds, "downgraded", level);
+          currentClass.students = [];
+          continue;
+        }
+
+        const prevLevel = CLASS_ORDER[i - 1];
+        const prevClass = school.classes.find((c) => c.level === prevLevel);
+        if (!prevClass) continue;
+
+        prevClass.students.push(...studentIds);
+        await updateUserClass(studentIds, prevLevel);
+        currentClass.students = [];
+      }
+    }
+
+    await school.save();
+  } catch (err) {
+    return res.status(500).send({
+      success: false,
+      message: "Server error during class shift",
+      error: err.message,
+    });
+  }
+
+  res.send({
+    success: true,
+    message: `Classes successfully ${action}d and synced`,
+  });
+});
+
 module.exports = router;

@@ -23,6 +23,36 @@ const classsSchoolEnums = [
 ];
 const DEFAULT_SUB_MILLI = 1000 * 60 * 60 * 24 * 2; // 2 DAYS
 
+const alumniSchema = new schema({
+  date: {
+    type: Date,
+    default: Date.now,
+  },
+  type: {
+    type: String,
+    enum: ["graduated", "downgraded"],
+    required: true,
+  },
+  fromClass: {
+    type: String,
+    enum: classsSchoolEnums,
+    required: true,
+  },
+  students: [
+    {
+      user: {
+        type: schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      name: {
+        type: String,
+        required: true,
+      },
+    },
+  ],
+});
+
 const classSchema = new schema({
   alias: {
     type: String,
@@ -316,6 +346,10 @@ const SchoolSchema = new schema({
   classes: {
     type: [classSchema],
     default: defaultClasses,
+  },
+  alumni: {
+    type: [alumniSchema],
+    default: [],
   },
   country: {
     type: String,
