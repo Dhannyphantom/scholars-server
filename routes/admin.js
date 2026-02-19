@@ -9,7 +9,7 @@ const walletService = require("../controllers/walletService");
 const WalletTransaction = require("../models/WalletTransaction");
 const PayoutRequest = require("../models/PayoutRequest");
 const { Question } = require("../models/Question");
-const { Topic } = require("../models/Topic");
+const { AppInfo } = require("../models/AppInfo");
 
 // Middleware for admin authentication
 const adminAuth = require("../middlewares/adminRoutes");
@@ -275,6 +275,26 @@ router.get("/dashboard/stats", adminAuth, async (req, res) => {
       message: error.message,
     });
   }
+});
+
+router.get("/app_version", async (req, res) => {
+  const appData = await AppInfo.findOne({ ID: "APP" });
+
+  const {
+    latestVersion,
+    minimumSupportedVersion,
+    otaEnabled,
+    updateMessage,
+    forceMessage,
+  } = appData.VERSION;
+
+  return res.json({
+    latestVersion,
+    minimumSupportedVersion,
+    otaEnabled,
+    updateMessage,
+    forceMessage,
+  });
 });
 
 router.put("/q_update", async (req, res) => {

@@ -14,17 +14,27 @@ const AppInfoSchema = new schema({
   },
   VERSION: {
     type: {
-      SHOULD_UPDATE: {
+      latestVersion: {
         type: String,
-        default: "0.0.0",
+        default: "1.0.0",
       },
-      CURRENT: {
+      minimumSupportedVersion: {
         type: String,
-        default: "0.0.0",
+        default: "1.0.0",
       },
-      MUST_UPDATE: {
+      otaEnabled: {
+        type: Boolean,
+        default: true,
+      },
+      updateMessage: {
         type: String,
-        default: "0.0.0",
+        default:
+          "A new version of the app is available. Please update to continue.",
+      },
+      forceMessage: {
+        type: String,
+        default:
+          "Your app version is no longer supported. Please update to continue.",
       },
     },
   },
