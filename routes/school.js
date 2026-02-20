@@ -787,8 +787,6 @@ router.put("/quiz_status", auth, async (req, res) => {
 
   let pusher = {};
 
-  console.log({ status });
-
   if (status === "active") {
     pusher.$push = {
       announcements: {
@@ -825,9 +823,12 @@ router.put("/quiz_status", auth, async (req, res) => {
   } else if (status === "review") {
     // Close quiz session
     // set quiz obj to false
-    const quiz = school.quiz.find((item) => item._id === quizId);
+    const schoolData = school.toObject();
+    const quiz = schoolData.quiz.find(
+      (item) => item._id?.toString() === quizId,
+    );
     const session = quiz.sessions.find(
-      (item) => item._id == quiz.currentSession,
+      (item) => item._id?.toString() == quiz.currentSession,
     );
 
     school.announcements.push({
@@ -870,7 +871,7 @@ router.get("/quiz", auth, async (req, res) => {
     if (userInfo.accountType === "student") {
       school = await School.findById(schoolId)
         .select(
-          "quiz.title quiz.date quiz.currentSession quiz.subject quiz._id quiz.status quiz.teacher",
+          "quiz.title quiz.date quiz.currentSession quiz.currentSubmissions quiz.subject quiz._id quiz.status quiz.teacher",
         )
         .populate([
           {
@@ -883,21 +884,23 @@ router.get("/quiz", auth, async (req, res) => {
             model: "User",
             select: "firstName username lastName avatar preffix",
           },
-        ]);
+        ])
+        .lean();
+
       if (!school)
         return res
           .status(422)
           .send({ status: "failed", message: "School not found" });
 
       const quizz = school.quiz
-        .filter((item) => item?.status != "inactive")
+        .filter((item) => item?.status !== "inactive")
         .map((item) => {
           const checkUser = item.currentSubmissions?.findIndex(
             (usr) => usr?.toString() == userId,
           );
           if (checkUser > -1) {
             return {
-              ...item._doc,
+              ...item,
               status: "submitted",
             };
           } else {
@@ -1013,7 +1016,6 @@ router.get("/announcements", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.query;
 
-  console.log({ schoolId });
   if (!Boolean(schoolId) || schoolId == "undefined") {
     return res.status(422).send({ status: "failed", message: "No school ID" });
   }
