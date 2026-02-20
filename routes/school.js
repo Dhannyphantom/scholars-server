@@ -937,9 +937,109 @@ router.put("/quiz_status", auth, async (req, res) => {
     });
 
     await school.save();
+  } else if (status === "result") {
+    pusher.$push = {
+      announcements: {
+        teacher: userId,
+        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+          userInfo?.firstName,
+        )} ${capFirstLetter(
+          userInfo?.lastName,
+        )} has released your quiz score. Check yours now!`,
+        classes: [schoolClass],
+      },
+    };
+
+    await School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $set: {
+          "quiz.$.status": "inactive",
+          "quiz.$.class": schoolClass,
+        },
+        ...pusher,
+      },
+    );
   }
 
   res.send({ status: "success" });
+});
+
+router.get("/quiz_history_user", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId } = req.query;
+
+  if (!schoolId || !userId)
+    return res.status(422).send({
+      status: "failed",
+      message: "Missing required parameters",
+      userId,
+      schoolId,
+    });
+
+  const school = await School.findById(schoolId)
+    .populate("quiz.subject", "name")
+    .populate("quiz.teacher", "firstName lastName preffix")
+    .populate("quiz.sessions.participants.student", "firstName lastName");
+
+  if (!school)
+    return res.status(404).send({
+      status: "failed",
+      message: "School not found",
+    });
+
+  const history = [];
+
+  school.quiz.forEach((quiz) => {
+    quiz.sessions.forEach((session) => {
+      const participant = session.participants.find(
+        (p) => p.student?._id?.toString() === userId,
+      );
+
+      if (participant) {
+        const sortedParticipants = [...session.participants].sort(
+          (a, b) => b.score - a.score,
+        );
+
+        const rank =
+          sortedParticipants.findIndex(
+            (p) => p.student?._id?.toString() === userId,
+          ) + 1;
+
+        history.push({
+          quizId: quiz._id,
+          quizTitle: quiz.title,
+          subject: quiz.subject?.name || null,
+          class: quiz.class,
+
+          teacher: {
+            id: quiz.teacher?._id,
+            name: `${quiz.teacher?.preffix || ""} ${quiz.teacher?.firstName || ""} ${quiz.teacher?.lastName || ""}`.trim(),
+          },
+
+          quizCreatedAt: quiz.date,
+          sessionId: session._id,
+          sessionDate: session.date,
+          submittedAt: participant.date,
+          ended: session.ended,
+
+          score: participant.score,
+          totalScore: session.total_score,
+          averageScore: session.average_score,
+          rank,
+          totalParticipants: session.participants.length,
+        });
+      }
+    });
+  });
+
+  history.sort((a, b) => new Date(b.sessionDate) - new Date(a.sessionDate));
+
+  res.send({
+    status: "success",
+    totalResults: history.length,
+    results: history,
+  });
 });
 
 router.get("/quiz", auth, async (req, res) => {
