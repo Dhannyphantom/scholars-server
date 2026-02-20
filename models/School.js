@@ -108,7 +108,7 @@ const submissionSchema = new schema({
 const answerSchema = new schema({
   name: {
     type: String,
-    required: true,
+    required: false,
   },
   correct: {
     type: Boolean,

@@ -876,12 +876,12 @@ router.get("/quiz", auth, async (req, res) => {
           {
             path: "quiz.subject",
             model: "Subject",
-            select: "name",
+            select: "name image",
           },
           {
             path: "quiz.teacher",
             model: "User",
-            select: "firstName lastName avatar preffix",
+            select: "firstName username lastName avatar preffix",
           },
         ]);
       if (!school)
@@ -915,7 +915,7 @@ router.get("/quiz", auth, async (req, res) => {
           {
             path: "quiz.subject",
             model: "Subject",
-            select: "name",
+            select: "name image",
           },
         ]);
       if (!school)
@@ -931,12 +931,12 @@ router.get("/quiz", auth, async (req, res) => {
           {
             path: "quiz.subject",
             model: "Subject",
-            select: "name",
+            select: "name image",
           },
           {
             path: "quiz.teacher",
             model: "User",
-            select: "firstName lastName preffix",
+            select: "firstName username lastName preffix",
           },
         ]);
 
@@ -973,7 +973,7 @@ router.get("/quiz", auth, async (req, res) => {
           {
             path: "quiz.subject",
             model: "Subject",
-            select: "name",
+            select: "name image",
           },
         ]);
 
@@ -3608,12 +3608,10 @@ router.post(
       }
 
       if (classLevel.toLowerCase() === targetLevel.toLowerCase()) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Source and target class levels cannot be the same",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Source and target class levels cannot be the same",
+        });
       }
 
       const school = await School.findById(schoolId);
@@ -3631,12 +3629,10 @@ router.post(
       );
 
       if (!isRep && !isTeacher) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message: "Not authorized to transfer students",
-          });
+        return res.status(403).json({
+          success: false,
+          message: "Not authorized to transfer students",
+        });
       }
 
       const sourceClass = school.classes.find(
@@ -3669,12 +3665,10 @@ router.post(
         transferCount = studentsToTransfer.length;
 
         if (transferCount === 0) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "No students to transfer in this class",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "No students to transfer in this class",
+          });
         }
 
         // Unique push all students into target class
@@ -3701,12 +3695,10 @@ router.post(
         );
 
         if (studentIndex === -1) {
-          return res
-            .status(404)
-            .json({
-              success: false,
-              message: "Student not found in this class",
-            });
+          return res.status(404).json({
+            success: false,
+            message: "Student not found in this class",
+          });
         }
 
         const alreadyInTarget = targetClass.students.some(
@@ -3714,12 +3706,10 @@ router.post(
         );
 
         if (alreadyInTarget) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Student is already in the target class",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Student is already in the target class",
+          });
         }
 
         targetClass.students.push(new mongoose.Types.ObjectId(studentId));
