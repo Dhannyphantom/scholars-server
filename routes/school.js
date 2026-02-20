@@ -707,6 +707,62 @@ router.post("/quiz", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+router.get("/quiz_session_students", auth, async (req, res) => {
+  const { schoolId, quizId, sessionId } = req.query;
+
+  if (!schoolId || !quizId || !sessionId)
+    return res.status(422).send({
+      status: "failed",
+      message: "Missing required parameters",
+    });
+
+  const school = await School.findById(schoolId).populate(
+    "quiz.sessions.participants.student",
+    "firstName lastName preffix",
+  );
+
+  if (!school)
+    return res.status(404).send({
+      status: "failed",
+      message: "School not found",
+    });
+
+  const quiz = school.quiz.id(quizId);
+  if (!quiz)
+    return res.status(404).send({
+      status: "failed",
+      message: "Quiz not found",
+    });
+
+  const session = quiz.sessions.id(sessionId);
+  if (!session)
+    return res.status(404).send({
+      status: "failed",
+      message: "Session not found",
+    });
+
+  const sortedParticipants = [...session.participants].sort(
+    (a, b) => b.score - a.score,
+  );
+
+  const students = sortedParticipants.map((p, index) => ({
+    rank: index + 1,
+    studentId: p.student?._id,
+    name: `${p.student?.preffix || ""} ${p.student?.firstName || ""} ${p.student?.lastName || ""}`.trim(),
+    score: p.score,
+    date: p.date,
+  }));
+
+  res.send({
+    status: "success",
+    totalParticipants: students.length,
+    averageScore: session.average_score,
+    totalScore: session.total_score,
+    ended: session.ended,
+    students,
+  });
+});
+
 router.put("/quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const quiz = req.body;
