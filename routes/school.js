@@ -823,14 +823,53 @@ router.put("/quiz_status", auth, async (req, res) => {
   } else if (status === "review") {
     // Close quiz session
     // set quiz obj to false
-    const schoolData = school.toObject();
-    const quiz = schoolData.quiz.find(
-      (item) => item._id?.toString() === quizId,
-    );
-    const session = quiz.sessions.find(
-      (item) => item._id?.toString() == quiz.currentSession,
-    );
+    // const schoolData = school.toObject();
+    // const quiz = schoolData.quiz.find(
+    //   (item) => item._id?.toString() === quizId,
+    // );
+    // const session = quiz.sessions.find(
+    //   (item) => item._id?.toString() == quiz.currentSession,
+    // );
 
+    // school.announcements.push({
+    //   teacher: userId,
+    //   message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+    //     userInfo?.firstName,
+    //   )} ${capFirstLetter(
+    //     userInfo?.lastName,
+    //   )} has closed the quiz session for your class\nWait for your scores to be released`,
+    //   classes: [schoolClass],
+    // });
+    // quiz.currentSubmissions = [];
+    // quiz.currentSession = quiz._id;
+    // session.ended = true;
+
+    // await school.save();
+    const quiz = school.quiz.id(quizId);
+    if (!quiz)
+      return res
+        .status(422)
+        .send({ status: "failed", message: "Quiz not found" });
+
+    const session = quiz.sessions.id(quiz.currentSession);
+    if (!session)
+      return res
+        .status(422)
+        .send({ status: "failed", message: "Session not found" });
+
+    // Set quiz status to review
+    quiz.status = "review";
+
+    // End current session
+    session.ended = true;
+
+    // Clear live submissions
+    quiz.currentSubmissions = [];
+
+    // Reset current session reference (optional but cleaner)
+    quiz.currentSession = quizId;
+
+    // Push announcement
     school.announcements.push({
       teacher: userId,
       message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
@@ -840,9 +879,6 @@ router.put("/quiz_status", auth, async (req, res) => {
       )} has closed the quiz session for your class\nWait for your scores to be released`,
       classes: [schoolClass],
     });
-    quiz.currentSubmissions = [];
-    quiz.currentSession = quiz._id;
-    session.ended = true;
 
     await school.save();
   }
@@ -990,9 +1026,13 @@ router.get("/quiz", auth, async (req, res) => {
         .filter((item) => item.ended == true)
         .map((item) => {
           return {
+            _id: item?._id,
             date: item.date,
             average_score: item.average_score,
-            percentage: item.participants?.length,
+            percentage: Math.floor(
+              (item.average_score / item.total_score) * 100,
+            ),
+            participants: item.participants?.length,
           };
         });
       return res.status(200).send({
