@@ -4137,4 +4137,830 @@ router.post("/:id/class-shift", auth, async (req, res) => {
   });
 });
 
+/**
+ * GET /api/school/:schoolId/dashboard
+ *
+ * Complete School Performance Dashboard
+ * Access: School rep (principal) or verified teachers only
+ *
+ * Returns:
+ * - School overview & metadata
+ * - Overall performance %
+ * - Subject strength & weakness breakdown
+ * - Class-by-class comparison
+ * - Top 10 performing students
+ * - Most improved students (last 30d vs prior 30d)
+ * - Score trends (weekly & monthly)
+ * - WAEC/JAMB Readiness Index per class
+ * - Activity & engagement stats
+ */
+router.get("/:schoolId/dashboard", auth, async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const userId = req.user.userId;
+
+    // ============================================================
+    // 1. VALIDATE & AUTHORISE
+    // ============================================================
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid school ID",
+      });
+    }
+
+    const school = await School.findById(schoolId)
+      .select("name type state lga rep teachers students classes subscription")
+      .lean();
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    // Only rep (principal) or verified teachers can access the dashboard
+    const isRep = school.rep?.toString() === userId;
+    const isVerifiedTeacher = school.teachers?.some(
+      (t) => t.user?.toString() === userId && t.verified === true,
+    );
+
+    if (!isRep && !isVerifiedTeacher) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only school staff can view this dashboard.",
+      });
+    }
+
+    // ============================================================
+    // 2. GATHER VERIFIED STUDENT IDs
+    // Used as the base filter for all Quiz aggregations
+    // ============================================================
+    const verifiedStudentIds = school.students
+      .filter((s) => s.verified === true)
+      .map((s) => s.user);
+
+    const totalStudents = verifiedStudentIds.length;
+    const totalTeachers =
+      school.teachers?.filter((t) => t.verified).length || 0;
+
+    if (totalStudents === 0) {
+      return res.json({
+        success: true,
+        data: {
+          school: formatSchoolMeta(school, totalStudents, totalTeachers),
+          message:
+            "No verified students found. Dashboard will populate as students join.",
+          overview: null,
+          subjectBreakdown: [],
+          classComparison: [],
+          topStudents: [],
+          mostImproved: [],
+          trends: { weekly: [], monthly: [] },
+          readinessIndex: [],
+          engagement: null,
+        },
+      });
+    }
+
+    const schoolObjectId = new mongoose.Types.ObjectId(schoolId);
+    const now = new Date();
+
+    // Time boundaries
+    const last30Days = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    const last60Days = new Date(now - 60 * 24 * 60 * 60 * 1000);
+    const last7Days = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const last12Weeks = new Date(now - 12 * 7 * 24 * 60 * 60 * 1000);
+    const last6Months = new Date(now - 6 * 30 * 24 * 60 * 60 * 1000);
+
+    // ============================================================
+    // 3. RUN ALL AGGREGATIONS IN PARALLEL
+    // ============================================================
+    const [
+      overviewAgg,
+      subjectAgg,
+      classAgg,
+      topStudentsAgg,
+      recentPerformanceAgg, // last 30d — for most improved & readiness
+      priorPerformanceAgg, // 30-60d ago — for most improved comparison
+      weeklyTrendAgg,
+      monthlyTrendAgg,
+      engagementAgg,
+    ] = await Promise.all([
+      // ── 3A. OVERALL SCHOOL PERFORMANCE ──────────────────────────
+      Quiz.aggregate([
+        { $match: { school: schoolObjectId } },
+        {
+          $group: {
+            _id: null,
+            totalQuizzes: { $sum: 1 },
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            totalPoints: { $sum: "$summary.pointsEarned" },
+            avgAccuracy: { $avg: "$summary.accuracyRate" },
+            avgDuration: { $avg: "$summary.duration" },
+          },
+        },
+      ]),
+
+      // ── 3B. SUBJECT STRENGTH & WEAKNESS ─────────────────────────
+      // Unwind each quiz's subjectBreakdown, group by subject
+      Quiz.aggregate([
+        { $match: { school: schoolObjectId } },
+        { $unwind: "$summary.subjectBreakdown" },
+        {
+          $group: {
+            _id: "$summary.subjectBreakdown.subject",
+            totalQuestions: {
+              $sum: "$summary.subjectBreakdown.totalQuestions",
+            },
+            totalCorrect: { $sum: "$summary.subjectBreakdown.correctAnswers" },
+            quizCount: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            accuracyRate: {
+              $cond: [
+                { $gt: ["$totalQuestions", 0] },
+                {
+                  $multiply: [
+                    { $divide: ["$totalCorrect", "$totalQuestions"] },
+                    100,
+                  ],
+                },
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $lookup: {
+            from: "subjects",
+            localField: "_id",
+            foreignField: "_id",
+            as: "subjectInfo",
+          },
+        },
+        { $unwind: { path: "$subjectInfo", preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            subjectId: "$_id",
+            subjectName: { $ifNull: ["$subjectInfo.name", "Unknown"] },
+            totalQuestions: 1,
+            totalCorrect: 1,
+            quizCount: 1,
+            accuracyRate: { $round: ["$accuracyRate", 2] },
+          },
+        },
+        { $sort: { accuracyRate: -1 } },
+      ]),
+
+      // ── 3C. CLASS-BY-CLASS COMPARISON ───────────────────────────
+      Quiz.aggregate([
+        { $match: { school: schoolObjectId, classLevel: { $ne: null } } },
+        {
+          $group: {
+            _id: "$classLevel",
+            totalQuizzes: { $sum: 1 },
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            avgAccuracy: { $avg: "$summary.accuracyRate" },
+            avgDuration: { $avg: "$summary.duration" },
+            uniqueStudents: { $addToSet: "$user" },
+          },
+        },
+        {
+          $addFields: {
+            studentCount: { $size: "$uniqueStudents" },
+          },
+        },
+        {
+          $project: {
+            classLevel: "$_id",
+            totalQuizzes: 1,
+            totalCorrect: 1,
+            totalQuestions: 1,
+            avgAccuracy: { $round: ["$avgAccuracy", 2] },
+            avgDuration: { $round: ["$avgDuration", 0] },
+            studentCount: 1,
+          },
+        },
+        // Attach per-class subject breakdown
+        // (Which subject is each class weakest in?)
+        { $sort: { classLevel: 1 } },
+      ]),
+
+      // ── 3D. TOP 10 STUDENTS (all-time) ──────────────────────────
+      Quiz.aggregate([
+        { $match: { school: schoolObjectId } },
+        {
+          $group: {
+            _id: "$user",
+            totalQuizzes: { $sum: 1 },
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            totalPoints: { $sum: "$summary.pointsEarned" },
+            avgAccuracy: { $avg: "$summary.accuracyRate" },
+            classLevel: { $last: "$classLevel" },
+          },
+        },
+        {
+          $addFields: {
+            overallAccuracy: {
+              $cond: [
+                { $gt: ["$totalQuestions", 0] },
+                {
+                  $multiply: [
+                    { $divide: ["$totalCorrect", "$totalQuestions"] },
+                    100,
+                  ],
+                },
+                0,
+              ],
+            },
+          },
+        },
+        { $sort: { overallAccuracy: -1, totalPoints: -1 } },
+        { $limit: 10 },
+        {
+          $lookup: {
+            from: "users",
+            localField: "_id",
+            foreignField: "_id",
+            as: "userInfo",
+          },
+        },
+        { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            userId: "$_id",
+            firstName: "$userInfo.firstName",
+            lastName: "$userInfo.lastName",
+            username: "$userInfo.username",
+            avatar: "$userInfo.avatar",
+            classLevel: 1,
+            totalQuizzes: 1,
+            totalPoints: 1,
+            overallAccuracy: { $round: ["$overallAccuracy", 2] },
+          },
+        },
+      ]),
+
+      // ── 3E. LAST 30 DAYS — per-student accuracy (for most improved & readiness) ──
+      Quiz.aggregate([
+        {
+          $match: {
+            school: schoolObjectId,
+            date: { $gte: last30Days },
+          },
+        },
+        {
+          $group: {
+            _id: "$user",
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            totalPoints: { $sum: "$summary.pointsEarned" },
+            totalDuration: { $sum: "$summary.duration" },
+            quizCount: { $sum: 1 },
+            classLevel: { $last: "$classLevel" },
+            // Collect per-subject data for readiness
+            subjects: {
+              $push: "$summary.subjectBreakdown",
+            },
+          },
+        },
+        {
+          $addFields: {
+            recentAccuracy: {
+              $cond: [
+                { $gt: ["$totalQuestions", 0] },
+                {
+                  $multiply: [
+                    { $divide: ["$totalCorrect", "$totalQuestions"] },
+                    100,
+                  ],
+                },
+                0,
+              ],
+            },
+            avgDuration: {
+              $cond: [
+                { $gt: ["$quizCount", 0] },
+                { $divide: ["$totalDuration", "$quizCount"] },
+                0,
+              ],
+            },
+          },
+        },
+      ]),
+
+      // ── 3F. PRIOR 30 DAYS (30-60 days ago) — for most improved ─
+      Quiz.aggregate([
+        {
+          $match: {
+            school: schoolObjectId,
+            date: { $gte: last60Days, $lt: last30Days },
+          },
+        },
+        {
+          $group: {
+            _id: "$user",
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+          },
+        },
+        {
+          $addFields: {
+            priorAccuracy: {
+              $cond: [
+                { $gt: ["$totalQuestions", 0] },
+                {
+                  $multiply: [
+                    { $divide: ["$totalCorrect", "$totalQuestions"] },
+                    100,
+                  ],
+                },
+                0,
+              ],
+            },
+          },
+        },
+      ]),
+
+      // ── 3G. WEEKLY TREND (last 12 weeks) ────────────────────────
+      Quiz.aggregate([
+        {
+          $match: {
+            school: schoolObjectId,
+            date: { $gte: last12Weeks },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              year: { $isoWeekYear: "$date" },
+              week: { $isoWeek: "$date" },
+            },
+            avgAccuracy: { $avg: "$summary.accuracyRate" },
+            totalQuizzes: { $sum: 1 },
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            uniqueStudents: { $addToSet: "$user" },
+          },
+        },
+        {
+          $addFields: {
+            activeStudents: { $size: "$uniqueStudents" },
+            weekLabel: {
+              $concat: [
+                { $toString: "$_id.year" },
+                "-W",
+                { $toString: "$_id.week" },
+              ],
+            },
+          },
+        },
+        {
+          $project: {
+            weekLabel: 1,
+            avgAccuracy: { $round: ["$avgAccuracy", 2] },
+            totalQuizzes: 1,
+            totalCorrect: 1,
+            totalQuestions: 1,
+            activeStudents: 1,
+          },
+        },
+        { $sort: { "_id.year": 1, "_id.week": 1 } },
+      ]),
+
+      // ── 3H. MONTHLY TREND (last 6 months) ───────────────────────
+      Quiz.aggregate([
+        {
+          $match: {
+            school: schoolObjectId,
+            date: { $gte: last6Months },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: "$date" },
+              month: { $month: "$date" },
+            },
+            avgAccuracy: { $avg: "$summary.accuracyRate" },
+            totalQuizzes: { $sum: 1 },
+            totalCorrect: { $sum: "$summary.correctAnswers" },
+            totalQuestions: { $sum: "$summary.totalQuestions" },
+            uniqueStudents: { $addToSet: "$user" },
+          },
+        },
+        {
+          $addFields: {
+            activeStudents: { $size: "$uniqueStudents" },
+            monthLabel: {
+              $concat: [
+                { $toString: "$_id.year" },
+                "-",
+                {
+                  $cond: [
+                    { $lt: ["$_id.month", 10] },
+                    { $concat: ["0", { $toString: "$_id.month" }] },
+                    { $toString: "$_id.month" },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          $project: {
+            monthLabel: 1,
+            avgAccuracy: { $round: ["$avgAccuracy", 2] },
+            totalQuizzes: 1,
+            totalCorrect: 1,
+            totalQuestions: 1,
+            activeStudents: 1,
+          },
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } },
+      ]),
+
+      // ── 3I. ENGAGEMENT STATS ─────────────────────────────────────
+      Quiz.aggregate([
+        { $match: { school: schoolObjectId, date: { $gte: last30Days } } },
+        {
+          $group: {
+            _id: null,
+            activeStudents: { $addToSet: "$user" },
+            totalQuizzes: { $sum: 1 },
+            avgQuizzesPerDay: { $sum: 1 }, // will divide below
+            avgDuration: { $avg: "$summary.duration" },
+          },
+        },
+        {
+          $addFields: {
+            activeStudentCount: { $size: "$activeStudents" },
+            avgQuizzesPerDay: { $divide: ["$totalQuizzes", 30] },
+          },
+        },
+        {
+          $project: {
+            activeStudentCount: 1,
+            totalQuizzes: 1,
+            avgQuizzesPerDay: { $round: ["$avgQuizzesPerDay", 1] },
+            avgDuration: { $round: ["$avgDuration", 0] },
+          },
+        },
+      ]),
+    ]);
+
+    // ============================================================
+    // 4. CLASS-LEVEL SUBJECT BREAKDOWN
+    // Which subject is weakest in each class?
+    // Done as a separate query to keep 3C lean
+    // ============================================================
+    const classSubjectAgg = await Quiz.aggregate([
+      { $match: { school: schoolObjectId, classLevel: { $ne: null } } },
+      { $unwind: "$summary.subjectBreakdown" },
+      {
+        $group: {
+          _id: {
+            classLevel: "$classLevel",
+            subject: "$summary.subjectBreakdown.subject",
+          },
+          totalQuestions: { $sum: "$summary.subjectBreakdown.totalQuestions" },
+          totalCorrect: { $sum: "$summary.subjectBreakdown.correctAnswers" },
+        },
+      },
+      {
+        $addFields: {
+          accuracyRate: {
+            $cond: [
+              { $gt: ["$totalQuestions", 0] },
+              {
+                $multiply: [
+                  { $divide: ["$totalCorrect", "$totalQuestions"] },
+                  100,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "subjects",
+          localField: "_id.subject",
+          foreignField: "_id",
+          as: "subjectInfo",
+        },
+      },
+      { $unwind: { path: "$subjectInfo", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          classLevel: "$_id.classLevel",
+          subjectId: "$_id.subject",
+          subjectName: { $ifNull: ["$subjectInfo.name", "Unknown"] },
+          totalQuestions: 1,
+          totalCorrect: 1,
+          accuracyRate: { $round: ["$accuracyRate", 2] },
+        },
+      },
+      { $sort: { classLevel: 1, accuracyRate: 1 } },
+    ]);
+
+    // Group class-subject data by classLevel for easy lookup
+    const classSubjectMap = {};
+    classSubjectAgg.forEach((entry) => {
+      if (!classSubjectMap[entry.classLevel]) {
+        classSubjectMap[entry.classLevel] = [];
+      }
+      classSubjectMap[entry.classLevel].push({
+        subjectId: entry.subjectId,
+        subjectName: entry.subjectName,
+        totalQuestions: entry.totalQuestions,
+        totalCorrect: entry.totalCorrect,
+        accuracyRate: entry.accuracyRate,
+      });
+    });
+
+    // ============================================================
+    // 5. MOST IMPROVED STUDENTS
+    // Compare recentAccuracy (last 30d) vs priorAccuracy (30-60d)
+    // Require at least 3 quizzes in recent period to be eligible
+    // ============================================================
+    const priorMap = {};
+    priorPerformanceAgg.forEach((p) => {
+      priorMap[p._id.toString()] = p.priorAccuracy;
+    });
+
+    const improvedCandidates = recentPerformanceAgg
+      .filter((r) => r.quizCount >= 3) // must be active enough
+      .map((r) => {
+        const prior = priorMap[r._id.toString()] ?? null;
+        const improvement = prior !== null ? r.recentAccuracy - prior : null;
+        return {
+          userId: r._id,
+          classLevel: r.classLevel,
+          recentAccuracy: parseFloat(r.recentAccuracy.toFixed(2)),
+          priorAccuracy: prior !== null ? parseFloat(prior.toFixed(2)) : null,
+          improvement:
+            improvement !== null ? parseFloat(improvement.toFixed(2)) : null,
+          quizCount: r.quizCount,
+        };
+      })
+      .filter((r) => r.improvement !== null) // must have prior data to compare
+      .sort((a, b) => b.improvement - a.improvement)
+      .slice(0, 10);
+
+    // Hydrate names for most improved
+    const improvedUserIds = improvedCandidates.map((s) => s.userId);
+    const improvedUsers = await User.find({ _id: { $in: improvedUserIds } })
+      .select("firstName lastName username avatar")
+      .lean();
+    const improvedUserMap = {};
+    improvedUsers.forEach((u) => {
+      improvedUserMap[u._id.toString()] = u;
+    });
+
+    const mostImproved = improvedCandidates.map((s) => {
+      const u = improvedUserMap[s.userId.toString()];
+      return {
+        ...s,
+        firstName: u?.firstName,
+        lastName: u?.lastName,
+        username: u?.username,
+        avatar: u?.avatar,
+      };
+    });
+
+    // ============================================================
+    // 6. WAEC/JAMB READINESS INDEX
+    // Per class, per student — scored 0–100
+    //
+    // Formula weights:
+    //   Accuracy     40%  — are they getting questions right?
+    //   Consistency  30%  — are they showing up regularly? (quizCount / 30 days capped at 1)
+    //   Speed        15%  — avg duration vs 60s target per question (lower = better)
+    //   Volume       15%  — total questions answered vs 90-question target
+    // ============================================================
+    const TARGET_QUIZZES_PER_MONTH = 20; // consistency benchmark
+    const TARGET_MS_PER_QUESTION = 60000; // 60s per question = good speed
+    const TARGET_QUESTIONS_VOLUME = 90; // questions in 30d = thorough coverage
+
+    const readinessPerStudent = recentPerformanceAgg.map((r) => {
+      // Accuracy score (0–100)
+      const accuracyScore = Math.min(r.recentAccuracy, 100);
+
+      // Consistency score — how many quizzes in last 30d vs target
+      const consistencyScore = Math.min(
+        (r.quizCount / TARGET_QUIZZES_PER_MONTH) * 100,
+        100,
+      );
+
+      // Speed score — avg ms per question; lower is better
+      const avgMsPerQuestion =
+        r.totalQuestions > 0
+          ? r.avgDuration / r.totalQuestions
+          : TARGET_MS_PER_QUESTION;
+      const speedScore = Math.min(
+        (TARGET_MS_PER_QUESTION / Math.max(avgMsPerQuestion, 1)) * 100,
+        100,
+      );
+
+      // Volume score — total questions answered vs target
+      const volumeScore = Math.min(
+        (r.totalQuestions / TARGET_QUESTIONS_VOLUME) * 100,
+        100,
+      );
+
+      // Weighted composite
+      const readinessScore = parseFloat(
+        (
+          accuracyScore * 0.4 +
+          consistencyScore * 0.3 +
+          speedScore * 0.15 +
+          volumeScore * 0.15
+        ).toFixed(2),
+      );
+
+      return {
+        userId: r._id,
+        classLevel: r.classLevel,
+        readinessScore,
+        breakdown: {
+          accuracyScore: parseFloat(accuracyScore.toFixed(2)),
+          consistencyScore: parseFloat(consistencyScore.toFixed(2)),
+          speedScore: parseFloat(speedScore.toFixed(2)),
+          volumeScore: parseFloat(volumeScore.toFixed(2)),
+        },
+        quizCount: r.quizCount,
+        recentAccuracy: parseFloat(r.recentAccuracy.toFixed(2)),
+      };
+    });
+
+    // Aggregate readiness by class
+    const readinessByClass = {};
+    readinessPerStudent.forEach((r) => {
+      if (!r.classLevel) return;
+      if (!readinessByClass[r.classLevel]) {
+        readinessByClass[r.classLevel] = {
+          scores: [],
+          classLevel: r.classLevel,
+        };
+      }
+      readinessByClass[r.classLevel].scores.push(r.readinessScore);
+    });
+
+    const readinessIndex = Object.values(readinessByClass)
+      .map((cls) => {
+        const avg = cls.scores.reduce((a, b) => a + b, 0) / cls.scores.length;
+        const min = Math.min(...cls.scores);
+        const max = Math.max(...cls.scores);
+
+        let readinessLabel;
+        if (avg >= 75) readinessLabel = "Exam Ready";
+        else if (avg >= 55) readinessLabel = "On Track";
+        else if (avg >= 35) readinessLabel = "Needs Attention";
+        else readinessLabel = "At Risk";
+
+        return {
+          classLevel: cls.classLevel,
+          avgReadiness: parseFloat(avg.toFixed(2)),
+          minReadiness: parseFloat(min.toFixed(2)),
+          maxReadiness: parseFloat(max.toFixed(2)),
+          studentCount: cls.scores.length,
+          readinessLabel,
+        };
+      })
+      .sort((a, b) => b.avgReadiness - a.avgReadiness);
+
+    // ============================================================
+    // 7. ASSEMBLE FINAL RESPONSE
+    // ============================================================
+
+    // Overview
+    const ov = overviewAgg[0] || {};
+    const overallAccuracy =
+      ov.totalQuestions > 0
+        ? parseFloat(((ov.totalCorrect / ov.totalQuestions) * 100).toFixed(2))
+        : 0;
+
+    // Class comparison — attach subject breakdown per class
+    const classComparison = classAgg.map((cls) => ({
+      ...cls,
+      subjectBreakdown: classSubjectMap[cls.classLevel] || [],
+      weakestSubject: (classSubjectMap[cls.classLevel] || [])[0] || null, // sorted asc
+      strongestSubject:
+        (classSubjectMap[cls.classLevel] || []).slice(-1)[0] || null,
+    }));
+
+    // Subject breakdown — tag strength/weakness
+    const subjectBreakdown = subjectAgg.map((s, i, arr) => ({
+      ...s,
+      rank: i + 1,
+      tag:
+        i === 0
+          ? "strongest"
+          : i === arr.length - 1
+            ? "weakest"
+            : s.accuracyRate >= 70
+              ? "strong"
+              : s.accuracyRate >= 50
+                ? "average"
+                : "weak",
+    }));
+
+    // Active students in last 30d (from engagement agg)
+    const eng = engagementAgg[0] || {};
+
+    return res.json({
+      success: true,
+      generatedAt: now,
+      data: {
+        // ── School metadata ──────────────────────────────────────
+        school: formatSchoolMeta(school, totalStudents, totalTeachers),
+
+        // ── Overall performance ──────────────────────────────────
+        overview: {
+          overallAccuracy, // e.g. 67.4 (%)
+          totalQuizzesTaken: ov.totalQuizzes || 0,
+          totalQuestionsAnswered: ov.totalQuestions || 0,
+          totalCorrectAnswers: ov.totalCorrect || 0,
+          avgSessionDurationMs: Math.round(ov.avgDuration || 0),
+          totalStudents,
+          totalTeachers,
+          activeStudentsLast30d: eng.activeStudentCount || 0,
+          participationRate:
+            totalStudents > 0
+              ? parseFloat(
+                  (
+                    ((eng.activeStudentCount || 0) / totalStudents) *
+                    100
+                  ).toFixed(2),
+                )
+              : 0,
+        },
+
+        // ── Subject strength & weakness ──────────────────────────
+        // Sorted strongest → weakest; includes rank & tag
+        subjectBreakdown,
+
+        // ── Class-by-class comparison ────────────────────────────
+        // Each class has overall stats + per-subject breakdown
+        classComparison,
+
+        // ── Top 10 students (all-time accuracy) ─────────────────
+        topStudents: topStudentsAgg,
+
+        // ── Most improved (last 30d vs prior 30d) ───────────────
+        mostImproved,
+
+        // ── Score trends ─────────────────────────────────────────
+        trends: {
+          weekly: weeklyTrendAgg, // last 12 weeks
+          monthly: monthlyTrendAgg, // last 6 months
+        },
+
+        // ── WAEC/JAMB Readiness Index by class ───────────────────
+        readinessIndex,
+
+        // ── Engagement ───────────────────────────────────────────
+        engagement: {
+          activeStudentsLast30d: eng.activeStudentCount || 0,
+          totalQuizzesLast30d: eng.totalQuizzes || 0,
+          avgQuizzesPerDay: eng.avgQuizzesPerDay || 0,
+          avgSessionDurationMs: eng.avgDuration || 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Dashboard error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load dashboard",
+      error: error.message,
+    });
+  }
+});
+
+// ============================================================
+// HELPER: Format school metadata for response
+// ============================================================
+function formatSchoolMeta(school, totalStudents, totalTeachers) {
+  return {
+    id: school._id,
+    name: school.name,
+    type: school.type,
+    state: school.state,
+    lga: school.lga,
+    totalStudents,
+    totalTeachers,
+    subscription: school.subscription,
+  };
+}
+
 module.exports = router;

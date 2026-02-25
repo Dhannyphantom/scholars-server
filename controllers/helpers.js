@@ -20,7 +20,7 @@ const classsSchoolEnums = [
   "sss 3",
 ];
 const userSelector =
-  "avatar firstName lastName username class gender preffix state lga points rank verified accountType";
+  "avatar firstName lastName totalPoints username class gender preffix state lga points rank verified accountType";
 const fullUserSelector = "-password -__v";
 
 const A_DAY = 1000 * 60 * 60 * 24; // A DAY
