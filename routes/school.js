@@ -19,6 +19,7 @@ const {
   syncSchoolClassesWithStudents,
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
+const { Quiz } = require("../models/Quiz");
 const nanoid = uuid.v4;
 
 const selectQuiz =
