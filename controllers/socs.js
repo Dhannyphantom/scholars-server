@@ -610,10 +610,92 @@ async function persistQuizResults(session, leaderboard) {
     const winner = leaderboard[0];
     const REPEATED_QUESTION_POINTS = 0.2;
 
+    // ========================================
+    // DASHBOARD: RESOLVE SCHOOL FOR EACH PLAYER
+    // Done once per unique player before the loop to avoid
+    // redundant DB calls if players share the same school.
+    // Maps userId string → schoolId (or null)
+    // ========================================
+    const playerSchoolMap = {};
+    await Promise.all(
+      leaderboard.map(async (player) => {
+        const playerIdStr = player._id.toString();
+        const studentSchool = await School.findOne(
+          { "students.user": player._id, "students.verified": true },
+          { _id: 1 },
+        ).lean();
+        playerSchoolMap[playerIdStr] = studentSchool?._id || null;
+      }),
+    );
+
     // Create Quiz documents
     const quizDocs = [];
     for (const player of leaderboard) {
       try {
+        // ========================================
+        // DASHBOARD: BUILD PER-SUBJECT BREAKDOWN FOR THIS PLAYER
+        // Each player may have answered differently in multiplayer,
+        // so breakdown is computed per player from their answeredQuestions.
+        // ========================================
+        const subjectStatsMap = {};
+        const playerAnsweredForBreakdown = player.answeredQuestions || [];
+
+        playerAnsweredForBreakdown.forEach((answered) => {
+          const subjKey = answered.subject?.toString();
+          if (!subjKey) return;
+
+          if (!subjectStatsMap[subjKey]) {
+            subjectStatsMap[subjKey] = {
+              subject: answered.subject,
+              totalQuestions: 0,
+              correctAnswers: 0,
+            };
+          }
+          subjectStatsMap[subjKey].totalQuestions++;
+          if (answered.isCorrect) {
+            subjectStatsMap[subjKey].correctAnswers++;
+          }
+        });
+
+        // Fallback: if answeredQuestions doesn't carry subject,
+        // derive breakdown from session.quizData subjects
+        if (Object.keys(subjectStatsMap).length === 0 && session.subjects) {
+          session.subjects.forEach((s) => {
+            subjectStatsMap[s._id.toString()] = {
+              subject: s._id,
+              totalQuestions: 0,
+              correctAnswers: 0,
+            };
+          });
+        }
+
+        const subjectBreakdown = Object.values(subjectStatsMap).map((s) => ({
+          subject: s.subject,
+          totalQuestions: s.totalQuestions,
+          correctAnswers: s.correctAnswers,
+          accuracyRate:
+            s.totalQuestions > 0
+              ? parseFloat(
+                  ((s.correctAnswers / s.totalQuestions) * 100).toFixed(2),
+                )
+              : 0,
+        }));
+
+        // Player-specific correct answer count for accuracyRate
+        const playerCorrect = (player.answeredQuestions || []).filter(
+          (q) => q.isCorrect,
+        ).length;
+        const playerTotal = player.answeredQuestions?.length || totalQuestions;
+        const playerAccuracyRate =
+          playerTotal > 0
+            ? parseFloat(((playerCorrect / playerTotal) * 100).toFixed(2))
+            : 0;
+
+        // Fetch player's class level for snapshot
+        const playerUser = await User.findById(player._id)
+          .select("class")
+          .lean();
+
         const quizDoc = await Quiz.create({
           mode: session.mode || "friends",
           type: "premium",
@@ -626,6 +708,18 @@ async function persistQuizResults(session, leaderboard) {
             user: p._id,
             point: p.points || 0,
           })),
+
+          // --- DASHBOARD ADDITIONS ---
+          school: playerSchoolMap[player._id.toString()] || null,
+          classLevel: playerUser?.class?.level || null,
+          summary: {
+            totalQuestions: playerTotal,
+            correctAnswers: playerCorrect,
+            accuracyRate: playerAccuracyRate,
+            pointsEarned: player.points || 0,
+            duration: quizDuration,
+            subjectBreakdown,
+          },
         });
 
         quizDocs.push({ playerId: player._id, quizId: quizDoc._id });

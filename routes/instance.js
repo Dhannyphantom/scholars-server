@@ -1222,10 +1222,11 @@ router.post("/premium_quiz", auth, async (req, res) => {
 router.post("/submit_premium", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  const { questions, type, sessionId } = data;
+  const { questions, type, sessionId, duration } = data; // added duration
 
   const userInfo = await User.findById(userId).select(
-    "accountType quota quotas points totalPoints qBank quizStats quizHistory",
+    "accountType quota quotas points totalPoints qBank quizStats quizHistory class",
+    // added "class" to capture classLevel snapshot
   );
 
   if (!userInfo) {
@@ -1264,6 +1265,11 @@ router.post("/submit_premium", auth, async (req, res) => {
     const subjectIds = [];
     const topicIds = [];
 
+    // --- DASHBOARD ADDITION ---
+    // Build per-subject stats map as we loop questions once.
+    // Keyed by subjectId string → { subject, totalQuestions, correctAnswers }
+    const subjectStatsMap = {};
+
     questions.forEach((quest) => {
       studentSubjects.push({
         subject: quest.subject._id,
@@ -1272,12 +1278,30 @@ router.post("/submit_premium", auth, async (req, res) => {
 
       subjectIds.push(quest.subject._id);
 
+      // --- DASHBOARD ADDITION ---
+      // Initialise subject entry in map if not yet seen
+      const subjKey = quest.subject._id.toString();
+      if (!subjectStatsMap[subjKey]) {
+        subjectStatsMap[subjKey] = {
+          subject: quest.subject._id,
+          totalQuestions: 0,
+          correctAnswers: 0,
+        };
+      }
+
       quest.questions.forEach((question) => {
         totalQuestions++;
         questionIds.push(question._id);
 
         const questionId = question._id.toString();
         const isNewQuestion = !qBankSet.has(questionId);
+
+        // --- DASHBOARD ADDITION ---
+        // Accumulate per-subject correct answer count
+        subjectStatsMap[subjKey].totalQuestions++;
+        if (question.answered?.correct) {
+          subjectStatsMap[subjKey].correctAnswers++;
+        }
 
         // Calculate points based on THIS user's history
         if (question.answered?.correct) {
@@ -1426,6 +1450,35 @@ router.post("/submit_premium", auth, async (req, res) => {
       (userInfo.quizStats.totalQuestionsAnswered || 0) + totalQuestions;
 
     // ========================================
+    // DASHBOARD: BUILD SUMMARY & SUBJECT BREAKDOWN
+    // ========================================
+    const subjectBreakdown = Object.values(subjectStatsMap).map((s) => ({
+      subject: s.subject,
+      totalQuestions: s.totalQuestions,
+      correctAnswers: s.correctAnswers,
+      accuracyRate:
+        s.totalQuestions > 0
+          ? parseFloat(((s.correctAnswers / s.totalQuestions) * 100).toFixed(2))
+          : 0,
+    }));
+
+    const overallAccuracyRate =
+      totalQuestions > 0
+        ? parseFloat(((correctAnswers / totalQuestions) * 100).toFixed(2))
+        : 0;
+
+    // ========================================
+    // DASHBOARD: RESOLVE SCHOOL ID
+    // Find school where this student is a verified member.
+    // Stored as a snapshot so the Quiz is always linked to the right school
+    // even if the student later leaves or changes schools.
+    // ========================================
+    const studentSchool = await School.findOne(
+      { "students.user": userId, "students.verified": true },
+      { _id: 1 },
+    ).lean();
+
+    // ========================================
     // SAVE QUIZ DOCUMENT
     // ========================================
     const newQuiz = new Quiz({
@@ -1436,6 +1489,18 @@ router.post("/submit_premium", auth, async (req, res) => {
       subjects: subjectIds,
       topics: topicIds,
       sessionId: sessionId,
+
+      // --- DASHBOARD ADDITIONS ---
+      school: studentSchool?._id || null,
+      classLevel: userInfo.class?.level || null,
+      summary: {
+        totalQuestions,
+        correctAnswers,
+        accuracyRate: overallAccuracyRate,
+        pointsEarned: totalPoints,
+        duration: duration || 0, // milliseconds, sent from client
+        subjectBreakdown,
+      },
     });
 
     await newQuiz.save();
@@ -1474,7 +1539,7 @@ router.post("/submit_premium", auth, async (req, res) => {
         repeatedQuestions: answeredQuestionIds.length,
         correctAnswers,
         totalQuestions,
-        accuracy: ((correctAnswers / totalQuestions) * 100).toFixed(2),
+        accuracy: overallAccuracyRate,
         dailyQuestionsRemaining:
           100 - (userInfo.quota?.daily_questions_count || 0),
         dailyQuestionsAnswered: userInfo.quota?.daily_questions_count || 0,
