@@ -8,6 +8,19 @@ const answerSchema = new schema({
     type: String,
     required: false,
   },
+
+  // NEW: LaTeX version of the option
+  latex: {
+    type: String,
+    required: false,
+  },
+
+  // NEW: Flag to know if this option should be rendered as LaTeX
+  isLatex: {
+    type: Boolean,
+    default: false,
+  },
+
   correct: {
     type: Boolean,
     default: false,
@@ -22,7 +35,6 @@ const mediaSchema = {
   },
   type: {
     type: String,
-    // enum: ["image", "video", "text"],
     default: "image",
     maxlength: 255,
     required: false,
@@ -48,48 +60,73 @@ const QuestionSchema = new schema({
     required: true,
     trim: true,
   },
+
+  // NEW: LaTeX version of question
+  questionLatex: {
+    type: String,
+    trim: true,
+  },
+
+  // NEW: Flag to determine rendering mode
+  isLatex: {
+    type: Boolean,
+    default: false,
+  },
+
   answers: [answerSchema],
-  // answer: {
-  //   type: String,
-  //   required: true,
-  // },
+
   explanation: {
     type: String,
     trim: true,
   },
+
+  // NEW: LaTeX explanation support
+  explanationLatex: {
+    type: String,
+    trim: true,
+  },
+
   point: {
     type: Number,
-    default: 40,
+    default: 5,
   },
+
   topic: {
     type: schema.Types.ObjectId,
     ref: "Topic",
     required: true,
   },
+
   subject: {
     type: schema.Types.ObjectId,
     ref: "Subject",
     required: true,
   },
+
   categories: {
     type: [schema.Types.ObjectId],
     ref: "Category",
     required: true,
   },
+
   isTheory: {
     type: Boolean,
     default: false,
   },
+
   image: mediaSchema,
+
   timer: {
     type: Number,
     default: 40,
   },
+
   user: {
     type: schema.Types.ObjectId,
     ref: "User",
     required: true,
   },
+
   edits: {
     type: [schema.Types.ObjectId],
     ref: "User",

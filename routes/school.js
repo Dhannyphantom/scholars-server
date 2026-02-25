@@ -1447,12 +1447,12 @@ router.get("/assignments", auth, async (req, res) => {
     ])
     .select("assignments subscription teachers assignments classes");
 
-  await reconcileSchool(school);
-
   if (!school)
     return res
       .status(422)
       .send({ status: "failed", message: "School not found" });
+
+  await reconcileSchool(school);
 
   let data;
   if (userInfo.accountType == "teacher") {
@@ -1621,6 +1621,10 @@ router.get("/assignment", auth, async (req, res) => {
     {
       path: "assignments.teacher",
       select: "username avatar firstName lastName",
+    },
+    {
+      path: "assignments.subject",
+      select: "name",
     },
     {
       path: "assignments.submissions.student",
@@ -2173,6 +2177,7 @@ router.delete("/assignment", auth, async (req, res) => {
 router.put("/assignment", auth, async (req, res) => {
   try {
     const { data, schoolId, assignmentId } = req.body;
+
     const userId = req.user?.userId;
 
     // Validate user authentication
@@ -2233,9 +2238,11 @@ router.put("/assignment", auth, async (req, res) => {
     }
 
     let updater = {};
-    console.log(data?.classes);
+    // console.log(data?.classes);
+    const editKeys = ["submissions", "history", "teacher"];
 
     for (const key in data) {
+      if (editKeys.includes(key)) continue;
       if (key === "classes") {
         updater[key] = data[key]?.map((classItm) =>
           classItm?.name?.toLowerCase(),
@@ -2268,10 +2275,10 @@ router.put("/assignment", auth, async (req, res) => {
       data: updatedAssignment,
     });
   } catch (error) {
-    console.error("Error updating assignment:", error);
+    // console.error("Error updating assignment:", error);
     res.status(500).json({
       success: false,
-      message: "Server error while updating assignment",
+      message: "Error updating assignment",
       error: error.message,
     });
   }
@@ -2279,7 +2286,7 @@ router.put("/assignment", auth, async (req, res) => {
 
 router.patch("/assignment", auth, async (req, res) => {
   try {
-    const { status, schoolId, assignmentId } = req.body;
+    const { status, date, schoolId, assignmentId } = req.body;
     const userId = req.user?.userId;
 
     // Validate user authentication
@@ -2348,10 +2355,19 @@ router.patch("/assignment", auth, async (req, res) => {
       });
     }
 
-    // Update the assignment status
+    const updateFields = {
+      "assignments.$.status": status,
+    };
+
+    // Only add assignmentDate if it exists
+    if (date) {
+      updateFields["assignments.$.expiry"] = new Date(date);
+      updateFields["assignments.$.date"] = new Date();
+    }
+
     const updatedSchool = await School.findOneAndUpdate(
       { _id: schoolId, "assignments._id": assignmentId },
-      { $set: { "assignments.$.status": status } },
+      { $set: updateFields },
       { new: true },
     );
 
