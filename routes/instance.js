@@ -1912,6 +1912,163 @@ router.get("/ai_ques", async (req, res) => {
   res.send({ questions });
 });
 
+function safeJsonParse(text) {
+  try {
+    const cleaned = text
+      .trim()
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+function buildLatexPrompt(question) {
+  return `
+You are a mathematics LaTeX formatting expert.
+
+Convert the following exam question and options into properly formatted LaTeX.
+
+Rules:
+- Preserve normal English text.
+- Wrap mathematical expressions inside $...$ for inline math.
+- Use proper LaTeX syntax (\\sqrt{}, ^, fractions, etc).
+- Return ONLY valid JSON.
+- Do NOT include markdown.
+- Do NOT include explanations.
+
+Return format strictly:
+
+{
+  "questionLatex": "string",
+  "containsMath": true or false,
+  "answers": [
+    { "latex": "string", "containsMath": true or false }
+  ]
+}
+
+Question:
+${question.question}
+
+Options:
+${question.answers.map((a) => a.name).join("\n")}
+`;
+}
+
+router.post("/generate-latex", async (req, res) => {
+  const limit = Math.min(Number(req.body.limit) || 20, 100);
+
+  try {
+    const questions = await Question.find({
+      subject: "678d60356345f9e35e705ed4",
+      $or: [{ questionLatex: { $exists: false } }, { questionLatex: "" }],
+    }).limit(limit);
+
+    if (!questions.length) {
+      return res.json({
+        success: true,
+        updated: 0,
+        message: "No questions pending LaTeX generation",
+      });
+    }
+
+    let updated = 0;
+    const errors = [];
+
+    for (const question of questions) {
+      try {
+        const prompt = buildLatexPrompt(question);
+
+        let aiResponse;
+
+        // 1️⃣ Try Groq First
+        try {
+          const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.2,
+          });
+
+          aiResponse = completion.choices[0]?.message?.content;
+        } catch (err) {
+          // Detect Groq rate limit
+          if (
+            err.message?.toLowerCase().includes("rate") ||
+            err.message?.toLowerCase().includes("quota") ||
+            err.status === 429
+          ) {
+            console.log("Groq rate limited. Switching to Gemini...");
+          } else {
+            throw err;
+          }
+        }
+
+        // 2️⃣ Fallback to Gemini if needed
+        if (!aiResponse) {
+          const result = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+          });
+
+          aiResponse = result.text;
+        }
+
+        if (!aiResponse) {
+          errors.push({
+            questionId: question._id,
+            error: "Empty AI response",
+          });
+          continue;
+        }
+
+        const parsed = safeJsonParse(aiResponse);
+
+        if (!parsed || !parsed.questionLatex) {
+          errors.push({
+            questionId: question._id,
+            error: "Invalid JSON structure from AI",
+          });
+          continue;
+        }
+
+        // ✅ Save Question LaTeX
+        question.questionLatex = parsed.questionLatex;
+        question.isLatex = parsed.containsMath;
+
+        // ✅ Save Answers LaTeX
+        question.answers = question.answers.map((ans, index) => ({
+          ...ans.toObject(),
+          latex: parsed.answers[index]?.latex || ans.name,
+          isLatex: parsed.answers[index]?.containsMath || false,
+        }));
+
+        await question.save();
+        updated++;
+      } catch (err) {
+        errors.push({
+          questionId: question._id,
+          error: err.message,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: questions.length,
+      updated,
+      errors,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 // router.get("/mod_data", async (req, res) => {
 //   await Question.updateMany(
 //     { topic: "69656935513e4e01dc60d94a", subject: "678d60356345f9e35e705ed8" },
