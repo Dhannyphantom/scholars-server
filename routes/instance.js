@@ -1930,21 +1930,23 @@ function buildLatexPrompt(question) {
   return `
 You are a mathematics LaTeX formatting expert.
 
-Convert the following exam question and options into properly formatted LaTeX.
+Convert the following exam question, options, and explanation into properly formatted LaTeX.
 
 Rules:
 - Preserve normal English text.
 - Wrap mathematical expressions inside $...$ for inline math.
-- Use proper LaTeX syntax (\\sqrt{}, ^, fractions, etc).
+- Use proper LaTeX syntax (\\sqrt{}, ^, \\frac{}, etc).
 - Return ONLY valid JSON.
 - Do NOT include markdown.
 - Do NOT include explanations.
+- Do NOT include extra commentary.
 
 Return format strictly:
 
 {
   "questionLatex": "string",
   "containsMath": true or false,
+  "explanationLatex": "string",
   "answers": [
     { "latex": "string", "containsMath": true or false }
   ]
@@ -1955,16 +1957,18 @@ ${question.question}
 
 Options:
 ${question.answers.map((a) => a.name).join("\n")}
+
+Explanation:
+${question.explanation || ""}
 `;
 }
-
 router.post("/generate-latex", async (req, res) => {
   const limit = Math.min(Number(req.body.limit) || 20, 100);
 
   try {
     const questions = await Question.find({
       subject: "678d60356345f9e35e705ed4",
-      $or: [{ questionLatex: { $exists: false } }, { questionLatex: "" }],
+      // $or: [{ questionLatex: { $exists: false } }, { questionLatex: "" }],
     }).limit(limit);
 
     if (!questions.length) {
@@ -2038,6 +2042,11 @@ router.post("/generate-latex", async (req, res) => {
         question.questionLatex = parsed.questionLatex;
         question.isLatex = parsed.containsMath;
 
+        if (question.explanation) {
+          question.explanationLatex =
+            parsed.explanationLatex || question.explanation;
+        }
+
         // ✅ Save Answers LaTeX
         question.answers = question.answers.map((ans, index) => ({
           ...ans.toObject(),
@@ -2067,6 +2076,25 @@ router.post("/generate-latex", async (req, res) => {
       error: err.message,
     });
   }
+});
+
+router.post("/reset-latex", async (req, res) => {
+  const questions = await Question.find({
+    subject: "678d60356345f9e35e705ed4",
+    $or: [{ questionLatex: { $exists: true } }],
+  })
+    .limit(limit)
+    .select("_id");
+
+  const updated = await Question.updateMany(
+    { _id: { $in: questions.map((q) => q._id) } },
+    { $unset: { questionLatex: "", explanationLatex: "" } },
+  );
+
+  res.json({
+    success: true,
+    updated: updated.nModified,
+  });
 });
 
 // router.get("/mod_data", async (req, res) => {
