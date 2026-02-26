@@ -1058,6 +1058,8 @@ router.post("/premium_quiz", auth, async (req, res) => {
       categories: categoryId,
       subject: { $in: subjectIds },
       isTheory: false,
+      // test latex
+      explanationLatex: { $exists: true },
     };
 
     if (topicIds.length > 0) {
@@ -1121,12 +1123,17 @@ router.post("/premium_quiz", auth, async (req, res) => {
                 hasAnswered: "$$q.hasAnswered", // Only for host's reference
                 isTheory: "$$q.isTheory",
                 explanation: "$$q.explanation",
+                explanationLatex: "$$q.explanationLatex",
+                questionLatex: "$$q.questionLatex",
+                isLatex: "$$q.isLatex",
               },
             },
           },
         },
       },
     ]);
+
+    // console.log(JSON.stringify(questions, null, 2));
 
     // Validate results
     if (questions.length === 0) {
@@ -2000,8 +2007,10 @@ Convert the following exam question, options, and explanation into properly form
 
 Rules:
 - Preserve normal English text.
-- Wrap mathematical expressions inside $...$ for inline math.
-- Use proper LaTeX syntax (\\sqrt{}, ^, \\frac{}, etc).
+- Do NOT wrap math in $...$.
+- Output raw LaTeX expressions only.
+- Preserve proper spacing between words and math.
+- Maintain normal paragraph spacing for explanation (single line).- Use proper LaTeX syntax (\\sqrt{}, ^, \\frac{}, etc).
 - Return ONLY valid JSON.
 - Do NOT include markdown.
 - Do NOT include explanations.
@@ -2028,13 +2037,14 @@ Explanation:
 ${question.explanation || ""}
 `;
 }
+
 router.post("/generate-latex", async (req, res) => {
   const limit = Math.min(Number(req.body.limit) || 20, 100);
 
   try {
     const questions = await Question.find({
       subject: "678d60356345f9e35e705ed4",
-      // $or: [{ questionLatex: { $exists: false } }, { questionLatex: "" }],
+      $or: [{ questionLatex: { $exists: false } }, { questionLatex: "" }],
     }).limit(limit);
 
     if (!questions.length) {
@@ -2145,22 +2155,46 @@ router.post("/generate-latex", async (req, res) => {
 });
 
 router.post("/reset-latex", async (req, res) => {
-  const questions = await Question.find({
-    subject: "678d60356345f9e35e705ed4",
-    $or: [{ questionLatex: { $exists: true } }],
-  })
-    .limit(limit)
-    .select("_id");
+  try {
+    const limit = parseInt(req.body.limit) || 100;
 
-  const updated = await Question.updateMany(
-    { _id: { $in: questions.map((q) => q._id) } },
-    { $unset: { questionLatex: "", explanationLatex: "" } },
-  );
+    const questions = await Question.find({
+      subject: "678d60356345f9e35e705ed4",
+      $or: [
+        { questionLatex: { $exists: true } },
+        { explanationLatex: { $exists: true } },
+        { "answers.latex": { $exists: true } },
+      ],
+    })
+      .limit(limit)
+      .select("_id");
 
-  res.json({
-    success: true,
-    updated: updated.nModified,
-  });
+    const updated = await Question.updateMany(
+      { _id: { $in: questions.map((q) => q._id) } },
+      {
+        $unset: {
+          questionLatex: "",
+          explanationLatex: "",
+          "answers.$[].latex": "",
+        },
+        $set: {
+          isLatex: false,
+          "answers.$[].isLatex": false,
+        },
+      },
+    );
+
+    res.json({
+      success: true,
+      matched: updated.matchedCount,
+      modified: updated.modifiedCount,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
 });
 
 // router.get("/mod_data", async (req, res) => {
