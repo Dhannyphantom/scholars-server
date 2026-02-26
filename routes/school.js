@@ -121,7 +121,7 @@ router.post("/verify", auth, async (req, res) => {
       title = "Account Verified";
       body = message;
     } else if (instance === "student") {
-      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+      const message = `${capFirstLetter(
         userInfo.firstName,
       )} ${capFirstLetter(userInfo?.lastName)} has verified ${capFirstLetter(
         instanceInfo.firstName,
@@ -175,7 +175,7 @@ router.post("/verify", auth, async (req, res) => {
       title = "Account Rejected";
       body = message;
     } else if (instance == "student") {
-      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+      const message = `${capFirstLetter(
         userInfo.firstName,
       )} ${capFirstLetter(userInfo?.lastName)} has rejected ${capFirstLetter(
         instanceInfo.firstName,
@@ -229,7 +229,7 @@ router.post("/verify", auth, async (req, res) => {
       title = "Teacher Account Suspended";
       body = message;
     } else if (instance === "student") {
-      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+      const message = `${capFirstLetter(
         userInfo.firstName,
       )} ${capFirstLetter(userInfo?.lastName)} has un-verified ${capFirstLetter(
         instanceInfo.firstName,
@@ -350,7 +350,7 @@ router.post("/join", auth, async (req, res) => {
       (item) => item?.user?.toString() == userId,
     );
     if (checker < 0) {
-      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+      const message = `${capFirstLetter(
         userInfo.firstName,
       )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
         school.name
@@ -749,7 +749,7 @@ router.get("/quiz_session_students", auth, async (req, res) => {
   const students = sortedParticipants.map((p, index) => ({
     rank: index + 1,
     studentId: p.student?._id,
-    name: `${p.student?.preffix || ""} ${p.student?.firstName || ""} ${p.student?.lastName || ""}`.trim(),
+    name: `${p.student?.firstName || ""} ${p.student?.lastName || ""}`.trim(),
     score: p.score,
     date: p.date,
   }));
