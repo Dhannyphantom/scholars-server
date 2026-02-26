@@ -24,6 +24,7 @@ const { AppInfo } = require("../models/AppInfo");
 const WalletTransaction = require("../models/WalletTransaction");
 // const walletService = require("../controllers/walletService");
 const expoNotifications = require("../controllers/expoNotifications");
+const { School } = require("../models/School");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1609,7 +1610,11 @@ router.post(
 
       await user.save();
     } catch (errr) {
-      console.log({ errr });
+      return res.status(500).json({
+        status: "failed",
+        message: "Avatar update failed!",
+        error: errr,
+      });
     }
 
     res.json({ avatar: user.avatar });
@@ -1639,6 +1644,97 @@ router.post("/pro_reset", async (req, res) => {
   await userInfo.save();
 
   res.send({ status: "success", message: `Password reset successful` });
+});
+
+router.patch("/announcements/read", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    // const userRole = req.user.role; // assuming you store role
+    // const userClass = req.user.class?.toLowerCase(); // if student
+    const { schoolId } = req.body;
+
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId is required",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid schoolId",
+      });
+    }
+
+    const school = await School.findById(schoolId).select("announcements");
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School not found",
+      });
+    }
+
+    const userInfo = await User.findById(userId).select("accountType class");
+    const userRole = userInfo.accountType;
+    const userClass = userInfo.class?.level?.toLowerCase();
+
+    let modified = 0;
+
+    school.announcements.forEach((announcement) => {
+      const alreadyRead = announcement.reads.includes(userId);
+
+      if (alreadyRead) return;
+
+      let shouldMarkRead = false;
+
+      // SYSTEM or SCHOOL = for everybody
+      if (["system", "school"].includes(announcement.type)) {
+        shouldMarkRead = true;
+      }
+
+      // IMPORTANT or ALERT
+      if (!shouldMarkRead) {
+        if (announcement.visibility === "all") {
+          shouldMarkRead = true;
+        }
+
+        if (
+          announcement.visibility === "class" &&
+          userRole === "student" &&
+          announcement.classes?.includes(userClass)
+        ) {
+          shouldMarkRead = true;
+        }
+
+        if (announcement.visibility === "teacher" && userRole === "teacher") {
+          shouldMarkRead = true;
+        }
+      }
+
+      if (shouldMarkRead) {
+        announcement.reads.push(userId);
+        modified++;
+      }
+    });
+
+    if (modified > 0) {
+      await school.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Announcements marked as read",
+      updated: modified,
+    });
+  } catch (err) {
+    console.error("Mark announcements read error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
 });
 
 // Get all user transactions (money + points)
@@ -1853,7 +1949,7 @@ router.get("/user_stats", auth, async (req, res) => {
 
   try {
     const userInfo = await User.findById(userId)
-      .select("quota quotas points invites totalPoints qBank")
+      .select("quota quotas points school invites totalPoints qBank")
       .populate("quota.subjects.subject", "name")
       .populate("quota.daily_subjects.subject", "name")
       .populate("invites.host", "username avatar firstName lastName")
@@ -1930,12 +2026,81 @@ router.get("/user_stats", auth, async (req, res) => {
       }
     }
 
+    // ---------------- NOTIFICATIONS COUNT ----------------
+    let notifications_count = 0;
+
+    if (userInfo.school) {
+      const school = await School.findById(userInfo.school)
+        .select("announcements")
+        .lean();
+
+      if (school?.announcements?.length) {
+        const userIdString = userId.toString();
+        const userClassLevel = userInfo.class?.level?.toLowerCase();
+
+        const unreadAnnouncements = school.announcements.filter(
+          (announcement) => {
+            const hasRead =
+              announcement.reads?.some(
+                (readerId) => readerId.toString() === userIdString,
+              ) || false;
+
+            const hasHidden =
+              announcement.hides?.some(
+                (hiddenId) => hiddenId.toString() === userIdString,
+              ) || false;
+
+            // 🚨 RULE 1: type system or school → visible to everybody
+            if (
+              announcement.type === "system" ||
+              announcement.type === "school"
+            ) {
+              return !hasRead && !hasHidden;
+            }
+
+            // ---- VISIBILITY CHECK ----
+            let isVisible = false;
+
+            // Visible to everyone (via visibility field)
+            if (announcement.visibility === "all") {
+              isVisible = true;
+            }
+
+            // Visible to teachers only
+            else if (
+              announcement.visibility === "teacher" &&
+              userInfo.accountType === "teacher"
+            ) {
+              isVisible = true;
+            }
+
+            // Visible to specific classes
+            else if (
+              announcement.visibility === "class" &&
+              userInfo.accountType === "student" &&
+              userClassLevel &&
+              announcement.classes
+                ?.map((c) => c.toLowerCase())
+                .includes(userClassLevel)
+            ) {
+              isVisible = true;
+            }
+
+            return !hasRead && !hasHidden && isVisible;
+          },
+        );
+
+        notifications_count = unreadAnnouncements.length;
+      }
+    }
+
     res.send({
       status: "success",
       data: {
         daily: dailyStats,
         weekly: weeklyStats,
         overall: overallStats,
+        notificationsCount: notifications_count,
       },
       invite,
     });

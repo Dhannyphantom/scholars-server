@@ -291,49 +291,95 @@ module.exports.checkUserSub = async (userInfo) => {
 };
 
 const reconcileSchool = async (school) => {
-  // CHECK AND UPDATE ASSIGNMENT SUBMISSINOS;
   try {
     const schoolObj = school?.toObject();
 
     const expiryDate = new Date(school?.subscription?.expiry);
     const today = new Date();
 
+    // ---------------- SUBSCRIPTION STATUS ----------------
     if (expiryDate < today && school?.subscription?.isActive) {
-      // subscription expired
       school.subscription.isActive = false;
     }
 
     if (expiryDate >= today && !school?.subscription?.isActive) {
-      // subscription renewed
       school.subscription.isActive = true;
     }
 
-    // update all school teachers subscription
+    // ---------------- UPDATE TEACHERS ----------------
+    const teacherIds =
+      schoolObj?.teachers
+        ?.map((item) => item?.user?._id || item?.user)
+        ?.filter(Boolean) || [];
 
-    const teacherIds = schoolObj?.teachers?.map((item) =>
-      item?.user?._id?.toString(),
-    );
-    await User.updateMany(
-      { _id: { $in: teacherIds } },
-      {
-        $set: {
-          subscription: school.subscription,
+    // if (teacherIds.length) {
+    //   await User.updateMany(
+    //     { _id: { $in: teacherIds } },
+    //     {
+    //       $set: {
+    //         subscription: school.subscription,
+    //         school: school._id,
+    //       },
+    //     },
+    //   );
+    // }
+    if (teacherIds.length) {
+      await User.updateMany(
+        {
+          _id: { $in: teacherIds },
+          $or: [
+            { school: { $ne: school._id } },
+            { "subscription.current": { $ne: school.subscription.current } },
+            { "subscription.expiry": { $ne: school.subscription.expiry } },
+            { "subscription.isActive": { $ne: school.subscription.isActive } },
+          ],
         },
-      },
-    );
+        {
+          $set: {
+            school: school._id,
+            subscription: {
+              current: school.subscription.current,
+              expiry: school.subscription.expiry,
+              isActive: school.subscription.isActive,
+            },
+          },
+        },
+      );
+    }
 
+    // ---------------- UPDATE STUDENTS ----------------
+    const studentIds =
+      schoolObj?.students
+        ?.map((item) => item?.user?._id || item?.user)
+        ?.filter(Boolean) || [];
+
+    if (studentIds.length) {
+      await User.updateMany(
+        {
+          _id: { $in: studentIds },
+          school: { $ne: school._id }, // 🔥 only update if different
+        },
+        {
+          $set: {
+            school: school._id,
+          },
+        },
+      );
+    }
+
+    // ---------------- UPDATE ASSIGNMENT STATUS ----------------
     school.assignments = schoolObj.assignments.map((assignment) => {
       if (
-        today > new Date(assignment?.expiry) &&
+        assignment?.expiry &&
+        today > new Date(assignment.expiry) &&
         assignment?.status === "ongoing"
       ) {
         return {
           ...assignment,
           status: "finished",
         };
-      } else {
-        return assignment;
       }
+      return assignment;
     });
 
     await school.save();
