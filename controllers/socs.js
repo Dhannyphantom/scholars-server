@@ -4,6 +4,7 @@ const { Quiz } = require("../models/Quiz");
 const expoNotifications = require("./expoNotifications");
 const { AppInfo } = require("../models/AppInfo");
 const { logUserActivityDay, syncUserStreak } = require("./helpers");
+const { School } = require("../models/School");
 
 const sessions = {};
 const nanoid = uuid.v4;

@@ -22,6 +22,7 @@ const { GoogleGenAI } = require("@google/genai");
 const ai = new GoogleGenAI({ apiKey: process.env.GEN_KEY });
 
 const Groq = require("groq-sdk");
+const { School } = require("../models/School");
 
 const groq = new Groq({
   apiKey: process.env.GROQ_KEY,
