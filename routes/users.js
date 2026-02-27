@@ -59,6 +59,224 @@ function generateReferralToken(username) {
   return (base + suffix).slice(0, 8);
 }
 
+// const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const path = require("path");
+const ejs = require("ejs");
+
+// ── adjust these imports to match your project structure ──────────────────────
+const transporter = require("../controllers/mailer"); // your configured nodemailer transporter
+// ─────────────────────────────────────────────────────────────────────────────
+
+// In-memory OTP store — swap for Redis or a DB table in production
+// Shape: { [email]: { otp: string, expiresAt: number, attempts: number } }
+const otpStore = new Map();
+
+const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_ATTEMPTS = 5;
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+/** Generate a cryptographically secure 6-digit OTP */
+const generateOTP = () => String(crypto.randomInt(100000, 999999));
+
+/** Render the EJS email template to an HTML string */
+const renderEmailTemplate = (templateName, data) =>
+  ejs.renderFile(path.join(__dirname, "../views", `${templateName}.ejs`), data);
+
+// ── STEP 1 — Send OTP ─────────────────────────────────────────────────────────
+// POST /users/password/reset
+// Body: { step: "request", email: string }
+//
+// STEP 2 — Verify OTP ─────────────────────────────────────────────────────────
+// Body: { step: "verify", email: string, otp: string }
+//
+// STEP 3 — Set new password ───────────────────────────────────────────────────
+// Body: { step: "reset", email: string, otp: string, newPassword: string }
+
+router.post("/password/reset", async (req, res) => {
+  const { step } = req.body;
+
+  switch (step) {
+    // ── STEP 1: Request OTP ──────────────────────────────────────────────────
+    case "request": {
+      const { email } = req.body;
+
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res
+          .status(400)
+          .json({ error: "Please provide a valid email address." });
+      }
+
+      // Silently succeed for unknown emails (security: don't leak user existence)
+      const user = await User.findOne({ email: email.toLowerCase() }).catch(
+        () => null,
+      );
+      if (!user) {
+        return res.status(200).json({
+          message: "If that email is registered, a code is on its way.",
+        });
+      }
+
+      // Rate-limit: if an unexpired OTP already exists, don't spam
+      const existing = otpStore.get(email.toLowerCase());
+      if (existing && existing.expiresAt > Date.now()) {
+        const waitSeconds = Math.ceil((existing.expiresAt - Date.now()) / 1000);
+        // Allow resend only after 60 s
+        if (waitSeconds > OTP_EXPIRY_MS / 1000 - 60) {
+          return res.status(429).json({
+            error: `Please wait ${60 - (OTP_EXPIRY_MS / 1000 - waitSeconds)}s before requesting another code.`,
+          });
+        }
+      }
+
+      const otp = generateOTP();
+      otpStore.set(email.toLowerCase(), {
+        otp,
+        expiresAt: Date.now() + OTP_EXPIRY_MS,
+        attempts: 0,
+      });
+
+      try {
+        const html = await renderEmailTemplate("password_reset", {
+          userName: user.firstName || user.username || "Student",
+          otp,
+          expiryMinutes: 10,
+          appName: "Guru EduTech", // ← change to your app name
+          supportEmail: "support@guruedutech.com", // ← change
+          year: new Date().getFullYear(),
+        });
+
+        await transporter.sendMail({
+          from: `"Guru EduTech" <no-reply@guruedutech.com>`, // ← change
+          to: email,
+          subject: "Your password reset code",
+          html,
+        });
+
+        return res.status(200).json({
+          message: "Verification code sent. Check your inbox!",
+        });
+      } catch (err) {
+        console.error("Mailer error:", err);
+        otpStore.delete(email.toLowerCase());
+        return res
+          .status(500)
+          .json({ error: "Failed to send email. Please try again." });
+      }
+    }
+
+    // ── STEP 2: Verify OTP ───────────────────────────────────────────────────
+    case "verify": {
+      const { email, otp } = req.body;
+
+      if (!email || !otp) {
+        return res.status(400).json({ error: "Email and code are required." });
+      }
+
+      const record = otpStore.get(email.toLowerCase());
+
+      if (!record) {
+        return res.status(400).json({
+          error: "No active reset request. Please request a new code.",
+        });
+      }
+
+      if (Date.now() > record.expiresAt) {
+        otpStore.delete(email.toLowerCase());
+        return res
+          .status(400)
+          .json({ error: "Code has expired. Please request a new one." });
+      }
+
+      record.attempts += 1;
+
+      if (record.attempts > MAX_ATTEMPTS) {
+        otpStore.delete(email.toLowerCase());
+        return res.status(429).json({
+          error: "Too many incorrect attempts. Please request a new code.",
+        });
+      }
+
+      if (record.otp !== String(otp).trim()) {
+        const remaining = MAX_ATTEMPTS - record.attempts;
+        return res.status(400).json({
+          error: `Incorrect code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`,
+        });
+      }
+
+      // Mark OTP as verified (keeps it alive for the reset step)
+      record.verified = true;
+
+      return res.status(200).json({ message: "Code verified successfully." });
+    }
+
+    // ── STEP 3: Reset Password ───────────────────────────────────────────────
+    case "reset": {
+      const { email, otp, newPassword } = req.body;
+
+      if (!email || !otp || !newPassword) {
+        return res.status(400).json({ error: "All fields are required." });
+      }
+
+      if (newPassword.length < 8) {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 8 characters." });
+      }
+
+      const record = otpStore.get(email.toLowerCase());
+
+      if (!record || !record.verified) {
+        return res.status(400).json({
+          error: "Please verify your code before resetting your password.",
+        });
+      }
+
+      if (Date.now() > record.expiresAt) {
+        otpStore.delete(email.toLowerCase());
+        return res
+          .status(400)
+          .json({ error: "Session expired. Please start over." });
+      }
+
+      if (record.otp !== String(otp).trim()) {
+        return res
+          .status(400)
+          .json({ error: "Invalid code. Please start over." });
+      }
+
+      try {
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+        // Update password — adjust field name to match your schema
+        await User.findOneAndUpdate(
+          { email: email.toLowerCase() },
+          { password: hashedPassword },
+          { new: true },
+        );
+
+        // Invalidate OTP immediately after use
+        otpStore.delete(email.toLowerCase());
+
+        return res
+          .status(200)
+          .json({ message: "Password reset successfully." });
+      } catch (err) {
+        console.error("Password reset error:", err);
+        return res
+          .status(500)
+          .json({ error: "Something went wrong. Please try again." });
+      }
+    }
+
+    default:
+      return res
+        .status(400)
+        .json({ error: "Invalid step. Expected: request | verify | reset" });
+  }
+});
+
 router.post("/register", async (req, res) => {
   const {
     username,
