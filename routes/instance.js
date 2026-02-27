@@ -37,6 +37,34 @@ const storage = multer.diskStorage({
   },
 });
 
+// ============================================================
+// PAGINATION HELPER
+// ============================================================
+/**
+ * Extracts and validates pagination params from req.query.
+ * Returns { page, limit, skip }.
+ */
+function getPagination(query) {
+  const page = Math.max(1, parseInt(query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 20));
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+}
+
+/**
+ * Builds a standard pagination meta object to attach to every response.
+ */
+function paginationMeta({ page, limit, total }) {
+  const totalPages = Math.ceil(total / limit);
+  return {
+    page,
+    limit,
+    total,
+    totalPages,
+    hasMore: page < totalPages,
+  };
+}
+
 const A_DAY = 1000 * 60 * 60 * 24; // A DAY
 const A_WEEK = 1000 * 60 * 60 * 24 * 7; // A WEEK
 const QUESTIONS_PER_SUBJECT = 25;
@@ -49,10 +77,22 @@ const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); //
 
 const router = express.Router();
 
+// ============================================================
+// GET /category   – paginated
+// ============================================================
 router.get("/category", auth, async (req, res) => {
-  const category = await Category.find().select("name image");
+  const { page, limit, skip } = getPagination(req.query);
 
-  res.send({ status: "success", data: category });
+  const [total, category] = await Promise.all([
+    Category.countDocuments(),
+    Category.find().select("name image").skip(skip).limit(limit),
+  ]);
+
+  res.send({
+    status: "success",
+    data: category,
+    pagination: paginationMeta({ page, limit, total }),
+  });
 });
 
 router.get("/subject_category", auth, async (req, res) => {
@@ -250,43 +290,41 @@ router.get("/subject_category", auth, async (req, res) => {
   }
 });
 
+// ============================================================
+// GET /subjects   – paginated
+// ============================================================
 router.get("/subjects", auth, async (req, res) => {
   const { type } = req.query;
   const userId = req.user.userId;
+  const { page, limit, skip } = getPagination(req.query);
 
   try {
-    // Fetch user info with qBank
     const userInfo = await User.findById(userId)
       .select("subjects accountType qBank")
       .lean();
 
     if (!userInfo) {
-      return res.status(404).send({
-        status: "failed",
-        message: "User not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "User not found" });
     }
 
-    // Prepare match stage for filtering
-    let matchLookup = { $match: {} };
-
+    let matchFilter = {};
     if (type === "pro_filter" && userInfo?.accountType === "professional") {
-      // Filter to only show subjects this professional has selected
-      matchLookup = {
-        $match: { _id: { $in: userInfo.subjects } },
-      };
+      matchFilter = { _id: { $in: userInfo.subjects } };
     }
 
-    // Convert user's qBank to ObjectIds for matching
     const userQBank = (userInfo?.qBank || []).map(
       (q) => new mongoose.Types.ObjectId(q.toString()),
     );
 
-    // Aggregate subjects with progress tracking
-    const subjects = await Subject.aggregate([
-      matchLookup,
+    // Count total matching subjects (before pagination)
+    const total = await Subject.countDocuments(matchFilter);
 
-      // Lookup all questions for this subject
+    const subjects = await Subject.aggregate([
+      { $match: matchFilter },
+      { $skip: skip },
+      { $limit: limit },
       {
         $lookup: {
           from: "questions",
@@ -295,8 +333,6 @@ router.get("/subjects", auth, async (req, res) => {
           as: "allQuestions",
         },
       },
-
-      // Lookup categories this subject belongs to
       {
         $lookup: {
           from: "categories",
@@ -305,17 +341,10 @@ router.get("/subjects", auth, async (req, res) => {
           as: "categories",
         },
       },
-
-      // Add computed fields
       {
         $addFields: {
-          // Total number of questions for this subject
           numberOfQuestions: { $size: "$allQuestions" },
-
-          // Topic count
           topicCount: { $size: "$topics" },
-
-          // Filter questions that user has answered
           answeredQuestions: {
             $filter: {
               input: "$allQuestions",
@@ -325,8 +354,6 @@ router.get("/subjects", auth, async (req, res) => {
           },
         },
       },
-
-      // Add count of answered questions and progress
       {
         $addFields: {
           questionsAnswered: { $size: "$answeredQuestions" },
@@ -349,17 +376,7 @@ router.get("/subjects", auth, async (req, res) => {
           },
         },
       },
-
-      // Clean up - remove unnecessary fields
-      {
-        $project: {
-          allQuestions: 0,
-          answeredQuestions: 0,
-          topics: 0,
-        },
-      },
-
-      // Final projection - shape the output
+      { $project: { allQuestions: 0, answeredQuestions: 0, topics: 0 } },
       {
         $project: {
           _id: 1,
@@ -370,36 +387,24 @@ router.get("/subjects", auth, async (req, res) => {
           questionsRemaining: {
             $subtract: ["$numberOfQuestions", "$questionsAnswered"],
           },
-          progressPercentage: {
-            $round: ["$progressPercentage", 2],
-          },
+          progressPercentage: { $round: ["$progressPercentage", 2] },
           topicCount: 1,
-          categories: {
-            _id: 1,
-            name: 1,
-          },
-          isCompleted: {
-            $eq: ["$numberOfQuestions", "$questionsAnswered"],
-          },
-          hasStarted: {
-            $gt: ["$questionsAnswered", 0],
-          },
+          categories: { _id: 1, name: 1 },
+          isCompleted: { $eq: ["$numberOfQuestions", "$questionsAnswered"] },
+          hasStarted: { $gt: ["$questionsAnswered", 0] },
         },
       },
-
-      // Optional: Sort by progress (subjects in progress first, then by name)
       {
         $sort: {
-          hasStarted: -1, // Started subjects first
-          progressPercentage: -1, // Then by progress
-          name: 1, // Then alphabetically
+          hasStarted: -1,
+          progressPercentage: -1,
+          name: 1,
         },
       },
     ]);
 
-    // Calculate overall statistics
     const stats = {
-      totalSubjects: subjects.length,
+      totalSubjects: total,
       completedSubjects: subjects.filter((s) => s.isCompleted).length,
       inProgressSubjects: subjects.filter((s) => s.hasStarted && !s.isCompleted)
         .length,
@@ -407,7 +412,6 @@ router.get("/subjects", auth, async (req, res) => {
       totalQuestions: subjects.reduce((sum, s) => sum + s.numberOfQuestions, 0),
       totalAnswered: subjects.reduce((sum, s) => sum + s.questionsAnswered, 0),
     };
-
     stats.overallProgress =
       stats.totalQuestions > 0
         ? ((stats.totalAnswered / stats.totalQuestions) * 100).toFixed(2)
@@ -416,10 +420,8 @@ router.get("/subjects", auth, async (req, res) => {
     res.send({
       status: "success",
       data: subjects,
-      meta: {
-        userType: userInfo.accountType,
-        stats,
-      },
+      pagination: paginationMeta({ page, limit, total }),
+      meta: { userType: userInfo.accountType, stats },
     });
   } catch (error) {
     console.error("Error fetching subjects:", error);
@@ -495,9 +497,13 @@ router.post("/subject_topics", auth, async (req, res) => {
   res.send({ status: "success", data: subjectList });
 });
 
+// ============================================================
+// GET /topic   – paginated
+// ============================================================
 router.get("/topic", auth, async (req, res) => {
   const userId = req.user.userId;
   const { subjectId } = req.query;
+  const { page, limit, skip } = getPagination(req.query);
 
   const userInfo = await User.findById(userId).select("qBank").lean();
   if (!userInfo)
@@ -507,61 +513,74 @@ router.get("/topic", auth, async (req, res) => {
 
   const userQBank = userInfo.qBank.map((q) => q.toString());
 
-  let subject = await Subject.findById(subjectId)
-    .populate([
-      {
-        path: "topics",
-        select: "name questions",
-      },
-    ])
+  const subject = await Subject.findById(subjectId)
+    .populate({ path: "topics", select: "name questions" })
     .select("-image -__v")
     .lean();
 
-  const topics = subject.topics.map((topic) => {
-    // Calculate questions in the user's qBank
-    const totalQuestions = topic.questions.length;
-    const qBankQuestions = topic.questions.filter((question) =>
-      userQBank.includes(question._id.toString()),
-    );
+  if (!subject)
+    return res
+      .status(404)
+      .send({ status: "failed", message: "Subject not found!" });
 
+  const allTopics = subject.topics.map((topic) => {
+    const totalQuestions = topic.questions.length;
+    const qBankQuestions = topic.questions.filter((q) =>
+      userQBank.includes(q._id.toString()),
+    );
     return {
       _id: topic._id,
       name: topic.name,
       totalQuestions,
-      qBankQuestions: qBankQuestions.length, // Count of matched questions
-      progress: (qBankQuestions / (totalQuestions ?? 1)) * 100,
+      qBankQuestions: qBankQuestions.length,
+      progress: (qBankQuestions.length / (totalQuestions || 1)) * 100,
     };
   });
 
-  res.send({ status: "success", data: topics, id: subjectId });
+  const total = allTopics.length;
+  const topics = allTopics.slice(skip, skip + limit);
+
+  res.send({
+    status: "success",
+    data: topics,
+    id: subjectId,
+    pagination: paginationMeta({ page, limit, total }),
+  });
 });
 
+// ============================================================
+// GET /questions   – paginated
+// ============================================================
 router.get("/questions", auth, async (req, res) => {
   const { subjectId, topicId } = req.query;
+  const { page, limit, skip } = getPagination(req.query);
+
   if (!subjectId)
     return res
       .status(422)
       .send({ status: "failed", message: "Please select a subject" });
 
-  let questions;
-  if (Boolean(topicId) && topicId !== "null") {
-    questions = await Question.find({
-      subject: subjectId,
-      topic: topicId,
-    }).populate([
-      { path: "subject", model: "Subject", select: "name" },
-      { path: "topic", model: "Topic", select: "name" },
-      { path: "categories", model: "Category", select: "name" },
-    ]);
-  } else {
-    questions = await Question.find({ subject: subjectId }).populate([
-      { path: "subject", model: "Subject", select: "name" },
-      { path: "topic", model: "Topic", select: "name" },
-      { path: "categories", model: "Category", select: "name" },
-    ]);
-  }
+  const populate = [
+    { path: "subject", model: "Subject", select: "name" },
+    { path: "topic", model: "Topic", select: "name" },
+    { path: "categories", model: "Category", select: "name" },
+  ];
 
-  res.send({ status: "success", data: questions });
+  const filter =
+    Boolean(topicId) && topicId !== "null"
+      ? { subject: subjectId, topic: topicId }
+      : { subject: subjectId };
+
+  const [total, questions] = await Promise.all([
+    Question.countDocuments(filter),
+    Question.find(filter).populate(populate).skip(skip).limit(limit),
+  ]);
+
+  res.send({
+    status: "success",
+    data: questions,
+    pagination: paginationMeta({ page, limit, total }),
+  });
 });
 
 router.get("/my_questions", auth, async (req, res) => {
@@ -936,7 +955,8 @@ router.post("/premium_quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const { mode } = reqData; // 'solo' or 'friends'
 
-  const QUESTION_COUNT = 3;
+  // TODO:: UPDATE COUNT TO 25 PER SUBJECT ONCE TESTED
+  const QUESTION_COUNT = 5;
 
   try {
     const userInfo = await User.findById(userId).select("qBank quota").lean();
@@ -1059,7 +1079,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
       subject: { $in: subjectIds },
       isTheory: false,
       // test latex
-      explanationLatex: { $exists: true },
+      // explanationLatex: { $exists: true },
     };
 
     if (topicIds.length > 0) {
