@@ -40,7 +40,6 @@ const socs = require("./controllers/socs");
 const payoutRoutes = require("./routes/payouts");
 const adminRoutes = require("./routes/admin");
 const analyticsRoutes = require("./routes/analytics");
-const managerAuth = require("./middlewares/managerAuth");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -54,7 +53,7 @@ app.use("/instance", instance);
 app.use("/school", school);
 app.use("/payouts", payoutRoutes);
 app.use("/support", support);
-app.use("/analytics", managerAuth, analyticsRoutes);
+app.use("/analytics", analyticsRoutes);
 app.use("/admin", adminRoutes);
 
 app.use(error);
