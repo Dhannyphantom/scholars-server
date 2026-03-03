@@ -530,7 +530,7 @@ const userSchema = new schema({
   email: {
     type: String,
     required: false,
-    unique: true,
+    unique: false,
     minlength: 4,
     maxlength: 255,
     lowercase: true,
