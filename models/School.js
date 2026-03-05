@@ -126,7 +126,7 @@ const quizQuestionsSchema = new schema({
 
   point: {
     type: Number,
-    default: 40,
+    default: 5,
   },
 
   timer: {
