@@ -950,6 +950,9 @@ router.put("/question", auth, async (req, res) => {
   res.send({ status: "success" });
 });
 
+// ======================
+// UPDATED FETCH QUERY
+//  =====================
 router.post("/premium_quiz", auth, async (req, res) => {
   const reqData = req.body;
   const userId = req.user.userId;
@@ -1002,7 +1005,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
       const dailyQuestionsCount = isToday
         ? currentQuota.daily_questions_count || 0
         : 0;
-      const dailySubjects = isToday ? currentQuota.daily_subjects || [] : [];
 
       const requestedQuestionsCount = reqData.subjects.length * QUESTION_COUNT;
 
@@ -1016,41 +1018,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
             questionsRemaining: 100 - dailyQuestionsCount,
             questionsRequested: requestedQuestionsCount,
           },
-        });
-      }
-
-      // Check subject limits
-      for (const subject of reqData.subjects) {
-        const existingSubject = dailySubjects.find(
-          (s) => s.subject.toString() === subject._id.toString(),
-        );
-        const currentSubjectCount = existingSubject
-          ? existingSubject.questions_count
-          : 0;
-
-        if (currentSubjectCount + QUESTION_COUNT > 50) {
-          return res.status(429).send({
-            status: "failed",
-            message: `Subject limit exceeded. You have ${
-              50 - currentSubjectCount
-            } questions remaining for this subject.`,
-          });
-        }
-      }
-
-      // Check max subjects per day
-      const uniqueSubjectIds = new Set(
-        reqData.subjects.map((s) => s._id.toString()),
-      );
-      const existingSubjectIds = new Set(
-        dailySubjects.map((s) => s.subject.toString()),
-      );
-      uniqueSubjectIds.forEach((id) => existingSubjectIds.add(id));
-
-      if (existingSubjectIds.size > 2) {
-        return res.status(429).send({
-          status: "failed",
-          message: "You can only practice 2 subjects per day.",
         });
       }
     }
@@ -1078,8 +1045,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
       categories: categoryId,
       subject: { $in: subjectIds },
       isTheory: false,
-      // test latex
-      // explanationLatex: { $exists: true },
     };
 
     if (topicIds.length > 0) {
@@ -1136,11 +1101,11 @@ router.post("/premium_quiz", auth, async (req, res) => {
                 question: "$$q.question",
                 answers: "$$q.answers",
                 timer: "$$q.timer",
-                point: "$$q.point", // KEEP ORIGINAL - don't override!
+                point: "$$q.point",
                 subject: "$$q.subject",
                 topic: "$$q.topic",
                 categories: "$$q.categories",
-                hasAnswered: "$$q.hasAnswered", // Only for host's reference
+                hasAnswered: "$$q.hasAnswered",
                 isTheory: "$$q.isTheory",
                 explanation: "$$q.explanation",
                 explanationLatex: "$$q.explanationLatex",
@@ -1152,8 +1117,6 @@ router.post("/premium_quiz", auth, async (req, res) => {
         },
       },
     ]);
-
-    // console.log(JSON.stringify(questions, null, 2));
 
     // Validate results
     if (questions.length === 0) {
@@ -1226,7 +1189,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
         mode: mode || "solo",
         questionsPerSubject: QUESTION_COUNT,
         repeatedQuestionPoints: 0.2,
-        stats, // These stats are only accurate for the host
+        stats,
         note:
           mode === "friends"
             ? "Stats shown are for host only. Each player's points will be calculated based on their individual history."
@@ -1299,6 +1262,7 @@ router.post("/submit_premium", auth, async (req, res) => {
     const subjectStatsMap = {};
 
     questions.forEach((quest) => {
+      console.log("Processing Question: ", quest);
       studentSubjects.push({
         subject: quest.subject._id,
         questions: quest.questions.map((q) => q._id),
@@ -1345,10 +1309,11 @@ router.post("/submit_premium", auth, async (req, res) => {
           }
         } else {
           // Wrong answer - deduct points
-          totalPoints -= appInfo.POINT_FAIL;
           if (isNewQuestion) {
+            totalPoints -= appInfo.POINT_FAIL;
             newQuestionIds.push(question._id);
           } else {
+            totalPoints -= REPEATED_QUESTION_POINTS * 2;
             answeredQuestionIds.push(question._id);
           }
         }

@@ -23,6 +23,10 @@ module.exports = async (tokens, notification) => {
   const chunks = expo.chunkPushNotifications(messages);
 
   for (const chunk of chunks) {
-    await expo.sendPushNotificationsAsync(chunk);
+    try {
+      await expo.sendPushNotificationsAsync(chunk);
+    } catch (errr) {
+      console.log("Notification not sent", errr);
+    }
   }
 };

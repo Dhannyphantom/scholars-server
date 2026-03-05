@@ -348,21 +348,36 @@ const reconcileSchool = async (school) => {
     }
 
     // ---------------- UPDATE STUDENTS ----------------
-    const studentIds =
-      schoolObj?.students
-        ?.map((item) => item?.user?._id || item?.user)
-        ?.filter(Boolean) || [];
+    // ---------------- UPDATE STUDENTS ----------------
+    const studentEntries = schoolObj?.students || [];
+
+    const studentIds = studentEntries
+      .map((item) => item?.user?._id || item?.user)
+      .filter(Boolean);
 
     if (studentIds.length) {
+      // Get valid users that actually exist
+      const existingUsers = await User.find(
+        { _id: { $in: studentIds } },
+        { _id: 1 },
+      ).lean();
+
+      const validUserIds = existingUsers.map((u) => u._id.toString());
+
+      // 🔥 Remove students whose users don't exist
+      school.students = school.students.filter((item) => {
+        const id = item?.user?._id?.toString?.() || item?.user?.toString?.();
+        return validUserIds.includes(id);
+      });
+
+      // Update only valid users
       await User.updateMany(
         {
-          _id: { $in: studentIds },
-          school: { $ne: school._id }, // 🔥 only update if different
+          _id: { $in: validUserIds },
+          school: { $ne: school._id },
         },
         {
-          $set: {
-            school: school._id,
-          },
+          $set: { school: school._id },
         },
       );
     }

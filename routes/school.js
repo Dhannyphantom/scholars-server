@@ -20,6 +20,7 @@ const {
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
 const { Quiz } = require("../models/Quiz");
+const expoNotifications = require("../controllers/expoNotifications");
 const nanoid = uuid.v4;
 
 const selectQuiz =
@@ -377,12 +378,16 @@ router.post("/join", auth, async (req, res) => {
     .lean();
   const tokens = teachersArr.map((teach) => teach.expoPushToken);
 
-  await expoNotifications(tokens, {
-    title,
-    message: body,
-    data: {},
-    // image: userInfo?.avatar?.image?.uri
-  });
+  try {
+    await expoNotifications(tokens, {
+      title,
+      message: body,
+      data: {},
+      // image: userInfo?.avatar?.image?.uri
+    });
+  } catch (errr) {
+    console.log("Notification sent failed");
+  }
 });
 
 router.post("/class", auth, async (req, res) => {
