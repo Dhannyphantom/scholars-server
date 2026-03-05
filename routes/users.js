@@ -66,6 +66,11 @@ const ejs = require("ejs");
 
 // ── adjust these imports to match your project structure ──────────────────────
 const transporter = require("../controllers/mailer"); // your configured nodemailer transporter
+const {
+  uploadSingle,
+  processAndUpload,
+  deleteFile,
+} = require("../middlewares/uploadToS3");
 // ─────────────────────────────────────────────────────────────────────────────
 
 // In-memory OTP store — swap for Redis or a DB table in production
@@ -1811,31 +1816,39 @@ router.put("/professional", auth, async (req, res) => {
 
 router.post(
   "/updateAvatar",
-  [auth, uploader.single("upload"), mediaUploader],
+  [auth, uploadSingle, processAndUpload("avatars")],
   async (req, res) => {
-    const user = await User.findById(req.user.userId);
-    const imageData = req.media;
-
-    if (!imageData) return res.status(400).json("Media data not found!");
-
-    const userAvatarObj = getUploadUri(req.media, "avatars");
-
-    // return res.status(422).send({ status: "failed", message: "Testing" });
-
     try {
-      user.avatar.image = userAvatarObj;
+      const user = await User.findById(req.user.userId);
+
+      const imageData = req.body.file;
+
+      if (!imageData) return res.status(400).json("Media data not found!");
+
+      /* ================= DELETE OLD AVATAR ================= */
+
+      if (user?.avatar?.image) {
+        const oldImage = user.avatar.image;
+
+        if (oldImage.uri) await deleteFile(oldImage.uri);
+        if (oldImage.thumb) await deleteFile(oldImage.thumb);
+      }
+
+      /* ================= SAVE NEW AVATAR ================= */
+
+      user.avatar.image = imageData;
       user.avatar.lastUpdate = new Date();
 
       await user.save();
-    } catch (errr) {
-      return res.status(500).json({
+
+      res.json({ avatar: user.avatar });
+    } catch (err) {
+      res.status(500).json({
         status: "failed",
         message: "Avatar update failed!",
-        error: errr,
+        error: err.message,
       });
     }
-
-    res.json({ avatar: user.avatar });
   },
 );
 

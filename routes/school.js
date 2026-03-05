@@ -1784,7 +1784,9 @@ router.post("/assignment/publish", auth, async (req, res) => {
     }
 
     // Check if user is a teacher
-    const userInfo = await User.findById(userId).select("accountType name");
+    const userInfo = await User.findById(userId).select(
+      "accountType firstName lastName preffix",
+    );
     if (!userInfo) {
       return res.status(422).send({
         status: "failed",
@@ -1873,7 +1875,7 @@ router.post("/assignment/publish", auth, async (req, res) => {
     // Create announcement
     const announcement = {
       teacher: userId,
-      message: `${userInfo.name} has published scores for "${assignment.title}"`,
+      message: `${userInfo?.prefix} ${userInfo.firstName} ${userInfo.lastName} has published scores for "${assignment.title}"`,
       type: "school",
       classes: assignment.classes,
       visibility: "class",

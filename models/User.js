@@ -32,6 +32,14 @@ const mediaDataSchema = new schema({
     type: String,
     maxlength: 1024,
   },
+  key: {
+    type: String,
+    maxlength: 1024,
+  },
+  assetId: {
+    type: String,
+    maxlength: 1024,
+  },
   width: {
     type: Number,
     required: true,
