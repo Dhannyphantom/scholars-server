@@ -133,7 +133,7 @@ router.get("/subject_category", auth, async (req, res) => {
 
     // Convert user's qBank to ObjectIds for matching
     const userQBank = (userInfo?.qBank || []).map(
-      (q) => new mongoose.Types.ObjectId(q.toString()),
+      (entry) => new mongoose.Types.ObjectId(entry.question.toString()),
     );
 
     // Aggregate subjects with progress tracking for this category
@@ -315,7 +315,7 @@ router.get("/subjects", auth, async (req, res) => {
     }
 
     const userQBank = (userInfo?.qBank || []).map(
-      (q) => new mongoose.Types.ObjectId(q.toString()),
+      (entry) => new mongoose.Types.ObjectId(entry.question.toString()),
     );
 
     // Count total matching subjects (before pagination)
@@ -453,8 +453,9 @@ router.post("/subject_topics", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "User not found!" });
 
-  const banks = userInfo?.qBank || [];
-  const userQBank = banks.map((q) => q.toString());
+  const userQBank = (userInfo?.qBank || []).map((entry) =>
+    entry.question.toString(),
+  );
 
   let subjectList = await Subject.find({ _id: { $in: subjects } })
     .populate([
@@ -511,8 +512,9 @@ router.get("/topic", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "User not found!" });
 
-  const userQBank = userInfo.qBank.map((q) => q.toString());
-
+  const userQBank = (userInfo.qBank || []).map((entry) =>
+    entry.question.toString(),
+  );
   const subject = await Subject.findById(subjectId)
     .populate({ path: "topics", select: "name questions" })
     .select("-image -__v")
@@ -594,7 +596,7 @@ router.get("/my_questions", auth, async (req, res) => {
       {
         $lookup: {
           from: "questions",
-          let: { questionId: "$qBank" },
+          let: { questionId: "$qBank.question" },
           pipeline: [
             { $match: { $expr: { $eq: ["$_id", "$$questionId"] } } },
             {
@@ -1037,8 +1039,9 @@ router.post("/premium_quiz", auth, async (req, res) => {
     });
 
     const userQBank = (userInfo?.qBank || []).map(
-      (q) => new mongoose.Types.ObjectId(q.toString()),
+      (entry) => new mongoose.Types.ObjectId(entry.question.toString()),
     );
+
     const categoryId = new mongoose.Types.ObjectId(reqData.categoryId);
 
     const matchStage = {
@@ -1213,11 +1216,10 @@ router.post("/premium_quiz", auth, async (req, res) => {
 router.post("/submit_premium", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  const { questions, type, sessionId, duration } = data; // added duration
+  const { questions, type, sessionId, duration } = data;
 
   const userInfo = await User.findById(userId).select(
     "accountType quota quotas points totalPoints qBank quizStats quizHistory class",
-    // added "class" to capture classLevel snapshot
   );
 
   if (!userInfo) {
@@ -1235,18 +1237,36 @@ router.post("/submit_premium", auth, async (req, res) => {
   }
 
   try {
-    const appInfo = await AppInfo.findOne({ ID: "APP" });
+    // const appInfo = await AppInfo.findOne({ ID: "APP" });
 
     // ========================================
-    // CALCULATE POINTS BASED ON THIS USER'S qBank
+    // POINT RULES:
+    // 1. New question, correct first try               → +question.point (e.g. 5)
+    // 2. New question, wrong first try                 → -2
+    // 3. Retry question, previously wrong, now correct → +1
+    // 4. Retry question, previously wrong, still wrong → -0.2
+    // 5. Retry question, previously correct, correct   → 0
+    // 6. Retry question, previously correct, now wrong → -0.2
     // ========================================
-    const REPEATED_QUESTION_POINTS = 0.2;
-    const userQBank = (userInfo.qBank || []).map((q) => q.toString());
-    const qBankSet = new Set(userQBank);
+
+    const POINTS_NEW_WRONG = -2;
+    const POINTS_RETRY_NOW_CORRECT = 1;
+    const POINTS_RETRY_NOW_WRONG = -0.2;
+    const POINTS_PREV_CORRECT_RETRY = 0;
+
+    // Build a lookup map from qBank: questionId → { correct }
+    const qBankMap = new Map(
+      (userInfo.qBank || []).map((entry) => [
+        entry.question.toString(),
+        { correct: entry.correct },
+      ]),
+    );
 
     let totalPoints = 0;
     const newQuestionIds = [];
     const answeredQuestionIds = [];
+    const qBankUpdates = {}; // questionId → new correct boolean
+
     let correctAnswers = 0;
     let totalQuestions = 0;
 
@@ -1256,13 +1276,10 @@ router.post("/submit_premium", auth, async (req, res) => {
     const subjectIds = [];
     const topicIds = [];
 
-    // --- DASHBOARD ADDITION ---
-    // Build per-subject stats map as we loop questions once.
-    // Keyed by subjectId string → { subject, totalQuestions, correctAnswers }
+    // Build per-subject stats map keyed by subjectId string
     const subjectStatsMap = {};
 
     questions.forEach((quest) => {
-      console.log("Processing Question: ", quest);
       studentSubjects.push({
         subject: quest.subject._id,
         questions: quest.questions.map((q) => q._id),
@@ -1270,8 +1287,6 @@ router.post("/submit_premium", auth, async (req, res) => {
 
       subjectIds.push(quest.subject._id);
 
-      // --- DASHBOARD ADDITION ---
-      // Initialise subject entry in map if not yet seen
       const subjKey = quest.subject._id.toString();
       if (!subjectStatsMap[subjKey]) {
         subjectStatsMap[subjKey] = {
@@ -1286,37 +1301,46 @@ router.post("/submit_premium", auth, async (req, res) => {
         questionIds.push(question._id);
 
         const questionId = question._id.toString();
-        const isNewQuestion = !qBankSet.has(questionId);
+        const isCorrect = !!question.answered?.correct;
+        const qBankEntry = qBankMap.get(questionId); // undefined = brand new
+        const isNew = qBankEntry === undefined;
+        const wasPrevCorrect = !isNew && qBankEntry.correct === true;
 
-        // --- DASHBOARD ADDITION ---
-        // Accumulate per-subject correct answer count
+        // Per-subject dashboard stats
         subjectStatsMap[subjKey].totalQuestions++;
-        if (question.answered?.correct) {
+        if (isCorrect) {
           subjectStatsMap[subjKey].correctAnswers++;
         }
 
-        // Calculate points based on THIS user's history
-        if (question.answered?.correct) {
-          correctAnswers++;
-          if (isNewQuestion) {
-            // Award full points for NEW correct answers
-            totalPoints += question.point;
-            newQuestionIds.push(question._id);
+        // ---- POINT CALCULATION ----
+        if (isNew) {
+          newQuestionIds.push(question._id);
+          if (isCorrect) {
+            totalPoints += question.point; // Rule 1: +5 (question.point)
           } else {
-            // Award 0.2 points for REPEATED correct answers
-            totalPoints += REPEATED_QUESTION_POINTS;
-            answeredQuestionIds.push(question._id);
+            totalPoints += POINTS_NEW_WRONG; // Rule 2: -2
           }
         } else {
-          // Wrong answer - deduct points
-          if (isNewQuestion) {
-            totalPoints -= appInfo.POINT_FAIL;
-            newQuestionIds.push(question._id);
+          answeredQuestionIds.push(question._id);
+          if (wasPrevCorrect) {
+            if (isCorrect) {
+              totalPoints += POINTS_PREV_CORRECT_RETRY; // Rule 5: 0
+            } else {
+              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 6: -0.2
+            }
           } else {
-            totalPoints -= REPEATED_QUESTION_POINTS * 2;
-            answeredQuestionIds.push(question._id);
+            if (isCorrect) {
+              totalPoints += POINTS_RETRY_NOW_CORRECT; // Rule 3: +1
+            } else {
+              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 4: -0.2
+            }
           }
         }
+
+        if (isCorrect) correctAnswers++;
+
+        // Record the new correct state for this question
+        qBankUpdates[questionId] = isCorrect;
 
         questionData.push({
           question: question.question,
@@ -1424,7 +1448,23 @@ router.post("/submit_premium", auth, async (req, res) => {
     // ========================================
     userInfo.points = Math.max(0, totalPoints + userInfo.points);
     userInfo.totalPoints += totalPoints;
-    userInfo.qBank = userInfo.qBank.concat(newQuestionIds);
+
+    // Merge qBankUpdates into the existing qBank array:
+    // - Existing questions → update their `correct` field
+    // - New questions → push a new entry
+    const existingQBankMap = new Map(
+      (userInfo.qBank || []).map((entry) => [entry.question.toString(), entry]),
+    );
+
+    for (const [questionId, correct] of Object.entries(qBankUpdates)) {
+      if (existingQBankMap.has(questionId)) {
+        existingQBankMap.get(questionId).correct = correct;
+      } else {
+        userInfo.qBank.push({ question: questionId, correct });
+      }
+    }
+
+    userInfo.markModified("qBank");
 
     // ========================================
     // UPDATE QUIZ STATS
@@ -1462,9 +1502,6 @@ router.post("/submit_premium", auth, async (req, res) => {
 
     // ========================================
     // DASHBOARD: RESOLVE SCHOOL ID
-    // Find school where this student is a verified member.
-    // Stored as a snapshot so the Quiz is always linked to the right school
-    // even if the student later leaves or changes schools.
     // ========================================
     const studentSchool = await School.findOne(
       { "students.user": userId, "students.verified": true },
@@ -1483,7 +1520,6 @@ router.post("/submit_premium", auth, async (req, res) => {
       topics: topicIds,
       sessionId: sessionId,
 
-      // --- DASHBOARD ADDITIONS ---
       school: studentSchool?._id || null,
       classLevel: userInfo.class?.level || null,
       summary: {
@@ -1491,7 +1527,7 @@ router.post("/submit_premium", auth, async (req, res) => {
         correctAnswers,
         accuracyRate: overallAccuracyRate,
         pointsEarned: totalPoints,
-        duration: duration || 0, // milliseconds, sent from client
+        duration: duration || 0,
         subjectBreakdown,
       },
     });
@@ -1755,8 +1791,6 @@ router.post("/verify-explanations-ai-batch", async (req, res) => {
     const totalCount = await Question.countDocuments({
       explanation: { $exists: true, $ne: null, $ne: "" },
     });
-
-    console.log(`Total questions to verify: ${totalCount}`);
 
     // Process in batches
     while (skip < totalCount && !rateLimitHit) {

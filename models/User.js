@@ -712,8 +712,12 @@ const userSchema = new schema({
   quota: quotaSchema,
   quotas: [quotaSchema],
   qBank: {
-    type: [schema.Types.ObjectId],
-    ref: "Question",
+    type: [
+      {
+        question: { type: schema.Types.ObjectId, ref: "Question" },
+        correct: { type: Boolean, default: false }, // true = last answered correctly
+      },
+    ],
     default: [],
   },
   quizStats: quizStatsSchema,

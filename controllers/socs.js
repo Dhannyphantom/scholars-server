@@ -576,7 +576,7 @@ async function persistQuizResults(session, leaderboard) {
   try {
     console.log("💾 Persisting quiz results to database...");
 
-    const appInfo = await AppInfo.findOne({ ID: "APP" });
+    // const appInfo = await AppInfo.findOne({ ID: "APP" });
     const { subjects, topics } = extractMetadata(session.quizData);
 
     // Flatten all questions with their IDs
@@ -609,7 +609,21 @@ async function persistQuizResults(session, leaderboard) {
     const totalQuestions = allQuestions.length;
     const quizDuration = session.endedAt - session.startedAt;
     const winner = leaderboard[0];
-    const REPEATED_QUESTION_POINTS = 0.2;
+
+    // ========================================
+    // POINT RULES:
+    // 1. New question, correct first try               → +question.point (e.g. 5)
+    // 2. New question, wrong first try                 → -2
+    // 3. Retry question, previously wrong, now correct → +1
+    // 4. Retry question, previously wrong, still wrong → -0.2
+    // 5. Retry question, previously correct, correct   → 0
+    // 6. Retry question, previously correct, now wrong → -0.2
+    // ========================================
+
+    const POINTS_NEW_WRONG = -2;
+    const POINTS_RETRY_NOW_CORRECT = 1;
+    const POINTS_RETRY_NOW_WRONG = -0.2;
+    const POINTS_PREV_CORRECT_RETRY = 0;
 
     // ========================================
     // DASHBOARD: RESOLVE SCHOOL FOR EACH PLAYER
@@ -745,14 +759,20 @@ async function persistQuizResults(session, leaderboard) {
         if (!user) continue;
 
         // ========================================
-        // CALCULATE POINTS BASED ON ACTUAL ANSWERS & qBank
+        // BUILD qBank LOOKUP MAP
+        // Maps questionId string → { correct: boolean }
         // ========================================
-        const userQBank = (user.qBank || []).map((q) => q.toString());
-        const qBankSet = new Set(userQBank);
+        const qBankMap = new Map(
+          (user.qBank || []).map((entry) => [
+            entry.question.toString(),
+            { correct: entry.correct },
+          ]),
+        );
 
         let totalPoints = 0;
         const newQuestionIds = [];
         const answeredQuestionIds = [];
+        const qBankUpdates = {}; // questionId → new correct boolean
         let correctAnswers = 0;
 
         // Use player's tracked answered questions
@@ -760,37 +780,62 @@ async function persistQuizResults(session, leaderboard) {
 
         playerAnsweredQuestions.forEach((answered) => {
           const questionId = answered.questionId.toString();
-          const isNewQuestion = !qBankSet.has(questionId);
           const isCorrect = answered.isCorrect;
+          const qBankEntry = qBankMap.get(questionId); // undefined = brand new
+          const isNew = qBankEntry === undefined;
+          const wasPrevCorrect = !isNew && qBankEntry.correct === true;
 
-          if (isCorrect) {
-            correctAnswers++;
-            if (isNewQuestion) {
-              // Award full points for NEW correct answers
-              totalPoints += answered.point > 0 ? answered.point : 5;
-              newQuestionIds.push(answered.questionId);
+          if (isCorrect) correctAnswers++;
+
+          // ---- POINT CALCULATION ----
+          if (isNew) {
+            newQuestionIds.push(answered.questionId);
+            if (isCorrect) {
+              totalPoints += answered.point > 0 ? answered.point : 5; // Rule 1: +question.point
             } else {
-              // Award 0.2 points for REPEATED correct answers
-              totalPoints += REPEATED_QUESTION_POINTS;
-              answeredQuestionIds.push(answered.questionId);
+              totalPoints += POINTS_NEW_WRONG; // Rule 2: -2
             }
           } else {
-            // Wrong answer - already deducted in session, but track for qBank
-            totalPoints += answered.point; // This will be negative (-2)
-            if (isNewQuestion) {
-              newQuestionIds.push(answered.questionId);
+            answeredQuestionIds.push(answered.questionId);
+            if (wasPrevCorrect) {
+              if (isCorrect) {
+                totalPoints += POINTS_PREV_CORRECT_RETRY; // Rule 5: 0
+              } else {
+                totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 6: -0.2
+              }
             } else {
-              answeredQuestionIds.push(answered.questionId);
+              if (isCorrect) {
+                totalPoints += POINTS_RETRY_NOW_CORRECT; // Rule 3: +1
+              } else {
+                totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 4: -0.2
+              }
             }
           }
+
+          // Record the new correct state for this question
+          qBankUpdates[questionId] = isCorrect;
         });
 
         // ========================================
-        // UPDATE USER POINTS & qBank
+        // MERGE qBankUpdates INTO USER'S qBank
+        // - Existing questions → update their `correct` field
+        // - New questions → push a new entry
         // ========================================
+        const existingQBankMap = new Map(
+          (user.qBank || []).map((entry) => [entry.question.toString(), entry]),
+        );
+
+        for (const [questionId, correct] of Object.entries(qBankUpdates)) {
+          if (existingQBankMap.has(questionId)) {
+            existingQBankMap.get(questionId).correct = correct;
+          } else {
+            user.qBank.push({ question: questionId, correct });
+          }
+        }
+
+        const updatedQBank = user.qBank; // mutated in place above
         const updatedPoints = Math.max(0, totalPoints + user.points);
         const updatedTotalPoints = user.totalPoints + totalPoints;
-        const updatedQBank = user.qBank.concat(newQuestionIds);
 
         const playerQuiz = quizDocs.find(
           (q) => q.playerId.toString() === player._id.toString(),
