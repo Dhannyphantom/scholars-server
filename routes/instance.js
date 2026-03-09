@@ -2592,7 +2592,7 @@ ${question.explanation || ""}
 }
 
 router.post("/generate-latex", async (req, res) => {
-  const limit = Math.min(Number(req.body.limit) || 20, 100);
+  const limit = Math.min(Number(req.body.limit) || 2, 100);
 
   try {
     const questions = await Question.find({
@@ -2682,6 +2682,8 @@ router.post("/generate-latex", async (req, res) => {
           latex: parsed.answers[index]?.latex || ans.name,
           isLatex: parsed.answers[index]?.containsMath || false,
         }));
+
+        console.log(JSON.stringify(question, null, 2));
 
         await question.save();
         updated++;
