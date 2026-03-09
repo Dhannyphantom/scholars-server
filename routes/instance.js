@@ -1585,6 +1585,192 @@ router.post("/submit_premium", auth, async (req, res) => {
 });
 
 /**
+ * POST /instance/freemium_quiz
+ *
+ * Fetches 15 random questions for freemium users.
+ *
+ * Body:
+ *   categoryId  – ObjectId  (required)
+ *   subjectId   – ObjectId  (required)
+ *   topicId     – ObjectId  (required)
+ *
+ * Behaviour:
+ *   • Hard cap of 15 questions per day (tracked on user.quota.freemium_daily_count)
+ *   • Prioritises questions the user has NOT answered before
+ *   • Returns a single qBank array compatible with QuestionDisplay / FreemiumQuizZone
+ */
+router.post("/freemium_quiz", auth, async (req, res) => {
+  const { categoryId, subjectId, topicId } = req.body;
+  const userId = req.user.userId;
+
+  const FREEMIUM_QUESTION_COUNT = 15;
+  const A_DAY = 1000 * 60 * 60 * 24;
+
+  try {
+    // ── 1. Load user quota ──────────────────────────────────────────────────
+    const userInfo = await User.findById(userId).select("qBank quota").lean();
+
+    if (!userInfo) {
+      return res
+        .status(422)
+        .send({ status: "failed", message: "User not found!" });
+    }
+
+    // ── 2. Validate inputs ──────────────────────────────────────────────────
+    if (!categoryId || !subjectId || !topicId) {
+      return res.status(422).send({
+        status: "failed",
+        message: "categoryId, subjectId and topicId are all required.",
+      });
+    }
+
+    // ── 3. Daily quota check ────────────────────────────────────────────────
+    const quota = userInfo.quota || {};
+    const isToday =
+      quota.freemium_update &&
+      new Date() - new Date(quota.freemium_update) < A_DAY;
+
+    const usedToday = isToday ? quota.freemium_daily_count || 0 : 0;
+
+    if (usedToday >= FREEMIUM_QUESTION_COUNT) {
+      return res.status(429).send({
+        status: "failed",
+        message:
+          "You've used your free 15 questions for today. Come back tomorrow! 🌅",
+        data: {
+          questionsRemaining: 0,
+          resetsAt: new Date(
+            new Date(quota.freemium_update).getTime() + A_DAY,
+          ).toISOString(),
+        },
+      });
+    }
+
+    // ── 4. Build query IDs ──────────────────────────────────────────────────
+    const catObjId = new mongoose.Types.ObjectId(categoryId);
+    const subjObjId = new mongoose.Types.ObjectId(subjectId);
+    const topicObjId = new mongoose.Types.ObjectId(topicId);
+
+    // Questions this user has already answered (used to deprioritise)
+    const userQBank = (userInfo.qBank || []).map(
+      (e) => new mongoose.Types.ObjectId(e.question.toString()),
+    );
+
+    // ── 5. Aggregate 15 random questions ───────────────────────────────────
+    const questions = await Question.aggregate([
+      {
+        $match: {
+          categories: catObjId,
+          subject: subjObjId,
+          topic: topicObjId,
+          isTheory: false,
+        },
+      },
+      {
+        $addFields: {
+          hasAnswered: { $in: ["$_id", userQBank] },
+          randomSeed: { $rand: {} },
+        },
+      },
+      {
+        $sort: {
+          hasAnswered: 1, // Fresh questions first
+          randomSeed: 1,
+        },
+      },
+      { $limit: FREEMIUM_QUESTION_COUNT },
+      {
+        $lookup: {
+          from: "subjects",
+          localField: "subject",
+          foreignField: "_id",
+          as: "subjectData",
+        },
+      },
+      { $unwind: "$subjectData" },
+      {
+        $lookup: {
+          from: "topics",
+          localField: "topic",
+          foreignField: "_id",
+          as: "topicData",
+        },
+      },
+      { $unwind: "$topicData" },
+      {
+        $project: {
+          _id: 1,
+          question: 1,
+          questionLatex: 1,
+          isLatex: 1,
+          answers: 1,
+          explanation: 1,
+          explanationLatex: 1,
+          point: 1,
+          timer: 1,
+          image: 1,
+          isTheory: 1,
+          hasAnswered: 1,
+          subject: {
+            _id: "$subjectData._id",
+            name: "$subjectData.name",
+          },
+          topic: {
+            _id: "$topicData._id",
+            name: "$topicData.name",
+          },
+        },
+      },
+    ]);
+
+    if (questions.length === 0) {
+      return res.status(404).send({
+        status: "failed",
+        message:
+          "No questions found for this topic yet. Try a different one! 📚",
+      });
+    }
+
+    // ── 6. Wrap into qBank format (same shape as premium_quiz) ─────────────
+    //    QuestionDisplay expects: [{ subject: { _id, name }, questions: [...] }]
+    const subjectName = questions[0]?.subject?.name ?? "Questions";
+    const qBank = [
+      {
+        subject: questions[0].subject,
+        questions: questions.map(({ subjectData, topicData, ...q }) => q),
+      },
+    ];
+
+    // ── 7. Update daily quota ───────────────────────────────────────────────
+    const newCount = usedToday + questions.length;
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        "quota.freemium_daily_count": newCount,
+        "quota.freemium_update": isToday
+          ? quota.freemium_update
+          : new Date().toISOString(),
+      },
+    });
+
+    // ── 8. Respond ──────────────────────────────────────────────────────────
+    return res.send({
+      status: "success",
+      data: qBank,
+      meta: {
+        totalQuestions: questions.length,
+        questionsRemaining: Math.max(0, FREEMIUM_QUESTION_COUNT - newCount),
+        subjectName,
+      },
+    });
+  } catch (err) {
+    console.error("freemium_quiz error:", err);
+    return res.status(500).send({
+      status: "failed",
+      message: "Something went wrong. Please try again.",
+    });
+  }
+});
+/**
  * POST /api/questions/generate-explanations
  * Body (optional):
  * {

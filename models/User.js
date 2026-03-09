@@ -446,6 +446,10 @@ const quotaSchema = new schema({
     type: Date,
     default: Date.now,
   },
+  freemium_update: {
+    type: Date,
+    default: Date.now,
+  },
   point_per_week: {
     type: Number,
     default: 0,
@@ -455,6 +459,10 @@ const quotaSchema = new schema({
     ref: "Question",
   },
   daily_questions_count: {
+    type: Number,
+    default: 0,
+  },
+  freemium_daily_count: {
     type: Number,
     default: 0,
   },
