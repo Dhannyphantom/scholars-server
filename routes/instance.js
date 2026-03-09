@@ -2011,6 +2011,9 @@ router.post("/freemium_quiz", auth, async (req, res) => {
           categories: catObjId,
           subject: subjObjId,
           topic: topicObjId,
+          // TODO:: CLEAN
+          questionLatex: { $exists: true, $ne: "" },
+          explanationLatex: { $exists: true, $ne: "" },
           isTheory: false,
         },
       },
@@ -2539,60 +2542,135 @@ router.get("/ai_ques", async (req, res) => {
 });
 
 function safeJsonParse(text) {
+  if (!text) return null;
+
   try {
-    const cleaned = text
-      .trim()
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
+    // Strip markdown code fences
+    let cleaned = text.trim();
+    cleaned = cleaned
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
       .trim();
 
+    // Extract JSON object if surrounded by extra text
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      cleaned = jsonMatch[0];
+    }
+
     return JSON.parse(cleaned);
-  } catch {
+  } catch (err) {
+    console.error("[safeJsonParse] Failed to parse:", text?.slice(0, 500));
     return null;
   }
 }
 
 function buildLatexPrompt(question) {
-  return `
-You are a mathematics LaTeX formatting expert.
+  const answers = question.answers
+    .map((a, i) => `${i + 1}. ${a.name}`)
+    .join("\n");
 
-Convert the following exam question, options, and explanation into properly formatted LaTeX.
+  return `You are a LaTeX formatting API. Your ONLY job is to return a single valid JSON object — nothing else.
 
-Rules:
-- Preserve normal English text.
-- Do NOT wrap math in $...$.
-- Output raw LaTeX expressions only.
-- Preserve proper spacing between words and math.
-- Maintain normal paragraph spacing for explanation (single line).- Use proper LaTeX syntax (\\sqrt{}, ^, \\frac{}, etc).
-- Return ONLY valid JSON.
-- Do NOT include markdown.
-- Do NOT include explanations.
-- Do NOT include extra commentary.
+STRICT RULES:
+- Return ONLY a raw JSON object. No markdown. No code fences. No explanation. No preamble.
+- First character of your response must be "{". Last character must be "}".
+- For math expressions, use LaTeX syntax: \\frac{a}{b}, \\sqrt{x}, x^2, etc.
+- Do NOT wrap any math in dollar signs ($) or \\(...\\) — return the raw LaTeX string only.
+- Keep plain English text exactly as-is. Only convert math symbols/expressions to LaTeX.
+- If there is no math, set containsMath to false and return the text unchanged.
 
-Return format strictly:
-
+REQUIRED JSON STRUCTURE (return exactly this shape):
 {
-  "questionLatex": "string",
+  "questionLatex": "<question text with math in raw LaTeX>",
   "containsMath": true or false,
-  "explanationLatex": "string",
+  "explanationLatex": "<explanation text with math in raw LaTeX>",
   "answers": [
-    { "latex": "string", "containsMath": true or false }
+    { "latex": "<answer text>", "containsMath": true or false },
+    { "latex": "<answer text>", "containsMath": true or false },
+    { "latex": "<answer text>", "containsMath": true or false },
+    { "latex": "<answer text>", "containsMath": true or false }
   ]
 }
 
-Question:
+The answers array MUST have exactly ${question.answers.length} items, in the same order as provided.
+
+---
+
+QUESTION:
 ${question.question}
 
-Options:
-${question.answers.map((a) => a.name).join("\n")}
+OPTIONS (${question.answers.length} total):
+${answers}
 
-Explanation:
-${question.explanation || ""}
-`;
+EXPLANATION:
+${question.explanation || "None"}
+
+---
+
+Respond with ONLY the JSON object. Start your response with "{".`;
+}
+
+async function callGroq(prompt) {
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a JSON API. You only output raw valid JSON. Never use markdown, code fences, or any explanation.",
+      },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" }, // Groq supports this
+  });
+
+  return completion.choices[0]?.message?.content ?? null;
+}
+
+async function callGemini(prompt) {
+  const result = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    generationConfig: {
+      temperature: 0.1,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return result.text ?? null;
+}
+
+async function getAiResponse(prompt) {
+  // 1. Try Groq first
+  try {
+    const response = await callGroq(prompt);
+    if (response) {
+      console.log("[AI] Groq responded");
+      return response;
+    }
+  } catch (err) {
+    const isRateLimit =
+      err.status === 429 ||
+      err.message?.toLowerCase().includes("rate") ||
+      err.message?.toLowerCase().includes("quota");
+
+    if (isRateLimit) {
+      console.warn("[AI] Groq rate limited, falling back to Gemini...");
+    } else {
+      console.error("[AI] Groq error:", err.message);
+      throw err; // Non-rate-limit errors should bubble up
+    }
+  }
+
+  // 2. Fallback to Gemini
+  console.log("[AI] Using Gemini fallback");
+  return await callGemini(prompt);
 }
 
 router.post("/generate-latex", async (req, res) => {
-  const limit = Math.min(Number(req.body.limit) || 2, 100);
+  const limit = Math.min(Number(req.body.limit) || 20, 100);
 
   try {
     const questions = await Question.find({
@@ -2614,84 +2692,71 @@ router.post("/generate-latex", async (req, res) => {
     for (const question of questions) {
       try {
         const prompt = buildLatexPrompt(question);
-
-        let aiResponse;
-
-        // 1️⃣ Try Groq First
-        try {
-          const completion = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.2,
-          });
-
-          aiResponse = completion.choices[0]?.message?.content;
-        } catch (err) {
-          // Detect Groq rate limit
-          if (
-            err.message?.toLowerCase().includes("rate") ||
-            err.message?.toLowerCase().includes("quota") ||
-            err.status === 429
-          ) {
-            console.log("Groq rate limited. Switching to Gemini...");
-          } else {
-            throw err;
-          }
-        }
-
-        // 2️⃣ Fallback to Gemini if needed
-        if (!aiResponse) {
-          const result = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-          });
-
-          aiResponse = result.text;
-        }
+        const aiResponse = await getAiResponse(prompt);
 
         if (!aiResponse) {
-          errors.push({
-            questionId: question._id,
-            error: "Empty AI response",
-          });
+          errors.push({ questionId: question._id, error: "Empty AI response" });
           continue;
         }
 
         const parsed = safeJsonParse(aiResponse);
 
-        if (!parsed || !parsed.questionLatex) {
+        if (!parsed) {
+          console.error(
+            `[Question ${question._id}] Could not parse JSON. Raw response:\n`,
+            aiResponse?.slice(0, 1000),
+          );
           errors.push({
             questionId: question._id,
-            error: "Invalid JSON structure from AI",
+            error: "AI returned invalid JSON",
+            rawResponse: aiResponse?.slice(0, 500),
           });
           continue;
         }
 
-        // ✅ Save Question LaTeX
-        question.questionLatex = parsed.questionLatex;
-        question.isLatex = parsed.containsMath;
+        if (!parsed.questionLatex) {
+          errors.push({
+            questionId: question._id,
+            error: "Parsed JSON is missing questionLatex field",
+            parsed,
+          });
+          continue;
+        }
 
+        if (
+          !Array.isArray(parsed.answers) ||
+          parsed.answers.length !== question.answers.length
+        ) {
+          errors.push({
+            questionId: question._id,
+            error: `answers array length mismatch: expected ${question.answers.length}, got ${parsed.answers?.length}`,
+          });
+          continue;
+        }
+
+        // Apply LaTeX to question
+        question.questionLatex = parsed.questionLatex;
+        question.isLatex = parsed.containsMath ?? false;
+
+        // Apply LaTeX to explanation
         if (question.explanation) {
           question.explanationLatex =
             parsed.explanationLatex || question.explanation;
         }
 
-        // ✅ Save Answers LaTeX
+        // Apply LaTeX to answers
         question.answers = question.answers.map((ans, index) => ({
           ...ans.toObject(),
           latex: parsed.answers[index]?.latex || ans.name,
-          isLatex: parsed.answers[index]?.containsMath || false,
+          isLatex: parsed.answers[index]?.containsMath ?? false,
         }));
-
-        console.log(JSON.stringify(question, null, 2));
 
         await question.save();
         updated++;
+        console.log(`[✓] Updated question ${question._id}`);
       } catch (err) {
-        errors.push({
-          questionId: question._id,
-          error: err.message,
-        });
+        console.error(`[✗] Error on question ${question._id}:`, err.message);
+        errors.push({ questionId: question._id, error: err.message });
       }
     }
 
@@ -2702,10 +2767,7 @@ router.post("/generate-latex", async (req, res) => {
       errors,
     });
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
