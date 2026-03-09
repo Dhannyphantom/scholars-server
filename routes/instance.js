@@ -1584,6 +1584,354 @@ router.post("/submit_premium", auth, async (req, res) => {
   }
 });
 
+router.post("/submit_freemium", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const data = req.body;
+  const { questions, type, sessionId, duration } = data;
+
+  const userInfo = await User.findById(userId).select(
+    "accountType quota quotas points totalPoints qBank quizStats quizHistory class",
+  );
+
+  if (!userInfo) {
+    return res.status(422).send({
+      status: "failed",
+      message: "User not found",
+    });
+  }
+
+  if (userInfo.accountType !== "student") {
+    return res.status(422).send({
+      status: "failed",
+      message: "User not authorized",
+    });
+  }
+
+  try {
+    // ========================================
+    // POINT RULES (same as premium):
+    // 1. New question, correct first try               → +question.point (e.g. 5)
+    // 2. New question, wrong first try                 → -2
+    // 3. Retry question, previously wrong, now correct → +1
+    // 4. Retry question, previously wrong, still wrong → -0.2
+    // 5. Retry question, previously correct, correct   → 0
+    // 6. Retry question, previously correct, now wrong → -0.2
+    // ========================================
+
+    const POINTS_NEW_WRONG = -2;
+    const POINTS_RETRY_NOW_CORRECT = 5;
+    const POINTS_RETRY_NOW_WRONG = -2;
+    const POINTS_PREV_CORRECT_RETRY = 5;
+
+    // Build a lookup map from qBank: questionId → { correct }
+    const qBankMap = new Map(
+      (userInfo.qBank || []).map((entry) => [
+        entry.question.toString(),
+        { correct: entry.correct },
+      ]),
+    );
+
+    let totalPoints = 0;
+    const newQuestionIds = [];
+    const answeredQuestionIds = [];
+    const qBankUpdates = {}; // questionId → new correct boolean
+
+    let correctAnswers = 0;
+    let totalQuestions = 0;
+
+    const studentSubjects = [];
+    const questionIds = [];
+    const questionData = [];
+    const subjectIds = [];
+    const topicIds = [];
+
+    // Build per-subject stats map keyed by subjectId string
+    const subjectStatsMap = {};
+
+    questions.forEach((quest) => {
+      studentSubjects.push({
+        subject: quest.subject._id,
+        questions: quest.questions.map((q) => q._id),
+      });
+
+      subjectIds.push(quest.subject._id);
+
+      const subjKey = quest.subject._id.toString();
+      if (!subjectStatsMap[subjKey]) {
+        subjectStatsMap[subjKey] = {
+          subject: quest.subject._id,
+          totalQuestions: 0,
+          correctAnswers: 0,
+        };
+      }
+
+      quest.questions.forEach((question) => {
+        totalQuestions++;
+        questionIds.push(question._id);
+
+        const questionId = question._id.toString();
+        const isCorrect = !!question.answered?.correct;
+        const qBankEntry = qBankMap.get(questionId); // undefined = brand new
+        const isNew = qBankEntry === undefined;
+        const wasPrevCorrect = !isNew && qBankEntry.correct === true;
+
+        // Per-subject dashboard stats
+        subjectStatsMap[subjKey].totalQuestions++;
+        if (isCorrect) {
+          subjectStatsMap[subjKey].correctAnswers++;
+        }
+
+        // ---- POINT CALCULATION ----
+        if (isNew) {
+          newQuestionIds.push(question._id);
+          if (isCorrect) {
+            totalPoints += question.point; // Rule 1: +question.point
+          } else {
+            totalPoints += POINTS_NEW_WRONG; // Rule 2: -2
+          }
+        } else {
+          answeredQuestionIds.push(question._id);
+          if (wasPrevCorrect) {
+            if (isCorrect) {
+              totalPoints += POINTS_PREV_CORRECT_RETRY; // Rule 5: 0
+            } else {
+              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 6: -0.2
+            }
+          } else {
+            if (isCorrect) {
+              totalPoints += POINTS_RETRY_NOW_CORRECT; // Rule 3: +1
+            } else {
+              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 4: -0.2
+            }
+          }
+        }
+
+        if (isCorrect) correctAnswers++;
+
+        // Record the new correct state for this question
+        qBankUpdates[questionId] = isCorrect;
+
+        questionData.push({
+          question: question.question,
+          answers: question.answers?.map((ans) => ({
+            ...ans,
+            name: ans?.name || "None",
+          })),
+          answered: question.answered,
+          timer: question.timer,
+          point: question.point,
+          subject: question.subject,
+          topic: question.topic,
+          categories: question.categories,
+        });
+
+        if (!topicIds.includes(question.topic)) {
+          topicIds.push(question.topic);
+        }
+      });
+    });
+
+    // ========================================
+    // UPDATE USER qBank
+    // NOTE: Quota was already decremented during quiz fetch for freemium.
+    // We only need to keep qBank accurate so point rules stay correct
+    // on future attempts.
+    // ========================================
+    const existingQBankMap = new Map(
+      (userInfo.qBank || []).map((entry) => [entry.question.toString(), entry]),
+    );
+
+    for (const [questionId, correct] of Object.entries(qBankUpdates)) {
+      if (existingQBankMap.has(questionId)) {
+        existingQBankMap.get(questionId).correct = correct;
+      } else {
+        userInfo.qBank.push({ question: questionId, correct });
+      }
+    }
+
+    userInfo.markModified("qBank");
+
+    // ========================================
+    // UPDATE USER POINTS
+    // Freemium: only totalPoints is updated (not the spendable `points` field)
+    // ========================================
+    userInfo.totalPoints = (userInfo.totalPoints || 0) + totalPoints;
+
+    // ========================================
+    // UPDATE QUIZ STATS
+    // ========================================
+    if (!userInfo.quizStats) {
+      userInfo.quizStats = {};
+    }
+
+    const qs = userInfo.quizStats;
+
+    qs.totalQuizzes = (qs.totalQuizzes || 0) + 1;
+    qs.totalFreemiumQuizzes = (qs.totalFreemiumQuizzes || 0) + 1;
+    qs.totalCorrectAnswers = (qs.totalCorrectAnswers || 0) + correctAnswers;
+    qs.totalQuestionsAnswered =
+      (qs.totalQuestionsAnswered || 0) + totalQuestions;
+
+    // Recalculate overall accuracy rate
+    qs.accuracyRate =
+      qs.totalQuestionsAnswered > 0
+        ? parseFloat(
+            (
+              (qs.totalCorrectAnswers / qs.totalQuestionsAnswered) *
+              100
+            ).toFixed(2),
+          )
+        : 0;
+
+    // Best score check
+    if (totalPoints > (qs.bestScore?.points || 0)) {
+      qs.bestScore = {
+        points: totalPoints,
+        quizId: null, // will be set after newQuiz.save()
+        sessionId: sessionId || null,
+        date: new Date(),
+      };
+    }
+
+    // Fastest completion check
+    if (
+      duration &&
+      (!qs.fastestCompletion?.duration ||
+        duration < qs.fastestCompletion.duration)
+    ) {
+      qs.fastestCompletion = {
+        duration,
+        quizId: null, // will be set after newQuiz.save()
+        date: new Date(),
+      };
+    }
+
+    qs.lastQuizDate = new Date();
+
+    userInfo.markModified("quizStats");
+
+    // ========================================
+    // DASHBOARD: BUILD SUMMARY & SUBJECT BREAKDOWN
+    // ========================================
+    const subjectBreakdown = Object.values(subjectStatsMap).map((s) => ({
+      subject: s.subject,
+      totalQuestions: s.totalQuestions,
+      correctAnswers: s.correctAnswers,
+      accuracyRate:
+        s.totalQuestions > 0
+          ? parseFloat(((s.correctAnswers / s.totalQuestions) * 100).toFixed(2))
+          : 0,
+    }));
+
+    const overallAccuracyRate =
+      totalQuestions > 0
+        ? parseFloat(((correctAnswers / totalQuestions) * 100).toFixed(2))
+        : 0;
+
+    // ========================================
+    // DASHBOARD: RESOLVE SCHOOL ID
+    // ========================================
+    const studentSchool = await School.findOne(
+      { "students.user": userId, "students.verified": true },
+      { _id: 1 },
+    ).lean();
+
+    // ========================================
+    // SAVE QUIZ DOCUMENT
+    // ========================================
+    const newQuiz = new Quiz({
+      user: userId,
+      mode: "solo",
+      type: "freemium",
+      questions: questionData,
+      subjects: subjectIds,
+      topics: topicIds,
+      sessionId: sessionId,
+
+      school: studentSchool?._id || null,
+      classLevel: userInfo.class?.level || null,
+      summary: {
+        totalQuestions,
+        correctAnswers,
+        accuracyRate: overallAccuracyRate,
+        pointsEarned: totalPoints,
+        duration: duration || 0,
+        subjectBreakdown,
+      },
+    });
+
+    await newQuiz.save();
+
+    // Back-fill quizId into bestScore / fastestCompletion if they were just set
+    let statsDirty = false;
+
+    if (
+      userInfo.quizStats.bestScore?.quizId === null &&
+      userInfo.quizStats.bestScore?.sessionId === (sessionId || null)
+    ) {
+      userInfo.quizStats.bestScore.quizId = newQuiz._id;
+      statsDirty = true;
+    }
+
+    if (
+      userInfo.quizStats.fastestCompletion?.quizId === null &&
+      duration &&
+      userInfo.quizStats.fastestCompletion?.duration === duration
+    ) {
+      userInfo.quizStats.fastestCompletion.quizId = newQuiz._id;
+      statsDirty = true;
+    }
+
+    if (statsDirty) {
+      userInfo.markModified("quizStats");
+    }
+
+    // ========================================
+    // ADD TO QUIZ HISTORY
+    // ========================================
+    if (!userInfo.quizHistory) {
+      userInfo.quizHistory = [];
+    }
+
+    userInfo.quizHistory.push({
+      quizId: newQuiz._id,
+      sessionId: sessionId || new mongoose.Types.ObjectId().toString(),
+      mode: "solo",
+      type: "freemium",
+      pointsEarned: totalPoints,
+      correctAnswers,
+      totalQuestions,
+      rank: null,
+      isWinner: false,
+      participantCount: 1,
+      date: Date.now(),
+    });
+
+    await userInfo.save();
+    await logUserActivityDay(userId);
+    await syncUserStreak(userId);
+
+    res.send({
+      status: "success",
+      data: {
+        pointsEarned: totalPoints,
+        newQuestionsAnswered: newQuestionIds.length,
+        repeatedQuestions: answeredQuestionIds.length,
+        correctAnswers,
+        totalQuestions,
+        accuracy: overallAccuracyRate,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(422).send({
+      status: "failed",
+      message: "Something went wrong",
+      error: err.message,
+    });
+  }
+});
+
 /**
  * POST /instance/freemium_quiz
  *

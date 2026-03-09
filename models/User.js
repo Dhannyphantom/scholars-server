@@ -242,6 +242,10 @@ const quizStatsSchema = new schema({
     type: Number,
     default: 0,
   },
+  totalFreemiumQuizzes: {
+    type: Number,
+    default: 0,
+  },
   totalMultiplayerQuizzes: {
     type: Number,
     default: 0,
