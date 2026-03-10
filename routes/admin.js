@@ -13,6 +13,7 @@ const { AppInfo } = require("../models/AppInfo");
 
 // Middleware for admin authentication
 const adminAuth = require("../middlewares/adminRoutes");
+const { User } = require("../models/User");
 
 // Get wallet balances
 router.get("/wallets", adminAuth, async (req, res) => {
@@ -348,6 +349,28 @@ router.put("/q_update", async (req, res) => {
   // );
 
   res.send({ success: true, update: result?.modifiedCount || 0 });
+});
+
+router.post("/migrate/qbank", async (req, res) => {
+  const result = await User.updateMany({ "qBank.0": { $type: "objectId" } }, [
+    {
+      $set: {
+        qBank: {
+          $map: {
+            input: "$qBank",
+            as: "q",
+            in: { question: "$$q", correct: false },
+          },
+        },
+      },
+    },
+  ]);
+
+  res.json({
+    message: "qBank migration complete",
+    matched: result.matchedCount,
+    modified: result.modifiedCount,
+  });
 });
 
 module.exports = router;

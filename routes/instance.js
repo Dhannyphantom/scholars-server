@@ -133,7 +133,7 @@ router.get("/subject_category", auth, async (req, res) => {
 
     // Convert user's qBank to ObjectIds for matching
     const userQBank = (userInfo?.qBank || []).map(
-      (entry) => new mongoose.Types.ObjectId(entry.question.toString()),
+      (entry) => new mongoose.Types.ObjectId(entry?.question?.toString()),
     );
 
     // Aggregate subjects with progress tracking for this category
@@ -2011,9 +2011,6 @@ router.post("/freemium_quiz", auth, async (req, res) => {
           categories: catObjId,
           subject: subjObjId,
           topic: topicObjId,
-          // TODO:: CLEAN
-          questionLatex: { $exists: true, $ne: "" },
-          explanationLatex: { $exists: true, $ne: "" },
           isTheory: false,
         },
       },
