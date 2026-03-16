@@ -960,8 +960,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const { mode } = reqData; // 'solo' or 'friends'
 
-  // TODO:: UPDATE COUNT TO 25 PER SUBJECT ONCE TESTED
-  const QUESTION_COUNT = 5;
+  const QUESTION_COUNT = 25;
 
   try {
     const userInfo = await User.findById(userId).select("qBank quota").lean();

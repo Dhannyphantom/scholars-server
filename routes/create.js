@@ -66,6 +66,7 @@ router.post("/questions_auto", auth, async (req, res) => {
       topic: item?.topic?._id,
       categories: item?.categories?.map((obj) => obj._id),
       isTheory: item?.isTheory,
+      explanation: item?.explanation,
     });
 
     await question.save();
@@ -75,7 +76,7 @@ router.post("/questions_auto", auth, async (req, res) => {
         $addToSet: {
           questions: question._id,
         },
-      }
+      },
     );
 
     await User.updateOne(
@@ -84,7 +85,7 @@ router.post("/questions_auto", auth, async (req, res) => {
         $inc: {
           totalPoints: 10,
         },
-      }
+      },
     );
 
     //  save question to topics
@@ -111,7 +112,7 @@ router.post(
         if (err) {
           console.error("Error writing file:", err);
         }
-      }
+      },
     );
 
     reqData?.data?.forEach(async (item) => {
@@ -163,7 +164,7 @@ router.post(
           $addToSet: {
             questions: question._id,
           },
-        }
+        },
       );
 
       await User.updateOne(
@@ -172,14 +173,14 @@ router.post(
           $inc: {
             totalPoints: 10,
           },
-        }
+        },
       );
 
       //  save question to topics
     });
 
     res.send({ status: "success" });
-  }
+  },
 );
 
 router.post("/topic", auth, async (req, res) => {
@@ -200,7 +201,7 @@ router.post("/topic", auth, async (req, res) => {
         $addToSet: {
           topics: topic._id,
         },
-      }
+      },
     );
   });
 
@@ -235,7 +236,7 @@ router.post(
             $addToSet: {
               subjects: subject._id,
             },
-          }
+          },
         );
       } catch (error) {
         return res.status(422).send({ status: "failed", error });
@@ -243,7 +244,7 @@ router.post(
     });
 
     res.send({ status: "success" });
-  }
+  },
 );
 
 router.post(
@@ -277,8 +278,65 @@ router.post(
     });
 
     res.send({ status: "success" });
-  }
+  },
 );
+
+router.delete("/questions_auto", auth, async (req, res) => {
+  let userId = req.user.userId;
+  const { topicId, subjectId, username } = req.query;
+
+  if (!topicId) {
+    return res
+      .status(422)
+      .send({ message: "topicId is required", status: "failed" });
+  }
+
+  if (username) {
+    const userInfo = await User.findOne({
+      username: username?.toLowerCase(),
+    }).select("_id");
+    if (userInfo) {
+      userId = userInfo._id;
+    } else {
+      return res
+        .status(422)
+        .send({ message: "Username not registered", status: "failed" });
+    }
+  }
+
+  const filter = {
+    user: userId,
+    topic: topicId,
+    ...(subjectId && { subject: subjectId }),
+  };
+
+  const questions = await Question.find(filter).select("_id");
+
+  if (!questions.length) {
+    return res
+      .status(404)
+      .send({ message: "No questions found for this topic", status: "failed" });
+  }
+
+  const questionIds = questions.map((q) => q._id);
+
+  await Question.deleteMany({ _id: { $in: questionIds } });
+
+  await Topic.updateOne(
+    { _id: topicId },
+    { $pull: { questions: { $in: questionIds } } },
+  );
+
+  await User.updateOne(
+    { _id: userId },
+    { $inc: { totalPoints: -(10 * questionIds.length) } },
+  );
+
+  res.send({
+    status: "success",
+    message: `${questionIds.length} question(s) removed successfully`,
+  });
+});
 
 // router.get("/mod_questions", async (req, res) => {
 //   console.log("Modifying questions....");
