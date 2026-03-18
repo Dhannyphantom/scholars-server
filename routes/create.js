@@ -339,22 +339,39 @@ router.delete("/questions_auto", auth, async (req, res) => {
 });
 
 // router.get("/mod_questions", async (req, res) => {
-//   console.log("Modifying questions....");
-//   await Question.updateMany(
-//     { user: "68e2fb9b1fe9852f691949e6" },
-//     {
-//       $set: {
-//         categories: [
-//           "678d59448f4a1d454f2ce813",
-//           "678d59448f4a1d454f2ce811",
-//           "678d59448f4a1d454f2ce80d",
-//           "678d59448f4a1d454f2ce80f",
-//         ],
-//       },
-//     }
-//   );
+//   console.log("Modifying DB....");
+//   // const data = await Topic.updateMany(
+//   //   {
+//   //     _id: {
+//   //       $in: [
+//   //         "69b1b8b22ef27c21c2286204",
+//   //         "69b1b8c92ef27c21c2286207",
+//   //         "69b73f4b61d9d8ae64be4873",
+//   //         "69b7462561d9d8ae64be488d",
+//   //         "69b7462561d9d8ae64be488c",
+//   //         "69b7462561d9d8ae64be488b",
+//   //         "69b9a9f0e290d18b5cca323b",
+//   //         "69b9a9f0e290d18b5cca323d",
+//   //         "69b9a9f0e290d18b5cca323c",
+//   //         "69b9a9f0e290d18b5cca323a",
+//   //       ],
+//   //     },
+//   //   },
+//   //   {
+//   //     $addToSet: {
+//   //       categories: [
+//   //         "678d59448f4a1d454f2ce813",
+//   //         "678d59448f4a1d454f2ce811",
+//   //         "678d59448f4a1d454f2ce80d",
+//   //         "678d59448f4a1d454f2ce80f",
+//   //       ],
+//   //     },
+//   //   },
+//   // );
 
-//   res.send("Task completed!");
+//   const checker = await Topic.find({ categories: { $size: 0 } });
+
+//   res.send({ message: "DB modified successfully", checker });
 // });
 
 module.exports = router;

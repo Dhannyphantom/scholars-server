@@ -5,7 +5,12 @@ const { User } = require("../models/User");
 const auth = require("../middlewares/authRoutes");
 const adminAuth = require("../middlewares/adminRoutes");
 const mongoose = require("mongoose");
-const { capCapitalize, getFullName } = require("../controllers/helpers");
+const {
+  capCapitalize,
+  getFullName,
+  notifyAdmins,
+  notifyUser,
+} = require("../controllers/helpers");
 
 // ==========================================
 // USER ROUTES
@@ -90,6 +95,12 @@ router.post("/ticket", auth, async (req, res) => {
       success: true,
       message: "Support ticket created successfully",
       data: ticket,
+    });
+
+    await notifyAdmins({
+      title: `🚨New Support Ticket: ${categoryTitle}`,
+      message: description,
+      data: { ticketId: ticket._id },
     });
   } catch (error) {
     console.error("Create ticket error:", error);
@@ -335,6 +346,12 @@ router.post("/ticket/:ticketId/message", auth, async (req, res) => {
           lastMessageAt: ticket.lastMessageAt,
         },
       },
+    });
+
+    await notifyAdmins({
+      title: `📩 New Message in Ticket: ${ticket.categoryTitle}`,
+      message: text,
+      data: { ticketId },
     });
   } catch (error) {
     console.error("Send message error:", error);
@@ -639,6 +656,13 @@ router.post("/admin/ticket/:ticketId/reply", adminAuth, async (req, res) => {
       success: true,
       message: "Reply sent successfully",
       data: supportMessage,
+    });
+
+    await notifyUser({
+      userId: ticket.user,
+      title: "New Support Reply",
+      message: text,
+      data: { ticketId },
     });
   } catch (error) {
     console.error("Admin reply error:", error);

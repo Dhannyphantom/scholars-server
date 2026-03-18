@@ -87,6 +87,91 @@ const capFirstLetter = (str) => {
   return str[0].toUpperCase() + str.slice(1);
 };
 
+const notifyAdmins = async ({ title, message, data, image }) => {
+  try {
+    // 1. Fetch admins with expoPushToken
+    const admins = await User.find({
+      accountType: { $in: ["professional", "manager"] },
+      expoPushToken: { $exists: true, $ne: null },
+    }).select("expoPushToken");
+
+    if (!admins.length) {
+      return res.status(404).json({
+        status: "error",
+        message: "No admins with push tokens found",
+      });
+    }
+
+    // 2. Extract valid tokens
+    const tokens = [
+      ...new Set(
+        admins
+          .map((user) => user.expoPushToken)
+          .filter((token) => token && token.startsWith("ExponentPushToken")),
+      ),
+    ];
+
+    if (!tokens.length) {
+      return res.status(404).json({
+        status: "error",
+        message: "No valid Expo push tokens available",
+      });
+    }
+
+    // 3. Send notification
+    await expoNotifications(tokens, {
+      title,
+      message,
+      data,
+      image,
+    });
+  } catch (error) {}
+};
+
+const notifyUser = async ({ userId, title, message, data, image }) => {
+  try {
+    // 1. Fetch user with expoPushToken
+    const user = await User.findById(userId).select("expoPushToken");
+
+    if (!user) {
+      return {
+        status: "error",
+        message: "User not found",
+      };
+    }
+
+    if (!user.expoPushToken) {
+      return {
+        status: "error",
+        message: "User has no push token",
+      };
+    }
+
+    // 2. Validate token
+    const token = user.expoPushToken;
+
+    // 3. Send notification
+    await expoNotifications([token], {
+      title,
+      message,
+      data,
+      image,
+    });
+
+    // return {
+    //   status: "success",
+    //   message: "Notification sent successfully",
+    // };
+  } catch (error) {
+    console.error("User notification error:", error);
+
+    // return {
+    //   status: "error",
+    //   message: "Failed to send notification",
+    // };
+  }
+};
+
 const writeToJSONConsole = (data) => {
   if (!data) return;
 
@@ -701,6 +786,8 @@ module.exports = {
   ensureDirectory,
   fullUserSelector,
   writeToJSONConsole,
+  notifyAdmins,
+  notifyUser,
   capFirstLetter,
   createDir,
   capCapitalize,
