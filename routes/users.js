@@ -282,6 +282,196 @@ router.post("/password/reset", async (req, res) => {
   }
 });
 
+// ── EMAIL VERIFICATION ROUTES ─────────────────────────────────────────────────
+// Mount these inside your existing users router (alongside /password/reset)
+//
+// POST /users/email/send-otp    — sends a 6-digit OTP to the given email
+// POST /users/email/verify-otp  — verifies the OTP and marks email as verified
+// ─────────────────────────────────────────────────────────────────────────────
+
+// In-memory OTP store for email verification — swap for Redis/DB in production
+// Shape: { [email]: { otp: string, expiresAt: number, attempts: number, userId: string } }
+const emailOtpStore = new Map();
+
+const EMAIL_OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const EMAIL_OTP_MAX_ATTEMPTS = 5;
+const EMAIL_OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+
+// ── ROUTE 1: Send OTP ─────────────────────────────────────────────────────────
+// POST /users/email/send-otp
+// Headers: x-auth-token (user must be logged in)
+// Body: { email: string }
+//
+// RTK Query mutation: useSendEmailOtpMutation
+// Called with: sendEmailOtp(email)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/email/send-otp", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { email } = req.body;
+
+  // ── Validate email format ──────────────────────────────────────────────────
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res
+      .status(400)
+      .json({ error: "Please provide a valid email address." });
+  }
+
+  const normalizedEmail = email.toLowerCase();
+
+  // ── Check if this email is already verified by another account ─────────────
+  // const existingUser = await User.findOne({
+  //   email: normalizedEmail,
+  //   emailVerified: true,
+  //   _id: { $ne: userId }, // exclude current user (they may be re-verifying same email)
+  // }).catch(() => null);
+
+  // if (existingUser) {
+  //   return res.status(409).json({
+  //     error: "This email address is already in use by another account.",
+  //   });
+  // }
+
+  // ── Rate-limit: enforce 60s cooldown between resends ──────────────────────
+  const existing = emailOtpStore.get(normalizedEmail);
+
+  if (existing && existing.expiresAt > Date.now()) {
+    const ageMs = EMAIL_OTP_EXPIRY_MS - (existing.expiresAt - Date.now());
+    const cooldownRemaining = EMAIL_OTP_RESEND_COOLDOWN_MS - ageMs;
+
+    if (cooldownRemaining > 0) {
+      const waitSeconds = Math.ceil(cooldownRemaining / 1000);
+      return res.status(429).json({
+        error: `Please wait ${waitSeconds}s before requesting another code.`,
+      });
+    }
+  }
+
+  // ── Generate and store OTP ─────────────────────────────────────────────────
+  const otp = generateOTP(); // reuse the existing helper in this file
+
+  emailOtpStore.set(normalizedEmail, {
+    otp,
+    expiresAt: Date.now() + EMAIL_OTP_EXPIRY_MS,
+    attempts: 0,
+    userId, // bind OTP to the requesting user for extra security
+  });
+
+  // ── Send email ─────────────────────────────────────────────────────────────
+  try {
+    const user = await User.findById(userId).select("firstName username");
+
+    const html = await renderEmailTemplate("email_verification", {
+      userName: user?.firstName || user?.username || "User",
+      otp,
+      expiryMinutes: 10,
+      appName: "Guru EduTech",
+      supportEmail: "support@guruedutech.com",
+      year: new Date().getFullYear(),
+    });
+
+    await transporter.sendMail({
+      from: `"Guru EduTech" <no-reply@guruedutech.com>`,
+      to: email,
+      subject: "Verify your email address",
+      html,
+    });
+
+    return res.status(200).json({
+      message: "Verification code sent. Check your inbox!",
+    });
+  } catch (err) {
+    console.error("Email OTP mailer error:", err);
+    emailOtpStore.delete(normalizedEmail); // don't leave a phantom record
+    return res
+      .status(500)
+      .json({ error: "Failed to send email. Please try again." });
+  }
+});
+
+// ── ROUTE 2: Verify OTP ───────────────────────────────────────────────────────
+// POST /users/email/verify-otp
+// Headers: x-auth-token (user must be logged in)
+// Body: { email: string, otp: string }
+//
+// RTK Query mutation: useVerifyEmailOtpMutation
+// Called with: verifyEmailOtp({ email, otp })
+// On success: marks user.email = email, user.emailVerified = true in DB
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/email/verify-otp", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    return res.status(400).json({ error: "Email and code are required." });
+  }
+
+  const normalizedEmail = email.toLowerCase();
+
+  // ── Look up OTP record ─────────────────────────────────────────────────────
+  const record = emailOtpStore.get(normalizedEmail);
+
+  if (!record) {
+    return res.status(400).json({
+      error: "No active verification request. Please request a new code.",
+    });
+  }
+
+  // ── Verify the OTP belongs to this user (prevents cross-user exploitation) ─
+  if (record.userId !== userId) {
+    return res.status(403).json({
+      error: "This code was not issued for your account.",
+    });
+  }
+
+  // ── Check expiry ───────────────────────────────────────────────────────────
+  if (Date.now() > record.expiresAt) {
+    emailOtpStore.delete(normalizedEmail);
+    return res
+      .status(400)
+      .json({ error: "Code has expired. Please request a new one." });
+  }
+
+  // ── Increment attempt counter ──────────────────────────────────────────────
+  record.attempts += 1;
+
+  if (record.attempts > EMAIL_OTP_MAX_ATTEMPTS) {
+    emailOtpStore.delete(normalizedEmail);
+    return res.status(429).json({
+      error: "Too many incorrect attempts. Please request a new code.",
+    });
+  }
+
+  // ── Compare OTP ────────────────────────────────────────────────────────────
+  if (record.otp !== String(otp).trim()) {
+    const remaining = EMAIL_OTP_MAX_ATTEMPTS - record.attempts;
+    return res.status(400).json({
+      error: `Incorrect code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`,
+    });
+  }
+
+  // ── OTP is valid: update user's email and mark as verified ─────────────────
+  try {
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        email: normalizedEmail,
+        emailVerified: true,
+      },
+    });
+
+    // Invalidate OTP immediately — single use
+    emailOtpStore.delete(normalizedEmail);
+
+    return res.status(200).json({
+      message: "Email verified successfully.",
+    });
+  } catch (err) {
+    console.error("Email verification DB error:", err);
+    return res
+      .status(500)
+      .json({ error: "Something went wrong. Please try again." });
+  }
+});
+
 router.post("/register", async (req, res) => {
   const {
     username,

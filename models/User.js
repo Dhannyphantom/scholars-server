@@ -556,6 +556,10 @@ const userSchema = new schema({
     lowercase: true,
     trim: true,
   },
+  emailVerified: {
+    type: Boolean,
+    default: false,
+  },
   password: {
     type: String,
     required: true,
