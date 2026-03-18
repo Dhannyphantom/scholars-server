@@ -10,6 +10,7 @@ const PayoutRequest = require("../models/PayoutRequest");
 // Middleware to verify user authentication
 const authMiddleware = require("../middlewares/authRoutes");
 const adminMiddleware = require("../middlewares/adminRoutes");
+const managerMiddleware = require("../middlewares/managerAuth");
 const { User } = require("../models/User");
 const { getFullName } = require("../controllers/helpers");
 const PhoneValidator = require("../controllers/phoneValidation");
@@ -866,6 +867,162 @@ router.get("/subscription-status", authMiddleware, async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+});
+
+// POST /payouts/recover-subscription
+// User provides the flw_ref from their email receipt
+router.post("/recover-subscription", managerMiddleware, async (req, res) => {
+  try {
+    const { flw_ref, userId } = req.body;
+    // const userId = req.user.userId;
+
+    if (!flw_ref) {
+      return res.status(400).json({
+        success: false,
+        message: "Flutterwave reference (flw_ref) is required",
+      });
+    }
+
+    // Search Flutterwave for the transaction by flw_ref
+    const searchResult =
+      await flutterwaveService.findTransactionByFlwRef(flw_ref);
+
+    if (!searchResult.success) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Transaction not found. Please check your reference and try again.",
+      });
+    }
+
+    const transactionData = searchResult.data;
+
+    // Security: ensure this transaction belongs to the requesting user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    if (transactionData.customer?.email !== user.email) {
+      return res.status(403).json({
+        success: false,
+        message: "This transaction does not belong to your account",
+      });
+    }
+
+    if (transactionData.status !== "successful") {
+      return res.status(400).json({
+        success: false,
+        message: `Transaction status is '${transactionData.status}', not successful`,
+      });
+    }
+
+    const tx_ref = transactionData.tx_ref;
+    const transaction_id = transactionData.id;
+
+    // Check if already processed (idempotency)
+    const existingTransaction =
+      await walletService.getTransactionByReference(tx_ref);
+    if (existingTransaction) {
+      return res.json({
+        success: true,
+        message: "This payment has already been applied to your account",
+        data: {
+          pointsAdded: existingTransaction.metadata?.pointsAdded || 0,
+          walletCredited: existingTransaction.metadata?.walletCredited || 0,
+          alreadyProcessed: true,
+        },
+      });
+    }
+
+    // Reuse your existing verify-subscription logic
+    const amount = parseFloat(transactionData.amount);
+    const accountType = transactionData.meta?.account_type || "student";
+    const days = transactionData.meta?.days;
+    const schoolId = transactionData.meta?.schoolId;
+
+    await walletService.credit(accountType, amount, "subscription", tx_ref, {
+      flutterwaveReference: transaction_id,
+      userId,
+      schoolId,
+      customerEmail: transactionData.customer?.email,
+      customerName: transactionData.customer?.name || getFullName(user),
+      description: `${accountType === "school" ? "School" : "Student"} subscription (recovered)`,
+      pointsAdded: accountType === "student" ? amount * 10 : 0,
+      walletCredited: amount,
+      days,
+    });
+
+    if (accountType === "student") {
+      const today = new Date();
+      const millisToAdd = days * 24 * 60 * 60 * 1000;
+      let startDate =
+        user.subscription?.expiry && today < user.subscription.expiry
+          ? new Date(user.subscription.expiry)
+          : today;
+
+      user.subscription.expiry = new Date(startDate.getTime() + millisToAdd);
+      user.subscription.current = today;
+      user.subscription.isActive = true;
+      await user.save();
+    } else if (accountType === "school") {
+      const schoolData = await School.findById(schoolId);
+      if (!schoolData) {
+        return res
+          .status(404)
+          .json({ success: false, message: "School not found" });
+      }
+
+      const today = new Date();
+      const millisToAdd = days * 24 * 60 * 60 * 1000;
+      let startDate =
+        schoolData?.subscription?.expiry &&
+        today < schoolData.subscription.expiry
+          ? new Date(schoolData.subscription.expiry)
+          : today;
+
+      schoolData.subscription.expiry = new Date(
+        startDate.getTime() + millisToAdd,
+      );
+      schoolData.subscription.current = today;
+      schoolData.subscription.isActive = true;
+
+      const schoolObj = schoolData.toObject();
+      const teacherIds = schoolObj.teachers.map((t) => t.user);
+      schoolData.teachers = schoolObj.teachers.map((teacher) => {
+        if (
+          teacher?.user?.toString() === schoolObj.rep?.toString() &&
+          !teacher.verified
+        ) {
+          return { ...teacher, verified: true };
+        }
+        return teacher;
+      });
+
+      await schoolData.save();
+      await User.updateMany(
+        { _id: { $in: teacherIds } },
+        { $set: { subscription: schoolObj.subscription } },
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Payment successfully recovered and applied to your account",
+      data: {
+        amount,
+        accountType,
+        days,
+        transactionRef: tx_ref,
+        flwRef: flw_ref,
+      },
+    });
+  } catch (error) {
+    console.error("Recovery error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

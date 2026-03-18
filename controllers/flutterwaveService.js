@@ -379,6 +379,41 @@ class FlutterwaveService {
       };
     }
   }
+
+  async findTransactionByFlwRef(flwRef) {
+    try {
+      // Flutterwave supports filtering transactions by flw_ref
+      const response = await axios.get(`${this.baseUrl}/transactions`, {
+        params: {
+          flw_ref: flwRef,
+        },
+        headers: {
+          Authorization: `Bearer ${this.secretKey}`,
+        },
+      });
+
+      const transactions = response.data?.data;
+
+      if (!transactions || transactions.length === 0) {
+        return {
+          success: false,
+          error: "No transaction found for this reference",
+        };
+      }
+
+      // flw_ref should be unique, take the first result
+      return {
+        success: true,
+        data: transactions[0],
+      };
+    } catch (error) {
+      console.error("findTransactionByFlwRef error:", error.response?.data);
+      return {
+        success: false,
+        error: error.response?.data?.message || "Failed to find transaction",
+      };
+    }
+  }
 }
 
 module.exports = new FlutterwaveService();
