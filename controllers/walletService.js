@@ -17,11 +17,9 @@ class WalletService {
           accountType: walletType,
           $setOnInsert: { balance: 0, totalCredits: 0, totalDebits: 0 },
         },
-        { upsert: true, new: true }
+        { upsert: true, new: true },
       );
     }
-
-    console.log("Wallets initialized");
   }
 
   // Get wallet balance
@@ -118,7 +116,7 @@ class WalletService {
         // Not a duplicate key error
         await WalletTransaction.findOneAndUpdate(
           { reference },
-          { status: "failed", metadata: { ...metadata, error: error.message } }
+          { status: "failed", metadata: { ...metadata, error: error.message } },
         );
       }
       throw error;
@@ -189,7 +187,7 @@ class WalletService {
         // Not a duplicate key error
         await WalletTransaction.findOneAndUpdate(
           { reference },
-          { status: "failed", metadata: { ...metadata, error: error.message } }
+          { status: "failed", metadata: { ...metadata, error: error.message } },
         );
       }
       throw error;
