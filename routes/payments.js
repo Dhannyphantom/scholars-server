@@ -140,12 +140,12 @@ router.post("/subscribe", auth, async (req, res) => {
             "teachers.$.verified": true,
           },
           $push: subDetails.$push,
-        }
+        },
       );
       // subscribe all teachers
       await User.updateMany(
         { _id: { $in: school?.teachers } },
-        { $set: subDetails.$set }
+        { $set: subDetails.$set },
       );
     } else {
     }
@@ -180,7 +180,7 @@ router.post("/withdraw", auth, async (req, res) => {
               flw_ref: transfer.data?.id,
             },
           },
-        }
+        },
       );
     }
 
@@ -204,7 +204,7 @@ router.get("/subscription_callback", async (req, res) => {
         headers: {
           Authorization: `Bearer ${process.env.STACK_API}`,
         },
-      }
+      },
     );
 
     if (response.data.status) {
@@ -239,7 +239,7 @@ router.post("/verify_account", auth, async (req, res) => {
     account_number: acct_number,
     account_bank: bank?.code,
   };
-  const detail = await verifyAccount(payload, true);
+  const detail = await verifyAccount(payload);
 
   res.send(detail);
 });

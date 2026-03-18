@@ -6,7 +6,7 @@ const nanoid = uuid.v4;
 
 const flw = new Flutterwave(
   process.env.FLW_PUBLIC_KEY,
-  process.env.FLW_SECRET_KEY
+  process.env.FLW_SECRET_KEY,
 );
 const isOffline = process.env.NET_DEV;
 
@@ -218,10 +218,10 @@ const fetchBanks = async () => {
   }
 };
 
-const verifyAccount = async (data, test = false) => {
-  const payload = test
-    ? { account_number: "0690000032", account_bank: "044" }
-    : data;
+const verifyAccount = async (payload) => {
+  // const payload = test
+  //   ? { account_number: "0690000032", account_bank: "044" }
+  //   : data;
   try {
     const res = await flw.Misc.verify_Account(payload);
 

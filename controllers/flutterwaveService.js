@@ -203,10 +203,14 @@ class FlutterwaveService {
     try {
       // Correct biller codes from actual API
       const networkBillerMap = {
-        MTN: "BIL104",
-        GLO: "BIL105",
-        AIRTEL: "BIL106",
-        "9MOBILE": "BIL107",
+        MTN: "BIL108",
+        // MTN: "BIL104",
+        GLO: "BIL109",
+        // GLO: "BIL105",
+        AIRTEL: "BIL110",
+        // AIRTEL: "BIL106",
+        "9MOBILE": "BIL111",
+        // "9MOBILE": "BIL107",
       };
 
       const billerCode = networkBillerMap[network.toUpperCase()];
