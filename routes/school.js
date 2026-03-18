@@ -272,7 +272,7 @@ router.post("/join", auth, async (req, res) => {
   const { schoolId } = req.body;
 
   const userInfo = await User.findById(userId).select(
-    "accountType preffix firstName lastName username",
+    "accountType prefix firstName lastName username",
   );
   if (!userInfo)
     return res
@@ -285,108 +285,111 @@ router.post("/join", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "School not found" });
 
-  if (!school?.subscription?.isActive) {
+  if (!school?.subscription?.isActive)
     return res.status(422).send({
       status: "failed",
       message: "School does not have an active subscription",
     });
-  }
 
-  const isTeacher = userInfo?.accountType == "teacher";
-  const isStudent = userInfo?.accountType == "student";
+  const { accountType } = userInfo;
+  const isTeacher = accountType === "teacher";
+  const isStudent = accountType === "student";
 
-  let title, body;
+  // Will only be set if a new join request is actually created
+  let notificationPayload = null;
 
   if (isTeacher) {
-    // check if teacher has joined other schools
-    const teachSchool = await School.findOne({
+    // Remove teacher from any other school they previously joined
+    const prevSchool = await School.findOne({
       _id: { $ne: schoolId },
       "teachers.user": userId,
     });
-
-    if (teachSchool) {
-      // remove teacher from other school previously joined
-      teachSchool.teachers = teachSchool.teachers.filter(
-        (item) => item?.user?.toString() != userId,
+    if (prevSchool) {
+      prevSchool.teachers = prevSchool.teachers.filter(
+        (t) => t?.user?.toString() !== userId,
       );
-      await teachSchool.save();
+      await prevSchool.save();
     }
 
-    // Check if school already has this teacher
-    const checker = school.teachers.findIndex(
-      (item) => item?.user?.toString() == userId,
+    const alreadyJoined = school.teachers.some(
+      (t) => t?.user?.toString() === userId,
     );
-    if (checker < 0) {
-      const message = `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
+
+    if (!alreadyJoined) {
+      const message = `${capFirstLetter(userInfo?.prefix)} ${capFirstLetter(
         userInfo.firstName,
       )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
         school.name
       } as a teacher, you may verify or decline this request`;
+
       school.teachers.push({ user: userId });
-      school.announcements.push({
-        type: "system",
-        message,
-        visibility: "all",
-      });
+      school.announcements.push({ type: "system", message, visibility: "all" });
       await school.save();
-      title = "New Teacher Join Request";
-      body = message;
+
+      notificationPayload = {
+        title: "New Teacher Join Request",
+        body: message,
+      };
     }
   } else if (isStudent) {
-    // check if student has joined other schools
-    const stdSchool = await School.findOne({
+    // Remove student from any other school they previously joined
+    const prevSchool = await School.findOne({
       _id: { $ne: schoolId },
       "students.user": userId,
     });
-
-    if (stdSchool) {
-      stdSchool.students = stdSchool.students.filter(
-        (item) => item?.user?.toString() != userId,
+    if (prevSchool) {
+      prevSchool.students = prevSchool.students.filter(
+        (s) => s?.user?.toString() !== userId,
       );
-      await stdSchool.save();
+      await prevSchool.save();
     }
 
-    // Check if school already has this student
-    const checker = school.students.findIndex(
-      (item) => item?.user?.toString() == userId,
+    const alreadyJoined = school.students.some(
+      (s) => s?.user?.toString() === userId,
     );
-    if (checker < 0) {
-      const message = `${capFirstLetter(
-        userInfo.firstName,
-      )} ${capFirstLetter(userInfo?.lastName)} has requested to join ${
+
+    if (!alreadyJoined) {
+      const message = `${capFirstLetter(userInfo.firstName)} ${capFirstLetter(
+        userInfo?.lastName,
+      )} has requested to join ${
         school.name
       } as a student, you may verify or decline this request`;
+
       school.students.push({ user: userId });
-      school.announcements.push({
-        type: "system",
-        message,
-        visibility: "all",
-      });
+      school.announcements.push({ type: "system", message, visibility: "all" });
       await school.save();
-      title = "New Student Join Request";
-      body = message;
+
+      notificationPayload = {
+        title: "New Student Join Request",
+        body: message,
+      };
     }
   }
 
   res.send({ status: "success" });
-  const schoolObject = school.toObject();
-  const verifiedTeachers = schoolObject.teachers
-    .filter((teach) => teach.verified)
-    .map((teach) => teach.user);
-  const teachersArr = await User.findMany({ _id: { $in: verifiedTeachers } })
-    .select("expoPushToken")
-    .lean();
-  const tokens = teachersArr.map((teach) => teach.expoPushToken);
+
+  // Only send notifications if a new join request was actually created
+  if (!notificationPayload) return;
 
   try {
+    const verifiedTeachers = school
+      .toObject()
+      .teachers.filter((t) => t.verified)
+      .map((t) => t.user);
+
+    const teachersArr = await User.find({ _id: { $in: verifiedTeachers } })
+      .select("expoPushToken")
+      .lean();
+
+    const tokens = teachersArr.map((t) => t.expoPushToken).filter(Boolean);
+
     await expoNotifications(tokens, {
-      title,
-      message: body,
+      title: notificationPayload.title,
+      message: notificationPayload.body,
       data: {},
-      // image: userInfo?.avatar?.image?.uri
     });
-  } catch (errr) {
-    console.log("Notification sent failed");
+  } catch (err) {
+    console.error("Notification send failed:", err);
   }
 });
 
