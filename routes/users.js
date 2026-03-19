@@ -611,16 +611,51 @@ router.get("/user", auth, async (req, res) => {
   const expiryDate = new Date(userData?.subscription?.expiry);
 
   if (expiryDate < today && userData?.subscription?.isActive) {
-    // subscription expired
     userData.subscription.isActive = false;
     await userData.save();
   }
 
   if (expiryDate >= today && !userData?.subscription?.isActive) {
-    // subscription renewed
     userData.subscription.isActive = true;
     await userData.save();
   }
+
+  // ── Midnight-based quota reset ──────────────────────────────────────────
+  // Reset if last_update was on a DIFFERENT calendar day (not rolling 24h)
+  const quota = userData.quota;
+
+  if (quota?.last_update) {
+    const lastUpdate = new Date(quota.last_update);
+
+    const isNewDay =
+      lastUpdate.getFullYear() !== today.getFullYear() ||
+      lastUpdate.getMonth() !== today.getMonth() ||
+      lastUpdate.getDate() !== today.getDate();
+
+    if (isNewDay) {
+      // Archive the old quota before resetting (matching premium_quiz behaviour)
+      if (userData.quotas) {
+        userData.quotas.push(quota.toObject ? quota.toObject() : quota);
+      }
+
+      userData.quota = {
+        last_update: today,
+        daily_update: today,
+        weekly_update: quota.weekly_update, // preserve weekly tracker
+        freemium_update: today,
+        point_per_week: quota.point_per_week, // preserve weekly points
+        daily_questions: [],
+        daily_questions_count: 0,
+        freemium_daily_count: 0,
+        subjects: [],
+        daily_subjects: [],
+      };
+
+      userData.markModified("quota");
+      await userData.save();
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   res.json({ user: userData });
 });

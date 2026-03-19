@@ -997,15 +997,22 @@ router.post("/premium_quiz", auth, async (req, res) => {
     // FOR SOLO MODE: Check daily limits
     // FOR MULTIPLAYER: Skip limit checks (host manages this)
     if (mode === "solo") {
-      const A_DAY = 1000 * 60 * 60 * 24;
       const currentQuota = userInfo.quota;
-      const isToday =
-        currentQuota &&
-        new Date() - new Date(currentQuota.daily_update) < A_DAY;
 
-      const dailyQuestionsCount = isToday
-        ? currentQuota.daily_questions_count || 0
-        : 0;
+      const isNewDay = (() => {
+        if (!currentQuota?.daily_update) return true;
+        const last = new Date(currentQuota.daily_update);
+        const now = new Date();
+        return (
+          last.getFullYear() !== now.getFullYear() ||
+          last.getMonth() !== now.getMonth() ||
+          last.getDate() !== now.getDate()
+        );
+      })();
+
+      const dailyQuestionsCount = isNewDay
+        ? 0
+        : currentQuota.daily_questions_count || 0;
 
       const requestedQuestionsCount = reqData.subjects.length * QUESTION_COUNT;
 
@@ -1973,11 +1980,19 @@ router.post("/freemium_quiz", auth, async (req, res) => {
 
     // ── 3. Daily quota check ────────────────────────────────────────────────
     const quota = userInfo.quota || {};
-    const isToday =
-      quota.freemium_update &&
-      new Date() - new Date(quota.freemium_update) < A_DAY;
 
-    const usedToday = isToday ? quota.freemium_daily_count || 0 : 0;
+    const isNewDay = (() => {
+      if (!quota.freemium_update) return true;
+      const last = new Date(quota.freemium_update);
+      const now = new Date();
+      return (
+        last.getFullYear() !== now.getFullYear() ||
+        last.getMonth() !== now.getMonth() ||
+        last.getDate() !== now.getDate()
+      );
+    })();
+
+    const usedToday = isNewDay ? 0 : quota.freemium_daily_count || 0;
 
     if (usedToday >= FREEMIUM_QUESTION_COUNT) {
       return res.status(429).send({
@@ -1986,9 +2001,12 @@ router.post("/freemium_quiz", auth, async (req, res) => {
           "You've used your free 15 questions for today. Come back tomorrow! 🌅",
         data: {
           questionsRemaining: 0,
-          resetsAt: new Date(
-            new Date(quota.freemium_update).getTime() + A_DAY,
-          ).toISOString(),
+          resetsAt: (() => {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(0, 0, 0, 0);
+            return tomorrow.toISOString();
+          })(),
         },
       });
     }
