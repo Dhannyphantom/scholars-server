@@ -582,17 +582,29 @@ router.post("/login", async (req, res) => {
   const { error } = validateLog(req.body);
   if (error) return res.status(400).json(error.details[0].message);
 
+  // Normalize contact input to strip country/trunk prefix, leaving 10-digit local number
+  // Handles: +2348012345678 → 8012345678 | 08012345678 → 8012345678 | 8012345678 → 8012345678
+  const normalizeContact = (input) => {
+    const digits = input.replace(/\D/g, ""); // strip all non-digits
+    if (digits.startsWith("234") && digits.length > 10) return digits.slice(3); // +234 or 234 prefix
+    if (digits.startsWith("0") && digits.length === 11) return digits.slice(1); // 0XX trunk prefix
+    return digits; // already local format
+  };
+
+  const normalizedContact = normalizeContact(username);
+  const isContact = /^\d+$/.test(username.replace(/\D/g, "")); // true if input is numeric-ish
+
   const user = await User.findOne().or([
-    { email: username.toLowerCase() },
-    { username },
+    { username: username.toLowerCase() },
+    ...(isContact ? [{ contact: normalizedContact }] : []),
   ]);
 
-  if (!user) return res.status(400).json(`Invalid profile account`);
+  if (!user) return res.status(400).json("Invalid profile account");
 
   const passValid = await bcrypt.compare(password, user.password);
   if (!passValid) return res.status(400).json("Invalid profile details");
-  const token = user.generateAuthToken();
 
+  const token = user.generateAuthToken();
   const userData = await User.findById(user._id).select(fullUserSelector);
 
   res.header("x-auth-token", token).json({ token, user: userData });
