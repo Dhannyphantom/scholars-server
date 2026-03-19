@@ -105,6 +105,10 @@ const QuizSchema = new schema({
       type: Number,
       default: 0,
     },
+    retried: {
+      type: Boolean,
+      default: false,
+    },
     // Percentage: (correctAnswers / totalQuestions) * 100
     // Used for: overall school %, class comparisons, top students
     accuracyRate: {

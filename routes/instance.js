@@ -1219,10 +1219,14 @@ router.post("/premium_quiz", auth, async (req, res) => {
 // 3. UPDATED SUBMIT_PREMIUM ENDPOINT
 // ==========================================
 
+// ==========================================
+// UPDATED SUBMIT_PREMIUM ENDPOINT
+// ==========================================
+
 router.post("/submit_premium", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  const { questions, type, sessionId, duration } = data;
+  const { questions, type, sessionId, duration, retried } = data;
 
   const userInfo = await User.findById(userId).select(
     "accountType quota quotas points totalPoints qBank quizStats quizHistory class",
@@ -1243,24 +1247,11 @@ router.post("/submit_premium", auth, async (req, res) => {
   }
 
   try {
-    // const appInfo = await AppInfo.findOne({ ID: "APP" });
-
-    // ========================================
-    // POINT RULES:
-    // 1. New question, correct first try               → +question.point (e.g. 5)
-    // 2. New question, wrong first try                 → -2
-    // 3. Retry question, previously wrong, now correct → +1
-    // 4. Retry question, previously wrong, still wrong → -0.2
-    // 5. Retry question, previously correct, correct   → 0
-    // 6. Retry question, previously correct, now wrong → -0.2
-    // ========================================
-
     const POINTS_NEW_WRONG = -2;
     const POINTS_RETRY_NOW_CORRECT = 1;
     const POINTS_RETRY_NOW_WRONG = -0.2;
     const POINTS_PREV_CORRECT_RETRY = 0;
 
-    // Build a lookup map from qBank: questionId → { correct }
     const qBankMap = new Map(
       (userInfo.qBank || []).map((entry) => [
         entry.question.toString(),
@@ -1271,7 +1262,7 @@ router.post("/submit_premium", auth, async (req, res) => {
     let totalPoints = 0;
     const newQuestionIds = [];
     const answeredQuestionIds = [];
-    const qBankUpdates = {}; // questionId → new correct boolean
+    const qBankUpdates = {};
 
     let correctAnswers = 0;
     let totalQuestions = 0;
@@ -1282,7 +1273,6 @@ router.post("/submit_premium", auth, async (req, res) => {
     const subjectIds = [];
     const topicIds = [];
 
-    // Build per-subject stats map keyed by subjectId string
     const subjectStatsMap = {};
 
     questions.forEach((quest) => {
@@ -1308,44 +1298,41 @@ router.post("/submit_premium", auth, async (req, res) => {
 
         const questionId = question._id.toString();
         const isCorrect = !!question.answered?.correct;
-        const qBankEntry = qBankMap.get(questionId); // undefined = brand new
+        const qBankEntry = qBankMap.get(questionId);
         const isNew = qBankEntry === undefined;
         const wasPrevCorrect = !isNew && qBankEntry.correct === true;
 
-        // Per-subject dashboard stats
         subjectStatsMap[subjKey].totalQuestions++;
         if (isCorrect) {
           subjectStatsMap[subjKey].correctAnswers++;
         }
 
-        // ---- POINT CALCULATION ----
         if (isNew) {
           newQuestionIds.push(question._id);
           if (isCorrect) {
-            totalPoints += question.point; // Rule 1: +5 (question.point)
+            totalPoints += question.point;
           } else {
-            totalPoints += POINTS_NEW_WRONG; // Rule 2: -2
+            totalPoints += POINTS_NEW_WRONG;
           }
         } else {
           answeredQuestionIds.push(question._id);
           if (wasPrevCorrect) {
             if (isCorrect) {
-              totalPoints += POINTS_PREV_CORRECT_RETRY; // Rule 5: 0
+              totalPoints += POINTS_PREV_CORRECT_RETRY;
             } else {
-              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 6: -0.2
+              totalPoints += POINTS_RETRY_NOW_WRONG;
             }
           } else {
             if (isCorrect) {
-              totalPoints += POINTS_RETRY_NOW_CORRECT; // Rule 3: +1
+              totalPoints += POINTS_RETRY_NOW_CORRECT;
             } else {
-              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 4: -0.2
+              totalPoints += POINTS_RETRY_NOW_WRONG;
             }
           }
         }
 
         if (isCorrect) correctAnswers++;
 
-        // Record the new correct state for this question
         qBankUpdates[questionId] = isCorrect;
 
         questionData.push({
@@ -1369,85 +1356,89 @@ router.post("/submit_premium", auth, async (req, res) => {
     });
 
     // ========================================
-    // UPDATE QUOTA (SOLO MODE ONLY)
+    // UPDATE QUOTA (SOLO MODE ONLY, SKIP ON RETRY)
+    // Retried quizzes re-use already-counted questions,
+    // so we must not deduct from the daily allowance again.
     // ========================================
-    const A_DAY = 1000 * 60 * 60 * 24;
-    const A_WEEK = 1000 * 60 * 60 * 24 * 7;
+    if (!retried) {
+      const A_DAY = 1000 * 60 * 60 * 24;
+      const A_WEEK = 1000 * 60 * 60 * 24 * 7;
 
-    const currentQuota = userInfo.quota;
-    let updatedQuota;
-
-    if (
-      currentQuota &&
-      new Date() - new Date(currentQuota.daily_update) < A_DAY
-    ) {
-      const dailySubjects = currentQuota.daily_subjects || [];
-
-      questions.forEach((quest) => {
-        const subjId = quest.subject._id.toString();
-        const existingSubj = dailySubjects.find(
-          (s) => s.subject.toString() === subjId,
-        );
-
-        if (existingSubj) {
-          existingSubj.questions_count += quest.questions.length;
-        } else {
-          dailySubjects.push({
-            subject: quest.subject._id,
-            questions_count: quest.questions.length,
-            date: Date.now(),
-          });
-        }
-      });
-
-      updatedQuota = {
-        last_update: Date.now(),
-        daily_update: currentQuota.daily_update,
-        weekly_update: currentQuota.weekly_update,
-        point_per_week: totalPoints + currentQuota.point_per_week,
-        subjects: currentQuota.subjects.concat(studentSubjects),
-        daily_questions: currentQuota.daily_questions.concat(questionIds),
-        daily_questions_count:
-          (currentQuota.daily_questions_count || 0) + questionIds.length,
-        daily_subjects: dailySubjects,
-      };
-
-      if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
-        userInfo.quotas?.push(currentQuota);
-        updatedQuota.weekly_update = Date.now();
-        updatedQuota.point_per_week = totalPoints;
-      }
-    } else {
-      const dailySubjects = questions.map((quest) => ({
-        subject: quest.subject._id,
-        questions_count: quest.questions.length,
-        date: Date.now(),
-      }));
-
-      updatedQuota = {
-        last_update: Date.now(),
-        daily_update: Date.now(),
-        weekly_update: currentQuota?.weekly_update || Date.now(),
-        point_per_week: currentQuota
-          ? totalPoints + currentQuota.point_per_week
-          : totalPoints,
-        subjects: studentSubjects,
-        daily_questions: questionIds,
-        daily_questions_count: questionIds.length,
-        daily_subjects: dailySubjects,
-      };
+      const currentQuota = userInfo.quota;
+      let updatedQuota;
 
       if (
         currentQuota &&
-        new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+        new Date() - new Date(currentQuota.daily_update) < A_DAY
       ) {
-        userInfo.quotas?.push(currentQuota);
-        updatedQuota.weekly_update = Date.now();
-        updatedQuota.point_per_week = totalPoints;
-      }
-    }
+        const dailySubjects = currentQuota.daily_subjects || [];
 
-    userInfo.quota = updatedQuota;
+        questions.forEach((quest) => {
+          const subjId = quest.subject._id.toString();
+          const existingSubj = dailySubjects.find(
+            (s) => s.subject.toString() === subjId,
+          );
+
+          if (existingSubj) {
+            existingSubj.questions_count += quest.questions.length;
+          } else {
+            dailySubjects.push({
+              subject: quest.subject._id,
+              questions_count: quest.questions.length,
+              date: Date.now(),
+            });
+          }
+        });
+
+        updatedQuota = {
+          last_update: Date.now(),
+          daily_update: currentQuota.daily_update,
+          weekly_update: currentQuota.weekly_update,
+          point_per_week: totalPoints + currentQuota.point_per_week,
+          subjects: currentQuota.subjects.concat(studentSubjects),
+          daily_questions: currentQuota.daily_questions.concat(questionIds),
+          daily_questions_count:
+            (currentQuota.daily_questions_count || 0) + questionIds.length,
+          daily_subjects: dailySubjects,
+        };
+
+        if (new Date() - new Date(currentQuota.weekly_update) > A_WEEK) {
+          userInfo.quotas?.push(currentQuota);
+          updatedQuota.weekly_update = Date.now();
+          updatedQuota.point_per_week = totalPoints;
+        }
+      } else {
+        const dailySubjects = questions.map((quest) => ({
+          subject: quest.subject._id,
+          questions_count: quest.questions.length,
+          date: Date.now(),
+        }));
+
+        updatedQuota = {
+          last_update: Date.now(),
+          daily_update: Date.now(),
+          weekly_update: currentQuota?.weekly_update || Date.now(),
+          point_per_week: currentQuota
+            ? totalPoints + currentQuota.point_per_week
+            : totalPoints,
+          subjects: studentSubjects,
+          daily_questions: questionIds,
+          daily_questions_count: questionIds.length,
+          daily_subjects: dailySubjects,
+        };
+
+        if (
+          currentQuota &&
+          new Date() - new Date(currentQuota.weekly_update) > A_WEEK
+        ) {
+          userInfo.quotas?.push(currentQuota);
+          updatedQuota.weekly_update = Date.now();
+          updatedQuota.point_per_week = totalPoints;
+        }
+      }
+
+      userInfo.quota = updatedQuota;
+    }
 
     // ========================================
     // UPDATE USER POINTS & qBank
@@ -1455,9 +1446,6 @@ router.post("/submit_premium", auth, async (req, res) => {
     userInfo.points = Math.max(0, totalPoints + userInfo.points);
     userInfo.totalPoints += totalPoints;
 
-    // Merge qBankUpdates into the existing qBank array:
-    // - Existing questions → update their `correct` field
-    // - New questions → push a new entry
     const existingQBankMap = new Map(
       (userInfo.qBank || []).map((entry) => [entry.question.toString(), entry]),
     );
@@ -1525,7 +1513,6 @@ router.post("/submit_premium", auth, async (req, res) => {
       subjects: subjectIds,
       topics: topicIds,
       sessionId: sessionId,
-
       school: studentSchool?._id || null,
       classLevel: userInfo.class?.level || null,
       summary: {
@@ -1535,6 +1522,7 @@ router.post("/submit_premium", auth, async (req, res) => {
         pointsEarned: totalPoints,
         duration: duration || 0,
         subjectBreakdown,
+        retried: retried || false,
       },
     });
 
@@ -1593,7 +1581,7 @@ router.post("/submit_premium", auth, async (req, res) => {
 router.post("/submit_freemium", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
-  const { questions, type, sessionId, duration } = data;
+  const { questions, type, sessionId, duration, retried } = data;
 
   const userInfo = await User.findById(userId).select(
     "accountType quota quotas points totalPoints qBank quizStats quizHistory class",
@@ -1614,22 +1602,11 @@ router.post("/submit_freemium", auth, async (req, res) => {
   }
 
   try {
-    // ========================================
-    // POINT RULES (same as premium):
-    // 1. New question, correct first try               → +question.point (e.g. 5)
-    // 2. New question, wrong first try                 → -2
-    // 3. Retry question, previously wrong, now correct → +1
-    // 4. Retry question, previously wrong, still wrong → -0.2
-    // 5. Retry question, previously correct, correct   → 0
-    // 6. Retry question, previously correct, now wrong → -0.2
-    // ========================================
-
     const POINTS_NEW_WRONG = -2;
     const POINTS_RETRY_NOW_CORRECT = 5;
     const POINTS_RETRY_NOW_WRONG = -2;
     const POINTS_PREV_CORRECT_RETRY = 5;
 
-    // Build a lookup map from qBank: questionId → { correct }
     const qBankMap = new Map(
       (userInfo.qBank || []).map((entry) => [
         entry.question.toString(),
@@ -1640,7 +1617,7 @@ router.post("/submit_freemium", auth, async (req, res) => {
     let totalPoints = 0;
     const newQuestionIds = [];
     const answeredQuestionIds = [];
-    const qBankUpdates = {}; // questionId → new correct boolean
+    const qBankUpdates = {};
 
     let correctAnswers = 0;
     let totalQuestions = 0;
@@ -1651,7 +1628,6 @@ router.post("/submit_freemium", auth, async (req, res) => {
     const subjectIds = [];
     const topicIds = [];
 
-    // Build per-subject stats map keyed by subjectId string
     const subjectStatsMap = {};
 
     questions.forEach((quest) => {
@@ -1677,44 +1653,41 @@ router.post("/submit_freemium", auth, async (req, res) => {
 
         const questionId = question._id.toString();
         const isCorrect = !!question.answered?.correct;
-        const qBankEntry = qBankMap.get(questionId); // undefined = brand new
+        const qBankEntry = qBankMap.get(questionId);
         const isNew = qBankEntry === undefined;
         const wasPrevCorrect = !isNew && qBankEntry.correct === true;
 
-        // Per-subject dashboard stats
         subjectStatsMap[subjKey].totalQuestions++;
         if (isCorrect) {
           subjectStatsMap[subjKey].correctAnswers++;
         }
 
-        // ---- POINT CALCULATION ----
         if (isNew) {
           newQuestionIds.push(question._id);
           if (isCorrect) {
-            totalPoints += question.point; // Rule 1: +question.point
+            totalPoints += question.point;
           } else {
-            totalPoints += POINTS_NEW_WRONG; // Rule 2: -2
+            totalPoints += POINTS_NEW_WRONG;
           }
         } else {
           answeredQuestionIds.push(question._id);
           if (wasPrevCorrect) {
             if (isCorrect) {
-              totalPoints += POINTS_PREV_CORRECT_RETRY; // Rule 5: 0
+              totalPoints += POINTS_PREV_CORRECT_RETRY;
             } else {
-              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 6: -0.2
+              totalPoints += POINTS_RETRY_NOW_WRONG;
             }
           } else {
             if (isCorrect) {
-              totalPoints += POINTS_RETRY_NOW_CORRECT; // Rule 3: +1
+              totalPoints += POINTS_RETRY_NOW_CORRECT;
             } else {
-              totalPoints += POINTS_RETRY_NOW_WRONG; // Rule 4: -0.2
+              totalPoints += POINTS_RETRY_NOW_WRONG;
             }
           }
         }
 
         if (isCorrect) correctAnswers++;
 
-        // Record the new correct state for this question
         qBankUpdates[questionId] = isCorrect;
 
         questionData.push({
@@ -1739,10 +1712,18 @@ router.post("/submit_freemium", auth, async (req, res) => {
 
     // ========================================
     // UPDATE USER qBank
-    // NOTE: Quota was already decremented during quiz fetch for freemium.
-    // We only need to keep qBank accurate so point rules stay correct
-    // on future attempts.
+    // Quota was already decremented during quiz fetch.
+    // On retry, skip updating quota entirely so the daily
+    // freemium allowance is not consumed a second time.
     // ========================================
+    if (!retried) {
+      // Nothing extra to do here for freemium quota —
+      // the daily count was already decremented at fetch time
+      // (in /freemium_quiz). We keep this block as a clear
+      // signal that retries intentionally bypass any future
+      // quota logic added here.
+    }
+
     const existingQBankMap = new Map(
       (userInfo.qBank || []).map((entry) => [entry.question.toString(), entry]),
     );
@@ -1759,7 +1740,7 @@ router.post("/submit_freemium", auth, async (req, res) => {
 
     // ========================================
     // UPDATE USER POINTS
-    // Freemium: only totalPoints is updated (not the spendable `points` field)
+    // Freemium: only totalPoints is updated (not spendable `points`)
     // ========================================
     userInfo.totalPoints = (userInfo.totalPoints || 0) + totalPoints;
 
@@ -1778,7 +1759,6 @@ router.post("/submit_freemium", auth, async (req, res) => {
     qs.totalQuestionsAnswered =
       (qs.totalQuestionsAnswered || 0) + totalQuestions;
 
-    // Recalculate overall accuracy rate
     qs.accuracyRate =
       qs.totalQuestionsAnswered > 0
         ? parseFloat(
@@ -1789,17 +1769,15 @@ router.post("/submit_freemium", auth, async (req, res) => {
           )
         : 0;
 
-    // Best score check
     if (totalPoints > (qs.bestScore?.points || 0)) {
       qs.bestScore = {
         points: totalPoints,
-        quizId: null, // will be set after newQuiz.save()
+        quizId: null,
         sessionId: sessionId || null,
         date: new Date(),
       };
     }
 
-    // Fastest completion check
     if (
       duration &&
       (!qs.fastestCompletion?.duration ||
@@ -1807,7 +1785,7 @@ router.post("/submit_freemium", auth, async (req, res) => {
     ) {
       qs.fastestCompletion = {
         duration,
-        quizId: null, // will be set after newQuiz.save()
+        quizId: null,
         date: new Date(),
       };
     }
@@ -1853,7 +1831,6 @@ router.post("/submit_freemium", auth, async (req, res) => {
       subjects: subjectIds,
       topics: topicIds,
       sessionId: sessionId,
-
       school: studentSchool?._id || null,
       classLevel: userInfo.class?.level || null,
       summary: {
@@ -1863,6 +1840,7 @@ router.post("/submit_freemium", auth, async (req, res) => {
         pointsEarned: totalPoints,
         duration: duration || 0,
         subjectBreakdown,
+        retried: retried || false,
       },
     });
 
