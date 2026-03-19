@@ -711,9 +711,48 @@ router.post("/quiz", auth, async (req, res) => {
   }
 
   await school.save();
-  // START A QUIZ SESSION
 
   res.send({ status: "success" });
+
+  // ── Notify target class students ────────────────────────────────────────
+  try {
+    // Find the matching class inside the school to get its student ObjectIds
+    const targetClass = school.classes.find(
+      (c) => c.level === schoolClass?.name?.toLowerCase(),
+    );
+
+    if (targetClass && targetClass.students.length > 0) {
+      // Fetch expoPushToken for every student in the class in one query
+      const students = await User.find(
+        { _id: { $in: targetClass.students } },
+        { expoPushToken: 1 },
+      ).lean();
+
+      const tokens = students.map((s) => s.expoPushToken).filter(Boolean); // drop nulls / undefined
+
+      if (tokens.length > 0) {
+        await expoNotifications(tokens, {
+          title: `📝 New ${capFirstLetter(subject?.name)} Quiz`,
+          message: `${userInfo.preffix ? userInfo.preffix + " " : ""}${
+            userInfo.firstName
+          } ${userInfo.lastName} has started a ${capFirstLetter(
+            title,
+          )} ${capFirstLetter(
+            subject?.name,
+          )} quiz for your class. Tap to join!`,
+          data: {
+            channel: "Quiz",
+            schoolId,
+            type: "quiz",
+          },
+        });
+      }
+    }
+  } catch (notifErr) {
+    // Notification failure must never block the quiz from being saved
+    console.error("Quiz notification error:", notifErr);
+  }
+  // ────────────────────────────────────────────────────────────────────────
 });
 
 router.get("/quiz_session_students", auth, async (req, res) => {
@@ -804,11 +843,9 @@ router.put("/quiz", auth, async (req, res) => {
       status: quizData?.status,
       subject: quizData?.subject,
       class: quizData?.class,
-      title: quizData?.title,
       date: new Date(),
       teacher: userId,
     };
-    // update questions
     school.quiz[quizIdx].questions = quizData?.questions;
     school.quiz[quizIdx]._id = quizData?._id;
 
@@ -850,17 +887,45 @@ router.put("/quiz_status", auth, async (req, res) => {
       .status(422)
       .send({ status: "failed", message: "School not found" });
 
+  // ── Notification helper scoped to this request ───────────────────────────
+  const notifyClass = async ({ title, message, data = {} }) => {
+    try {
+      const targetClass = school.classes.find(
+        (c) => c.level === schoolClass?.toLowerCase(),
+      );
+      if (!targetClass || targetClass.students.length === 0) return;
+
+      const students = await User.find(
+        { _id: { $in: targetClass.students } },
+        { expoPushToken: 1 },
+      ).lean();
+
+      const tokens = students.map((s) => s.expoPushToken).filter(Boolean);
+      if (tokens.length === 0) return;
+
+      await expoNotifications(tokens, {
+        title,
+        message,
+        data: { channel: "Quiz", schoolId, quizId, type: "quiz", ...data },
+      });
+    } catch (err) {
+      console.error("quiz_status notification error:", err);
+    }
+  };
+
+  const teacherName = `${capFirstLetter(userInfo?.preffix) ? capFirstLetter(userInfo?.preffix) + " " : ""}${capFirstLetter(userInfo?.firstName)} ${capFirstLetter(userInfo?.lastName)}`;
+  // ─────────────────────────────────────────────────────────────────────────
+
   let pusher = {};
+  // Collects the notification payload during the DB work so it can be
+  // dispatched after res.send() without blocking the response.
+  let pendingNotification = null;
 
   if (status === "active") {
     pusher.$push = {
       announcements: {
         teacher: userId,
-        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo?.firstName,
-        )} ${capFirstLetter(
-          userInfo?.lastName,
-        )} has started a new quiz session for your class\nParticipate Now`,
+        message: `${teacherName} has started a new quiz session for your class\nParticipate Now`,
         classes: [schoolClass],
       },
     };
@@ -875,6 +940,12 @@ router.put("/quiz_status", auth, async (req, res) => {
         ...pusher,
       },
     );
+
+    pendingNotification = {
+      title: "📝 New Quiz Session",
+      message: `${teacherName} has started a new quiz session for your class. Participate now!`,
+      data: { status: "active" },
+    };
   } else if (status === "inactive") {
     await School.updateOne(
       { _id: schoolId, "quiz._id": quizId },
@@ -885,31 +956,13 @@ router.put("/quiz_status", auth, async (req, res) => {
         },
       },
     );
+
+    pendingNotification = {
+      title: "⏸️ Quiz Paused",
+      message: `${teacherName} has paused the quiz session for your class.`,
+      data: { status: "inactive" },
+    };
   } else if (status === "review") {
-    // Close quiz session
-    // set quiz obj to false
-    // const schoolData = school.toObject();
-    // const quiz = schoolData.quiz.find(
-    //   (item) => item._id?.toString() === quizId,
-    // );
-    // const session = quiz.sessions.find(
-    //   (item) => item._id?.toString() == quiz.currentSession,
-    // );
-
-    // school.announcements.push({
-    //   teacher: userId,
-    //   message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-    //     userInfo?.firstName,
-    //   )} ${capFirstLetter(
-    //     userInfo?.lastName,
-    //   )} has closed the quiz session for your class\nWait for your scores to be released`,
-    //   classes: [schoolClass],
-    // });
-    // quiz.currentSubmissions = [];
-    // quiz.currentSession = quiz._id;
-    // session.ended = true;
-
-    // await school.save();
     const quiz = school.quiz.id(quizId);
     if (!quiz)
       return res
@@ -922,39 +975,29 @@ router.put("/quiz_status", auth, async (req, res) => {
         .status(422)
         .send({ status: "failed", message: "Session not found" });
 
-    // Set quiz status to review
     quiz.status = "review";
-
-    // End current session
     session.ended = true;
-
-    // Clear live submissions
     quiz.currentSubmissions = [];
-
-    // Reset current session reference (optional but cleaner)
     quiz.currentSession = quizId;
 
-    // Push announcement
     school.announcements.push({
       teacher: userId,
-      message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-        userInfo?.firstName,
-      )} ${capFirstLetter(
-        userInfo?.lastName,
-      )} has closed the quiz session for your class\nWait for your scores to be released`,
+      message: `${teacherName} has closed the quiz session for your class\nWait for your scores to be released`,
       classes: [schoolClass],
     });
 
     await school.save();
+
+    pendingNotification = {
+      title: "🔒 Quiz Closed",
+      message: `${teacherName} has closed the quiz. Sit tight — your scores will be released soon!`,
+      data: { status: "review" },
+    };
   } else if (status === "result") {
     pusher.$push = {
       announcements: {
         teacher: userId,
-        message: `${capFirstLetter(userInfo?.preffix)} ${capFirstLetter(
-          userInfo?.firstName,
-        )} ${capFirstLetter(
-          userInfo?.lastName,
-        )} has released your quiz score. Check yours now!`,
+        message: `${teacherName} has released your quiz score. Check yours now!`,
         classes: [schoolClass],
       },
     };
@@ -969,9 +1012,22 @@ router.put("/quiz_status", auth, async (req, res) => {
         ...pusher,
       },
     );
+
+    pendingNotification = {
+      title: "🎉 Quiz Results Released",
+      message: `${teacherName} has released your quiz scores. Check yours now!`,
+      data: { status: "result" },
+    };
   }
 
+  // Flush the response to the teacher immediately …
   res.send({ status: "success" });
+
+  // … then fire notifications in the background without awaiting.
+  // notifyClass() has its own try/catch so any error is only logged.
+  if (pendingNotification) {
+    notifyClass(pendingNotification);
+  }
 });
 
 router.get("/quiz_history_user", auth, async (req, res) => {
