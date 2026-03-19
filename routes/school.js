@@ -1616,10 +1616,315 @@ router.get("/assignments", auth, async (req, res) => {
   res.send({ status: "success", data });
 });
 
+// START ===============================================
+// ── Shared notification helper for assignments ────────────────────────────────
+// Resolves student push tokens for one or more class levels and fires in the
+// background. Always call WITHOUT await after res.send().
+const notifyAssignmentClasses = async ({
+  school,
+  classes = [], // array of class-level strings e.g. ["sss 1", "jss 3"]
+  schoolId,
+  assignmentId,
+  title,
+  message,
+  data = {},
+}) => {
+  try {
+    // Collect student ObjectIds across all targeted classes
+    const studentIds = school.classes
+      .filter((c) => classes.includes(c.level))
+      .flatMap((c) => c.students);
+
+    if (studentIds.length === 0) return;
+
+    const students = await User.find(
+      { _id: { $in: studentIds } },
+      { expoPushToken: 1 },
+    ).lean();
+
+    const tokens = students.map((s) => s.expoPushToken).filter(Boolean);
+    if (tokens.length === 0) return;
+
+    await expoNotifications(tokens, {
+      title,
+      message,
+      data: {
+        channel: "Assignment",
+        schoolId,
+        assignmentId,
+        type: "assignment",
+        ...data,
+      },
+    });
+  } catch (err) {
+    console.error("assignment notification error:", err);
+  }
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PATCH /assignment  – change status (ongoing | inactive)
+router.patch("/assignment", auth, async (req, res) => {
+  try {
+    const { status, date, schoolId, assignmentId } = req.body;
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. User not authenticated",
+      });
+    }
+
+    if (!schoolId || !assignmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "schoolId and assignmentId are required",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid school ID" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid assignment ID" });
+    }
+
+    const validStatuses = ["ongoing", "inactive"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status. Must be 'ongoing' or 'inactive'",
+      });
+    }
+
+    const school = await School.findOne({
+      _id: schoolId,
+      "assignments._id": assignmentId,
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School or assignment not found",
+      });
+    }
+
+    const assignment = school.assignments.find(
+      (a) => a._id.toString() === assignmentId,
+    );
+
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to update this assignment",
+      });
+    }
+
+    const updateFields = { "assignments.$.status": status };
+
+    if (date) {
+      updateFields["assignments.$.expiry"] = new Date(date);
+      updateFields["assignments.$.date"] = new Date();
+    }
+
+    const updatedSchool = await School.findOneAndUpdate(
+      { _id: schoolId, "assignments._id": assignmentId },
+      { $set: updateFields },
+      { new: true },
+    );
+
+    const updatedAssignment = updatedSchool.assignments.find(
+      (a) => a._id.toString() === assignmentId,
+    );
+
+    // ── Flush response, then notify in background ─────────────────────────
+    res.status(200).json({
+      success: true,
+      message: "Assignment status updated successfully",
+      data: {
+        assignmentId: updatedAssignment._id,
+        status: updatedAssignment.status,
+        title: updatedAssignment.title,
+      },
+    });
+
+    const notificationMap = {
+      ongoing: {
+        title: "📋 Assignment Activated",
+        message: `"${updatedAssignment.title}" is now open for submissions. Don't miss the deadline!`,
+        data: { status: "ongoing" },
+      },
+      inactive: {
+        title: "⏸️ Assignment Closed",
+        message: `"${updatedAssignment.title}" has been closed and is no longer accepting submissions.`,
+        data: { status: "inactive" },
+      },
+    };
+
+    notifyAssignmentClasses({
+      school,
+      classes: updatedAssignment.classes,
+      schoolId,
+      assignmentId,
+      ...notificationMap[status],
+    });
+    // ─────────────────────────────────────────────────────────────────────
+  } catch (error) {
+    console.error("Error updating assignment status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating assignment status",
+      error: error.message,
+    });
+  }
+});
+
+// POST /assignment/publish  – release scores
+router.post("/assignment/publish", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, assignmentId } = req.body;
+
+  try {
+    if (!schoolId || !assignmentId) {
+      return res.status(400).send({
+        status: "failed",
+        message: "School ID and Assignment ID are required",
+      });
+    }
+
+    const userInfo = await User.findById(userId).select(
+      "accountType firstName lastName preffix",
+    );
+    if (!userInfo) {
+      return res
+        .status(422)
+        .send({ status: "failed", message: "User not found" });
+    }
+
+    if (userInfo.accountType !== "teacher") {
+      return res.status(403).send({
+        status: "failed",
+        message: "Only teachers can publish assignments",
+      });
+    }
+
+    const school = await School.findById(schoolId);
+    if (!school) {
+      return res
+        .status(422)
+        .send({ status: "failed", message: "School not found" });
+    }
+
+    const assignment = school.assignments.id(assignmentId);
+    if (!assignment) {
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Assignment not found" });
+    }
+
+    if (assignment.teacher.toString() !== userId) {
+      return res.status(403).send({
+        status: "failed",
+        message: "You are not authorized to publish this assignment",
+      });
+    }
+
+    if (assignment.expiry) {
+      const currentDate = new Date();
+      if (currentDate < assignment.expiry) {
+        return res.status(400).send({
+          status: "failed",
+          message: "Cannot publish assignment before submission date",
+        });
+      }
+    }
+
+    const unscoredSubmissions = assignment.submissions.filter(
+      (submission) =>
+        submission.score?.value === undefined ||
+        submission.score?.value === null,
+    );
+
+    if (unscoredSubmissions.length > 0) {
+      return res.status(400).send({
+        status: "failed",
+        message: `${unscoredSubmissions.length} submission(s) have not been scored yet`,
+      });
+    }
+
+    if (assignment.submissions.length > 0) {
+      assignment.history.push({
+        participants: assignment.submissions.map((submission) => ({
+          student: submission.student,
+          score: submission.score,
+          solution: submission.solution,
+          date: submission.date,
+        })),
+        createdAt: new Date(),
+      });
+    }
+
+    assignment.submissions = [];
+    assignment.status = "inactive";
+
+    const teacherName = `${userInfo?.preffix ? userInfo.preffix + " " : ""}${userInfo.firstName} ${userInfo.lastName}`;
+
+    school.announcements.push({
+      teacher: userId,
+      message: `${teacherName} has published scores for "${assignment.title}"`,
+      type: "school",
+      classes: assignment.classes,
+      visibility: "class",
+      date: new Date(),
+    });
+
+    await school.save();
+
+    // ── Flush response, then notify in background ─────────────────────────
+    res.send({
+      status: "success",
+      message: "Assignment published successfully",
+      data: {
+        assignment: {
+          _id: assignment._id,
+          title: assignment.title,
+          status: assignment.status,
+        },
+      },
+    });
+
+    notifyAssignmentClasses({
+      school,
+      classes: assignment.classes,
+      schoolId,
+      assignmentId,
+      title: "🎉 Assignment Scores Released",
+      message: `${teacherName} has published scores for "${assignment.title}". Check your result now!`,
+      data: { status: "result" },
+    });
+    // ─────────────────────────────────────────────────────────────────────
+  } catch (error) {
+    console.error("Error publishing assignment:", error);
+    res.status(500).send({
+      status: "failed",
+      message: "An error occurred while publishing the assignment",
+    });
+  }
+});
+
 router.post("/assignment", auth, async (req, res) => {
   const userId = req.user.userId;
   const data = req.body;
   const { classes, title, question, subject, date, status, schoolId } = data;
+
+  const userInfo = await User.findById(userId)
+    .select("preffix firstName lastName")
+    .lean();
 
   const school = await School.findById(schoolId);
 
@@ -1640,8 +1945,118 @@ router.post("/assignment", auth, async (req, res) => {
 
   await school.save();
 
+  // ── Flush response, then notify in background ───────────────────────────
   res.send({ status: "success" });
+
+  if (status === "ongoing" && userInfo) {
+    const newAssignment = school.assignments[school.assignments.length - 1];
+    const teacherName = `${userInfo?.preffix ? userInfo.preffix + " " : ""}${userInfo.firstName} ${userInfo.lastName}`;
+
+    notifyAssignmentClasses({
+      school,
+      classes: classes.map((item) => item.name?.toLowerCase()),
+      schoolId,
+      assignmentId: newAssignment?._id,
+      title: "📚 New Assignment",
+      message: `${teacherName} has posted a new assignment: "${title}". Check it out!`,
+      data: { status: "ongoing" },
+    });
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 });
+
+router.post("/assignment/submit", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, assignmentId, solution } = req.body;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. User not authenticated",
+    });
+  }
+
+  if (!schoolId || !assignmentId || !solution) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing fields are required",
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Invalid school ID" });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Invalid assignment ID" });
+  }
+
+  const school = await School.findOne({
+    _id: schoolId,
+    "assignments._id": assignmentId,
+  });
+
+  if (!school) {
+    return res.status(404).json({
+      success: false,
+      message: "School or assignment not found",
+    });
+  }
+
+  const assignment = school.assignments.find(
+    (a) => a._id.toString() === assignmentId,
+  );
+
+  const existingSubmission = assignment.submissions.find(
+    (sub) => sub.student.toString() === userId,
+  );
+
+  if (existingSubmission) {
+    return res.status(400).json({
+      success: false,
+      message: "You have already submitted this assignment",
+    });
+  }
+
+  assignment.submissions.push({
+    student: userId,
+    solution,
+    date: new Date(),
+  });
+
+  await school.save();
+
+  // ── Flush response, then notify teacher in background ──────────────────
+  res.send({ success: true, message: "Assignment submitted successfully" });
+
+  try {
+    const [student, teacher] = await Promise.all([
+      User.findById(userId).select("firstName lastName").lean(),
+      User.findById(assignment.teacher).select("expoPushToken").lean(),
+    ]);
+
+    if (teacher?.expoPushToken) {
+      expoNotifications([teacher.expoPushToken], {
+        title: "📩 New Assignment Submission",
+        message: `${student?.firstName} ${student?.lastName} has submitted "${assignment.title}".`,
+        data: {
+          channel: "Assignment",
+          schoolId,
+          assignmentId,
+          type: "assignment_submission",
+        },
+      });
+    }
+  } catch (err) {
+    console.error("assignment submission notification error:", err);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+});
+// END ===============================================
 
 router.get("/assignment", auth, async (req, res) => {
   const userId = req.user.userId;
@@ -1832,219 +2247,6 @@ router.post("/assignment/grade", auth, async (req, res) => {
     message: "Assignment graded successfully",
     data: submission,
   });
-});
-
-router.post("/assignment/publish", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const { schoolId, assignmentId } = req.body;
-
-  try {
-    // Validate input
-    if (!schoolId || !assignmentId) {
-      return res.status(400).send({
-        status: "failed",
-        message: "School ID and Assignment ID are required",
-      });
-    }
-
-    // Check if user is a teacher
-    const userInfo = await User.findById(userId).select(
-      "accountType firstName lastName preffix",
-    );
-    if (!userInfo) {
-      return res.status(422).send({
-        status: "failed",
-        message: "User not found",
-      });
-    }
-
-    if (userInfo.accountType !== "teacher") {
-      return res.status(403).send({
-        status: "failed",
-        message: "Only teachers can publish assignments",
-      });
-    }
-
-    // Get school and assignment
-    const school = await School.findById(schoolId);
-    if (!school) {
-      return res.status(422).send({
-        status: "failed",
-        message: "School not found",
-      });
-    }
-
-    const assignment = school.assignments.id(assignmentId);
-    if (!assignment) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Assignment not found",
-      });
-    }
-
-    // Check if user is the owner of the assignment
-    if (assignment.teacher.toString() !== userId) {
-      return res.status(403).send({
-        status: "failed",
-        message: "You are not authorized to publish this assignment",
-      });
-    }
-
-    // Check if assignment has expired
-    if (assignment.expiry) {
-      const currentDate = new Date();
-      if (currentDate < assignment.expiry) {
-        return res.status(400).send({
-          status: "failed",
-          message: "Cannot publish assignment before submission date",
-        });
-      }
-    }
-
-    // Check that all submissions have been scored
-    const unscoredSubmissions = assignment.submissions.filter(
-      (submission) =>
-        submission.score?.value === undefined ||
-        submission.score?.value === null,
-    );
-
-    if (unscoredSubmissions.length > 0) {
-      return res.status(400).send({
-        status: "failed",
-        message: `${unscoredSubmissions.length} submission(s) have not been scored yet`,
-      });
-    }
-
-    // Push current submissions to history
-    if (assignment.submissions.length > 0) {
-      const historyEntry = {
-        participants: assignment.submissions.map((submission) => ({
-          student: submission.student,
-          score: submission.score,
-          solution: submission.solution,
-          date: submission.date,
-        })),
-        createdAt: new Date(),
-      };
-
-      assignment.history.push(historyEntry);
-    }
-
-    // Reset submissions array
-    assignment.submissions = [];
-
-    // Set assignment status to inactive
-    assignment.status = "inactive";
-
-    // Create announcement
-    const announcement = {
-      teacher: userId,
-      message: `${userInfo?.prefix} ${userInfo.firstName} ${userInfo.lastName} has published scores for "${assignment.title}"`,
-      type: "school",
-      classes: assignment.classes,
-      visibility: "class",
-      date: new Date(),
-    };
-
-    school.announcements.push(announcement);
-
-    // Save school
-    await school.save();
-
-    res.send({
-      status: "success",
-      message: "Assignment published successfully",
-      data: {
-        assignment: {
-          _id: assignment._id,
-          title: assignment.title,
-          status: assignment.status,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error publishing assignment:", error);
-    res.status(500).send({
-      status: "failed",
-      message: "An error occurred while publishing the assignment",
-    });
-  }
-});
-
-router.post("/assignment/submit", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const { schoolId, assignmentId, solution } = req.body;
-
-  // Validate user authentication
-  if (!userId) {
-    return res.status(401).json({
-      success: false,
-      message: "Unauthorized. User not authenticated",
-    });
-  }
-
-  // Validate required query parameters
-  if (!schoolId || !assignmentId || !solution) {
-    return res.status(400).json({
-      success: false,
-      message: "Missing fields are required",
-    });
-  }
-
-  // Validate IDs
-  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid school ID",
-    });
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid assignment ID",
-    });
-  }
-
-  // Find the school and check if user is the assignment teacher
-  const school = await School.findOne({
-    _id: schoolId,
-    "assignments._id": assignmentId,
-  });
-
-  if (!school) {
-    return res.status(404).json({
-      success: false,
-      message: "School or assignment not found",
-    });
-  }
-  // Find the specific assignment
-  const assignment = school.assignments.find(
-    (a) => a._id.toString() === assignmentId,
-  );
-
-  // Check if user has already submitted
-  const existingSubmission = assignment.submissions.find(
-    (sub) => sub.student.toString() === userId,
-  );
-
-  if (existingSubmission) {
-    return res.status(400).json({
-      success: false,
-      message: "You have already submitted this assignment",
-    });
-  }
-
-  // Add the submission
-  assignment.submissions.push({
-    student: userId,
-    solution,
-    date: new Date(),
-  });
-
-  await school.save();
-
-  res.send({ success: true, message: "Assignment submitted successfully" });
 });
 
 router.get("/assignment/history", auth, async (req, res) => {
@@ -2314,7 +2516,6 @@ router.put("/assignment", auth, async (req, res) => {
         updater[key] = data[key]?.map((classItm) =>
           classItm?.name?.toLowerCase(),
         );
-        console.log({ updater });
       } else if (key === "subject") {
         updater[key] = data[key]?._id;
       } else if (key === "date") {
@@ -2346,117 +2547,6 @@ router.put("/assignment", auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error updating assignment",
-      error: error.message,
-    });
-  }
-});
-
-router.patch("/assignment", auth, async (req, res) => {
-  try {
-    const { status, date, schoolId, assignmentId } = req.body;
-    const userId = req.user?.userId;
-
-    // Validate user authentication
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized. User not authenticated",
-      });
-    }
-
-    // Validate required parameters
-    if (!schoolId || !assignmentId) {
-      return res.status(400).json({
-        success: false,
-        message: "schoolId and assignmentId are required",
-      });
-    }
-
-    // Validate IDs
-    if (!mongoose.Types.ObjectId.isValid(schoolId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid school ID",
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid assignment ID",
-      });
-    }
-
-    // Validate status
-    const validStatuses = ["ongoing", "inactive"];
-    if (!status || !validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid status. Must be 'ongoing' or 'inactive'",
-      });
-    }
-
-    // Find the school and check if user is the assignment teacher
-    const school = await School.findOne({
-      _id: schoolId,
-      "assignments._id": assignmentId,
-    });
-
-    if (!school) {
-      return res.status(404).json({
-        success: false,
-        message: "School or assignment not found",
-      });
-    }
-
-    // Find the specific assignment
-    const assignment = school.assignments.find(
-      (a) => a._id.toString() === assignmentId,
-    );
-
-    // Verify user is the teacher of this assignment
-    if (assignment.teacher.toString() !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to update this assignment",
-      });
-    }
-
-    const updateFields = {
-      "assignments.$.status": status,
-    };
-
-    // Only add assignmentDate if it exists
-    if (date) {
-      updateFields["assignments.$.expiry"] = new Date(date);
-      updateFields["assignments.$.date"] = new Date();
-    }
-
-    const updatedSchool = await School.findOneAndUpdate(
-      { _id: schoolId, "assignments._id": assignmentId },
-      { $set: updateFields },
-      { new: true },
-    );
-
-    // Find the updated assignment to return
-    const updatedAssignment = updatedSchool.assignments.find(
-      (a) => a._id.toString() === assignmentId,
-    );
-
-    res.status(200).json({
-      success: true,
-      message: "Assignment status updated successfully",
-      data: {
-        assignmentId: updatedAssignment._id,
-        status: updatedAssignment.status,
-        title: updatedAssignment.title,
-      },
-    });
-  } catch (error) {
-    console.error("Error updating assignment status:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error while updating assignment status",
       error: error.message,
     });
   }
