@@ -3,12 +3,12 @@
 // ==========================================
 const WalletAccount = require("../models/WalletAccount");
 const WalletTransaction = require("../models/WalletTransaction");
-const mongoose = require("mongoose");
+// const mongoose = require("mongoose");
 
 class WalletService {
   // Initialize wallets (run once on app startup)
   async initializeWallets() {
-    const wallets = ["school", "student"];
+    const wallets = ["school", "student", "guru"];
 
     for (const walletType of wallets) {
       await WalletAccount.findOneAndUpdate(
@@ -28,32 +28,29 @@ class WalletService {
     return wallet?.balance || 0;
   }
 
-  // Get both wallet balances
+  // Get all wallet balances
   async getAllBalances() {
     const wallets = await WalletAccount.find({});
 
-    const schoolWallet = wallets.find((w) => w.accountType === "school") || {
-      balance: 0,
-      totalCredits: 0,
-      totalDebits: 0,
-    };
-    const studentWallet = wallets.find((w) => w.accountType === "student") || {
-      balance: 0,
-      totalCredits: 0,
-      totalDebits: 0,
-    };
+    const defaultWallet = { balance: 0, totalCredits: 0, totalDebits: 0 };
+
+    const schoolWallet =
+      wallets.find((w) => w.accountType === "school") || defaultWallet;
+    const studentWallet =
+      wallets.find((w) => w.accountType === "student") || defaultWallet;
+    const guruWallet =
+      wallets.find((w) => w.accountType === "guru") || defaultWallet;
+
+    const formatWallet = (w) => ({
+      balance: w.balance,
+      totalCredits: w.totalCredits,
+      totalDebits: w.totalDebits,
+    });
 
     return {
-      school: {
-        balance: schoolWallet.balance,
-        totalCredits: schoolWallet.totalCredits,
-        totalDebits: schoolWallet.totalDebits,
-      },
-      student: {
-        balance: studentWallet.balance,
-        totalCredits: studentWallet.totalCredits,
-        totalDebits: studentWallet.totalDebits,
-      },
+      school: formatWallet(schoolWallet),
+      student: formatWallet(studentWallet),
+      guru: formatWallet(guruWallet),
     };
   }
 
@@ -192,6 +189,132 @@ class WalletService {
       }
       throw error;
     }
+  }
+
+  // Transfer funds between wallets
+  async transferFunds(
+    fromAccountType,
+    toAccountType,
+    amount,
+    reference,
+    metadata = {},
+  ) {
+    const VALID_WALLETS = ["school", "student", "guru"];
+    const amountToTransfer = parseFloat(amount);
+
+    // --- Validations ---
+    if (!VALID_WALLETS.includes(fromAccountType)) {
+      throw new Error(`Invalid source wallet: ${fromAccountType}`);
+    }
+    if (!VALID_WALLETS.includes(toAccountType)) {
+      throw new Error(`Invalid destination wallet: ${toAccountType}`);
+    }
+    if (fromAccountType === toAccountType) {
+      throw new Error("Source and destination wallets must be different");
+    }
+    if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
+      throw new Error("Transfer amount must be a positive number");
+    }
+
+    const debitReference = `${reference}-debit`;
+    const creditReference = `${reference}-credit`;
+
+    // Check for duplicate transfer
+    const existingDebit = await WalletTransaction.findOne({
+      reference: debitReference,
+    });
+    if (existingDebit) {
+      console.log(`Transfer ${reference} already exists`);
+      const existingCredit = await WalletTransaction.findOne({
+        reference: creditReference,
+      });
+      return {
+        success: true,
+        debitTransaction: existingDebit,
+        creditTransaction: existingCredit,
+        fromBalance: existingDebit.balanceAfter,
+      };
+    }
+
+    // Fetch both wallets
+    const fromWallet = await WalletAccount.findOne({
+      accountType: fromAccountType,
+    });
+    const toWallet = await WalletAccount.findOne({
+      accountType: toAccountType,
+    });
+
+    if (!fromWallet) throw new Error(`Wallet ${fromAccountType} not found`);
+    if (!toWallet) throw new Error(`Wallet ${toAccountType} not found`);
+
+    if (fromWallet.balance < amountToTransfer) {
+      throw new Error(`Insufficient balance in ${fromAccountType} wallet`);
+    }
+
+    const transferMetadata = {
+      ...metadata,
+      transferFrom: fromAccountType,
+      transferTo: toAccountType,
+      description:
+        metadata.description ||
+        `Transfer from ${fromAccountType} to ${toAccountType}`,
+    };
+
+    // --- Debit the source wallet ---
+    const fromBalanceBefore = fromWallet.balance;
+    const fromBalanceAfter = fromBalanceBefore - amountToTransfer;
+
+    const debitTransaction = new WalletTransaction({
+      accountType: fromAccountType,
+      transactionType: "debit",
+      category: "transfer",
+      amount: amountToTransfer,
+      balanceBefore: fromBalanceBefore,
+      balanceAfter: fromBalanceAfter,
+      reference: debitReference,
+      userId: metadata.userId,
+      description: `Transfer to ${toAccountType} wallet`,
+      metadata: transferMetadata,
+      status: "completed",
+    });
+
+    await debitTransaction.save();
+
+    fromWallet.balance = fromBalanceAfter;
+    fromWallet.totalDebits += amountToTransfer;
+    await fromWallet.save();
+
+    // --- Credit the destination wallet ---
+    const toBalanceBefore = toWallet.balance;
+    const toBalanceAfter = toBalanceBefore + amountToTransfer;
+
+    const creditTransaction = new WalletTransaction({
+      accountType: toAccountType,
+      transactionType: "credit",
+      category: "transfer",
+      amount: amountToTransfer,
+      balanceBefore: toBalanceBefore,
+      balanceAfter: toBalanceAfter,
+      reference: creditReference,
+      userId: metadata.userId,
+      description: `Transfer from ${fromAccountType} wallet`,
+      metadata: transferMetadata,
+      status: "completed",
+    });
+
+    await creditTransaction.save();
+
+    toWallet.balance = toBalanceAfter;
+    toWallet.totalCredits += amountToTransfer;
+    await toWallet.save();
+
+    return {
+      success: true,
+      debitTransaction,
+      creditTransaction,
+      fromBalance: fromBalanceAfter,
+      toBalance: toBalanceAfter,
+    };
   }
 
   // Get transaction history

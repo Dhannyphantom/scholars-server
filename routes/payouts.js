@@ -1026,6 +1026,83 @@ router.post("/recover-subscription", managerMiddleware, async (req, res) => {
   }
 });
 
+// ==========================================
+// TRANSFER FUNDS BETWEEN WALLETS (admin only)
+// ==========================================
+router.post("/wallets/transfer", managerMiddleware, async (req, res) => {
+  try {
+    const { fromWallet, toWallet, amount, description } = req.body;
+
+    // Validate required fields
+    if (!fromWallet || !toWallet || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: fromWallet, toWallet, amount",
+      });
+    }
+
+    // Validate amount is a positive number
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount must be a positive number",
+      });
+    }
+
+    const reference = `GURU_TRF_${Date.now()}_${req.user.userId}`;
+
+    const result = await walletService.transferFunds(
+      fromWallet,
+      toWallet,
+      parsedAmount,
+      reference,
+      {
+        userId: req.user.userId,
+        description:
+          description || `Admin transfer from ${fromWallet} to ${toWallet}`,
+        initiatedBy: req.user.userId,
+      },
+    );
+
+    res.json({
+      success: true,
+      message: `₦${parsedAmount.toFixed(2)} successfully transferred from ${fromWallet} to ${toWallet} wallet`,
+      data: {
+        reference,
+        fromWallet,
+        toWallet,
+        amount: parsedAmount,
+        fromWalletBalance: result.fromBalance,
+        toWalletBalance: result.toBalance,
+        debitTransactionId: result.debitTransaction._id,
+        creditTransactionId: result.creditTransaction._id,
+      },
+    });
+  } catch (error) {
+    console.error("Wallet transfer error:", error);
+
+    // Return a clean 400 for known business logic errors
+    const knownErrors = [
+      "Insufficient balance",
+      "Invalid source wallet",
+      "Invalid destination wallet",
+      "Source and destination wallets must be different",
+      "Transfer amount must be a positive number",
+      "not found",
+    ];
+
+    const isKnownError = knownErrors.some((msg) =>
+      error.message.toLowerCase().includes(msg.toLowerCase()),
+    );
+
+    res.status(isKnownError ? 400 : 500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 // Handle subscription payments
 async function handleChargeCompleted(payload) {
   const data = payload.data;

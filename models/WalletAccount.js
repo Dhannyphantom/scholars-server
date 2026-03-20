@@ -4,7 +4,7 @@ const walletAccountSchema = new mongoose.Schema(
   {
     accountType: {
       type: String,
-      enum: ["school", "student"],
+      enum: ["school", "student", "guru"],
       required: true,
       unique: true,
     },
@@ -24,7 +24,7 @@ const walletAccountSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 module.exports = mongoose.model("WalletAccount", walletAccountSchema);
