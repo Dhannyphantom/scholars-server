@@ -552,103 +552,258 @@ router.post("/get_quiz", auth, async (req, res) => {
   return res.send({ status: "success", data: quiz });
 });
 
+// router.post("/submit_quiz", auth, async (req, res) => {
+//   const userId = req.user.userId;
+//   const data = req.body;
+//   const { schoolId, type, questions, quizId } = data;
+
+//   const userInfo = await User.findById(userId).select(
+//     "accountType schoolPoints",
+//   );
+//   if (!userInfo)
+//     return res
+//       .status(422)
+//       .send({ status: "failed", message: "User not found" });
+//   if (userInfo.accountType !== "student")
+//     return res
+//       .status(422)
+//       .send({ status: "failed", message: "User not authorized" });
+
+//   const school = await School.findById(schoolId)
+//     .populate([
+//       {
+//         path: "quiz.subject",
+//         model: "Subject",
+//         select: "name",
+//       },
+//     ])
+//     .select(selectQuiz);
+//   if (!school)
+//     return res
+//       .status(422)
+//       .send({ status: "failed", message: "School not found" });
+
+//   // Get stats
+
+//   let point = 0,
+//     total = 0;
+
+//   questions.forEach((quest) => {
+//     quest.questions.forEach((question) => {
+//       const correctAnswer = question?.answers?.find(
+//         (item) => item?.correct == true,
+//       );
+//       if (correctAnswer?._id == question?.answered?._id) {
+//         point += question.point;
+//         total += question.point;
+//       } else {
+//         total += question.point;
+//         point -= 2;
+//         // setStat({ ...stat, point: statPoints });
+//       }
+//     });
+//   });
+
+//   if (type == "school") {
+//     const getQuiz = school.quiz?.find(
+//       (item) => item?._id?.toString() == quizId,
+//     );
+//     const checkUser = getQuiz.currentSubmissions.findIndex(
+//       (item) => item?.toString() == userId,
+//     );
+//     if (checkUser > -1) {
+//       return res.status(422).send({
+//         status: "failed",
+//         message: "You have already this attempted this quiz, No points added",
+//       });
+//     }
+//     getQuiz.currentSubmissions.push(userId);
+//     if (Boolean(getQuiz)) {
+//       const sess = getQuiz.sessions?.find(
+//         (item) => item?._id?.toString() == getQuiz.currentSession?.toString(),
+//       );
+//       if (sess) {
+//         sess.participants.addToSet({
+//           student: userId,
+//           quiz: questions,
+//           score: point,
+//         });
+//         sess.total_score = total;
+//         sess.average_score =
+//           sess.participants.reduce((acc, curr) => acc + curr.score, 0) /
+//           sess.participants.length;
+
+//         // give school points
+//         userInfo.schoolPoints += point;
+
+//         await school.save();
+//         await userInfo.save();
+//       } else {
+//         return res
+//           .status(422)
+//           .send({ status: "failed", message: "Session not found" });
+//       }
+//     } else {
+//       return res
+//         .status(422)
+//         .send({ status: "failed", message: "Quiz not found" });
+//     }
+//   }
+
+//   res.send({ status: "success" });
+// });
+
 router.post("/submit_quiz", auth, async (req, res) => {
   const userId = req.user.userId;
-  const data = req.body;
-  const { schoolId, type, questions, quizId } = data;
+  const { schoolId, type, questions, quizId } = req.body;
 
-  const userInfo = await User.findById(userId).select(
-    "accountType schoolPoints",
-  );
+  // ── Auth checks ───────────────────────────────────────────────────────────
+  const userInfo = await User.findById(userId)
+    .select("accountType schoolPoints")
+    .lean();
+
   if (!userInfo)
     return res
       .status(422)
       .send({ status: "failed", message: "User not found" });
+
   if (userInfo.accountType !== "student")
     return res
       .status(422)
       .send({ status: "failed", message: "User not authorized" });
 
-  const school = await School.findById(schoolId)
-    .populate([
-      {
-        path: "quiz.subject",
-        model: "Subject",
-        select: "name",
-      },
-    ])
-    .select(selectQuiz);
+  if (type !== "school")
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Invalid quiz type" });
+
+  if (
+    !mongoose.Types.ObjectId.isValid(schoolId) ||
+    !mongoose.Types.ObjectId.isValid(quizId)
+  ) {
+    return res
+      .status(400)
+      .send({ status: "failed", message: "Invalid IDs provided" });
+  }
+
+  // ── Fetch school with only the matching quiz subdocument ──────────────────
+  // $elemMatch projection avoids loading every quiz in the school document.
+  const school = await School.findOne(
+    { _id: schoolId, "quiz._id": quizId },
+    { "quiz.$": 1 },
+  );
+
   if (!school)
     return res
       .status(422)
-      .send({ status: "failed", message: "School not found" });
+      .send({ status: "failed", message: "School or quiz not found" });
 
-  // Get stats
+  const quiz = school.quiz[0];
 
-  let point = 0,
-    total = 0;
+  // ── Duplicate submission guard ────────────────────────────────────────────
+  const alreadySubmitted = quiz.currentSubmissions.some(
+    (id) => id.toString() === userId,
+  );
+
+  if (alreadySubmitted) {
+    return res.status(422).send({
+      status: "failed",
+      message: "You have already attempted this quiz. No points added.",
+    });
+  }
+
+  // ── Calculate score ───────────────────────────────────────────────────────
+  let point = 0;
+  let total = 0;
 
   questions.forEach((quest) => {
     quest.questions.forEach((question) => {
-      const correctAnswer = question?.answers?.find(
-        (item) => item?.correct == true,
-      );
-      if (correctAnswer?._id == question?.answered?._id) {
+      const correctAnswer = question?.answers?.find((a) => a?.correct === true);
+      if (
+        correctAnswer?._id?.toString() === question?.answered?._id?.toString()
+      ) {
         point += question.point;
-        total += question.point;
       } else {
-        total += question.point;
         point -= 2;
-        // setStat({ ...stat, point: statPoints });
       }
+      total += question.point;
     });
   });
 
-  if (type == "school") {
-    const getQuiz = school.quiz?.find(
-      (item) => item?._id?.toString() == quizId,
-    );
-    const checkUser = getQuiz.currentSubmissions.findIndex(
-      (item) => item?.toString() == userId,
-    );
-    if (checkUser > -1) {
-      return res.status(422).send({
-        status: "failed",
-        message: "You have already this attempted this quiz, No points added",
-      });
-    }
-    getQuiz.currentSubmissions.push(userId);
-    if (Boolean(getQuiz)) {
-      const sess = getQuiz.sessions?.find(
-        (item) => item?._id?.toString() == getQuiz.currentSession?.toString(),
-      );
-      if (sess) {
-        sess.participants.addToSet({
-          student: userId,
-          quiz: questions,
-          score: point,
-        });
-        sess.total_score = total;
-        sess.average_score =
-          sess.participants.reduce((acc, curr) => acc + curr.score, 0) /
-          sess.participants.length;
+  // ── Resolve or backfill the current session ───────────────────────────────
+  // currentSession may reference an ID not yet present in sessions[]
+  // (e.g. reset to quizId after a result release). Backfill it so the
+  // array stays consistent before we write participant data into it.
+  const sessionId = quiz.currentSession ?? new mongoose.Types.ObjectId();
+  const sessionExists = quiz.sessions.some(
+    (s) => s._id.toString() === sessionId.toString(),
+  );
 
-        // give school points
-        userInfo.schoolPoints += point;
+  // Build the new participant entry and recalculate averages in JS
+  // so we can issue a single atomic updateOne rather than load→mutate→save.
+  const existingParticipants = sessionExists
+    ? quiz.sessions.find((s) => s._id.toString() === sessionId.toString())
+        .participants
+    : [];
 
-        await school.save();
-        await userInfo.save();
-      } else {
-        return res
-          .status(422)
-          .send({ status: "failed", message: "Session not found" });
-      }
-    } else {
-      return res
-        .status(422)
-        .send({ status: "failed", message: "Quiz not found" });
-    }
+  const allParticipants = [
+    ...existingParticipants,
+    { student: userId, quiz: questions, score: point },
+  ];
+
+  const newAverage =
+    allParticipants.reduce((acc, p) => acc + p.score, 0) /
+    allParticipants.length;
+
+  // ── Single atomic write ───────────────────────────────────────────────────
+  // If the session didn't exist we push it with the participant already inside.
+  // If it did exist we use arrayFilters to update it in place.
+  let schoolUpdate;
+
+  if (!sessionExists) {
+    schoolUpdate = School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $push: {
+          "quiz.$.currentSubmissions": userId,
+          "quiz.$.sessions": {
+            _id: sessionId,
+            participants: [{ student: userId, quiz: questions, score: point }],
+            total_score: total,
+            average_score: newAverage,
+          },
+        },
+        $set: {
+          "quiz.$.currentSession": sessionId,
+        },
+      },
+    );
+  } else {
+    schoolUpdate = School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $push: {
+          "quiz.$.currentSubmissions": userId,
+          "quiz.$[].sessions.$[sess].participants": {
+            student: userId,
+            quiz: questions,
+            score: point,
+          },
+        },
+        $set: {
+          "quiz.$[].sessions.$[sess].total_score": total,
+          "quiz.$[].sessions.$[sess].average_score": newAverage,
+        },
+      },
+      { arrayFilters: [{ "sess._id": sessionId }] },
+    );
   }
+
+  // Award school points in parallel with the school write
+  await Promise.all([
+    schoolUpdate,
+    User.updateOne({ _id: userId }, { $inc: { schoolPoints: point } }),
+  ]);
 
   res.send({ status: "success" });
 });
@@ -918,8 +1073,6 @@ router.put("/quiz_status", auth, async (req, res) => {
   // ─────────────────────────────────────────────────────────────────────────
 
   let pusher = {};
-  // Collects the notification payload during the DB work so it can be
-  // dispatched after res.send() without blocking the response.
   let pendingNotification = null;
 
   if (status === "active") {
@@ -970,16 +1123,23 @@ router.put("/quiz_status", auth, async (req, res) => {
         .status(422)
         .send({ status: "failed", message: "Quiz not found" });
 
-    const session = quiz.sessions.id(quiz.currentSession);
-    if (!session)
-      return res
-        .status(422)
-        .send({ status: "failed", message: "Session not found" });
+    // Try to find the current session
+    let session = quiz.sessions.id(quiz.currentSession);
 
-    quiz.status = "review";
+    if (!session) {
+      // currentSession ID exists but has no matching entry in sessions[]
+      // (e.g. reset to quizId after a previous result release, or never pushed).
+      // Backfill it so the array stays consistent, then mark it ended immediately.
+      const backfillId = quiz.currentSession ?? new mongoose.Types.ObjectId();
+      quiz.sessions.push({ _id: backfillId });
+      session = quiz.sessions.id(backfillId);
+      // Keep currentSession pointing at the backfilled entry
+      quiz.currentSession = backfillId;
+    }
+
     session.ended = true;
+    quiz.status = "review";
     quiz.currentSubmissions = [];
-    quiz.currentSession = quizId;
 
     school.announcements.push({
       teacher: userId,
@@ -994,38 +1154,12 @@ router.put("/quiz_status", auth, async (req, res) => {
       message: `${teacherName} has closed the quiz. Sit tight — your scores will be released soon!`,
       data: { status: "review" },
     };
-  } else if (status === "result") {
-    pusher.$push = {
-      announcements: {
-        teacher: userId,
-        message: `${teacherName} has released your quiz score. Check yours now!`,
-        classes: [schoolClass],
-      },
-    };
-
-    await School.updateOne(
-      { _id: schoolId, "quiz._id": quizId },
-      {
-        $set: {
-          "quiz.$.status": "inactive",
-          "quiz.$.class": schoolClass,
-        },
-        ...pusher,
-      },
-    );
-
-    pendingNotification = {
-      title: "🎉 Quiz Results Released",
-      message: `${teacherName} has released your quiz scores. Check yours now!`,
-      data: { status: "result" },
-    };
   }
 
   // Flush the response to the teacher immediately …
   res.send({ status: "success" });
 
   // … then fire notifications in the background without awaiting.
-  // notifyClass() has its own try/catch so any error is only logged.
   if (pendingNotification) {
     notifyClass(pendingNotification);
   }
@@ -1846,9 +1980,7 @@ router.post("/assignment/publish", auth, async (req, res) => {
     }
 
     const unscoredSubmissions = assignment.submissions.filter(
-      (submission) =>
-        submission.score?.value === undefined ||
-        submission.score?.value === null,
+      (sub) => sub.score?.value === undefined || sub.score?.value === null,
     );
 
     if (unscoredSubmissions.length > 0) {
@@ -1858,14 +1990,19 @@ router.post("/assignment/publish", auth, async (req, res) => {
       });
     }
 
-    if (assignment.submissions.length > 0) {
+    // ── Snapshot submissions before clearing them ─────────────────────────
+    // We need the list after save() clears assignment.submissions, so capture
+    // it now while the data is still on the document.
+    const scoredSubmissions = assignment.submissions.map((sub) => ({
+      student: sub.student,
+      score: sub.score,
+      solution: sub.solution,
+      date: sub.date,
+    }));
+
+    if (scoredSubmissions.length > 0) {
       assignment.history.push({
-        participants: assignment.submissions.map((submission) => ({
-          student: submission.student,
-          score: submission.score,
-          solution: submission.solution,
-          date: submission.date,
-        })),
+        participants: scoredSubmissions,
         createdAt: new Date(),
       });
     }
@@ -1884,7 +2021,22 @@ router.post("/assignment/publish", auth, async (req, res) => {
       date: new Date(),
     });
 
-    await school.save();
+    // ── Build bulk schoolPoints increments ────────────────────────────────
+    // Each student's schoolPoints is incremented by their score.value.
+    // Done in parallel with school.save() so neither blocks the other.
+    const pointsOps = scoredSubmissions
+      .filter((sub) => sub.score?.value > 0)
+      .map((sub) => ({
+        updateOne: {
+          filter: { _id: sub.student },
+          update: { $inc: { schoolPoints: sub.score.value } },
+        },
+      }));
+
+    await Promise.all([
+      school.save(),
+      pointsOps.length > 0 ? User.bulkWrite(pointsOps) : Promise.resolve(),
+    ]);
 
     // ── Flush response, then notify in background ─────────────────────────
     res.send({
