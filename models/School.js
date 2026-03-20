@@ -425,9 +425,64 @@ const SchoolSchema = new schema({
   quiz: [quizSchema],
 });
 
+// ── Auto-purge announcements older than 7 days ────────────────────────────
+// MongoDB TTL indexes only work on top-level documents, not subdocuments.
+// Strategy: strip stale announcements on every save AND via a daily cron job
+// to catch documents that haven't been saved recently.
+
+const ANNOUNCEMENT_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+const purgeOldAnnouncements = (school) => {
+  const cutoff = new Date(Date.now() - ANNOUNCEMENT_TTL_MS);
+  school.announcements = school.announcements.filter((a) => a.date >= cutoff);
+};
+
+// Runs on every school.save() call — keeps announcements clean passively
+SchoolSchema.pre("save", function (next) {
+  purgeOldAnnouncements(this);
+  next();
+});
+
 SchoolSchema.index({ createdAt: -1 });
 SchoolSchema.index({ "subscription.isActive": 1 });
 
 const School = mongoose.model("School", SchoolSchema);
 
+// ── Scheduled cleanup job (runs daily at midnight) ────────────────────────
+// Handles schools that haven't been saved in a while so stale announcements
+// don't linger indefinitely in cold documents.
+// Call startAnnouncementCleanup() once when your server starts.
+const startAnnouncementCleanup = () => {
+  const INTERVAL_MS = 1000 * 60 * 60 * 24; // every 24 hours
+
+  const run = async () => {
+    try {
+      const cutoff = new Date(Date.now() - ANNOUNCEMENT_TTL_MS);
+
+      const result = await School.updateMany(
+        // Only target documents that actually have stale announcements
+        { "announcements.date": { $lt: cutoff } },
+        {
+          $pull: {
+            announcements: { date: { $lt: cutoff } },
+          },
+        },
+      );
+
+      if (result.modifiedCount > 0) {
+        console.log(
+          `[Announcement cleanup] Removed stale announcements from ${result.modifiedCount} school(s)`,
+        );
+      }
+    } catch (err) {
+      console.error("[Announcement cleanup] Error:", err);
+    }
+  };
+
+  // Run immediately on startup to clear any backlog, then repeat daily
+  run();
+  setInterval(run, INTERVAL_MS);
+};
+
 module.exports.School = School;
+module.exports.startAnnouncementCleanup = startAnnouncementCleanup;

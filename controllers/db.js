@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const { createDir } = require("./helpers");
 const { AppInfo } = require("../models/AppInfo");
 const walletService = require("./walletService");
+const { startAnnouncementCleanup } = require("../models/School");
 
 createDir("uploads/assets");
 
@@ -15,7 +16,7 @@ const initAppInfo = async () => {
       {
         $setOnInsert: {
           NAME: "Guru",
-          PRO_TOKEN: "gurupro@mosdan",
+          PRO_TOKEN: "gurupro@mosdan6129",
           POINT_VALUE: 10,
           VERSION: {
             SHOULD_UPDATE: "1.1.0",
@@ -29,7 +30,7 @@ const initAppInfo = async () => {
           MAX_SUBJECT_PER_WEEK: 5,
         },
       },
-      { upsert: true }
+      { upsert: true },
     );
   } catch (err) {
     console.error("❌ Failed to initialize AppInfo:", err);
@@ -48,6 +49,7 @@ module.exports = () => {
       console.log(`MONGODB CONNECTED ${process.env.NET_DEV} AT ${currentIp}`);
       await initAppInfo();
       await walletService.initializeWallets();
+      startAnnouncementCleanup(); // ← add this line
     })
     .catch((err) => console.error("ERROR CONNECTING TO DB", err));
 };
