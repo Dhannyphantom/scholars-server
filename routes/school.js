@@ -766,7 +766,7 @@ router.get("/quiz_session_students", auth, async (req, res) => {
 
   const school = await School.findById(schoolId).populate(
     "quiz.sessions.participants.student",
-    "firstName lastName preffix",
+    "firstName lastName avatar",
   );
 
   if (!school)
@@ -799,6 +799,7 @@ router.get("/quiz_session_students", auth, async (req, res) => {
     name: `${p.student?.firstName || ""} ${p.student?.lastName || ""}`.trim(),
     score: p.score,
     date: p.date,
+    avatar: p.student?.avatar?.image || "hi",
   }));
 
   res.send({
