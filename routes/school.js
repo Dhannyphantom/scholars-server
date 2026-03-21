@@ -1549,7 +1549,10 @@ router.get("/fetch", auth, async (req, res) => {
 router.get("/classes", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId } = req.query;
-  const school = await School.findById(schoolId).select("classes");
+
+  await syncSchoolClassesWithStudents(schoolId);
+
+  const school = await School.findById(schoolId).select("classes").lean();
   const userInfo = await User.findById(userId);
 
   if (!school)
@@ -1564,7 +1567,11 @@ router.get("/classes", auth, async (req, res) => {
 
   res.send({
     status: "success",
-    data: school.classes,
+    data: school.classes.map((item) => ({
+      ...item,
+      teachers: item?.teachers?.length,
+      students: item?.students?.length,
+    })),
   });
 });
 

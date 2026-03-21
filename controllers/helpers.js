@@ -519,10 +519,34 @@ const syncSchoolClassesWithStudents = async (schoolId) => {
   }
 
   /**
+   * Deduplicate school.students — one entry per unique user ID
+   */
+  const seenStudentIds = new Set();
+  school.students = school.students.filter((entry) => {
+    if (!entry.user?._id) return false;
+    const uid = entry.user._id.toString();
+    if (seenStudentIds.has(uid)) return false;
+    seenStudentIds.add(uid);
+    return true;
+  });
+
+  /**
+   * Deduplicate school.teachers — unique at the school level
+   */
+  const seenTeacherIds = new Set();
+  school.teachers = school.teachers.filter((teacherId) => {
+    if (!teacherId) return false;
+    const tid = teacherId.toString();
+    if (seenTeacherIds.has(tid)) return false;
+    seenTeacherIds.add(tid);
+    return true;
+  });
+
+  /**
    * Build maps
    */
   const classById = new Map();
-  const classesByLevel = new Map(); // level -> [classDocs]
+  const classesByLevel = new Map();
 
   school.classes.forEach((cls) => {
     const id = cls._id.toString();
@@ -565,15 +589,20 @@ const syncSchoolClassesWithStudents = async (schoolId) => {
       const level = studentUser.class.level.toLowerCase();
       const candidates = classesByLevel.get(level);
       if (candidates?.length) {
-        targetClass = candidates[0]; // deterministic fallback
+        targetClass = candidates[0];
       }
     }
 
     if (!targetClass) continue;
 
     /**
-     * Push student into class
+     * Guard: skip if student already in this class (defensive safety net)
      */
+    const alreadyInClass = targetClass.students.some(
+      (id) => id.toString() === studentUser._id.toString(),
+    );
+    if (alreadyInClass) continue;
+
     targetClass.students.push(studentUser._id);
 
     /**
