@@ -153,7 +153,7 @@ router.post("/password/reset", async (req, res) => {
         });
 
         await transporter.sendMail({
-          from: `"Guru EduTech" <no-reply@guruedutech.com>`, // ← change
+          from: `"Guru EduTech" <${process.env.MAIL_FROM}>`, // ← change
           to: email,
           subject: "Your password reset code",
           html,
@@ -370,7 +370,7 @@ router.post("/email/send-otp", auth, async (req, res) => {
     });
 
     await transporter.sendMail({
-      from: `"Guru EduTech" <no-reply@guruedutech.com>`,
+      from: `"Guru EduTech" <${process.env.MAIL_FROM}>`,
       to: email,
       subject: "Verify your email address",
       html,
