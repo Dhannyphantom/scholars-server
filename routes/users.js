@@ -65,12 +65,13 @@ const path = require("path");
 const ejs = require("ejs");
 
 // ── adjust these imports to match your project structure ──────────────────────
-const transporter = require("../controllers/mailer"); // your configured nodemailer transporter
+// const transporter = require("../controllers/mailer"); // your configured nodemailer transporter
 const {
   uploadSingle,
   processAndUpload,
   deleteFile,
 } = require("../middlewares/uploadToS3");
+const { sendMail } = require("../controllers/mailer");
 // ─────────────────────────────────────────────────────────────────────────────
 
 // In-memory OTP store — swap for Redis or a DB table in production
@@ -148,12 +149,11 @@ router.post("/password/reset", async (req, res) => {
           otp,
           expiryMinutes: 10,
           appName: "Guru EduTech", // ← change to your app name
-          supportEmail: "support@guruedutech.com", // ← change
+          supportEmail: process.env.MAIL_FROM, // ← change
           year: new Date().getFullYear(),
         });
 
-        await transporter.sendMail({
-          from: `"Guru EduTech" <${process.env.MAIL_FROM}>`, // ← change
+        await sendMail({
           to: email,
           subject: "Your password reset code",
           html,
@@ -365,12 +365,11 @@ router.post("/email/send-otp", auth, async (req, res) => {
       otp,
       expiryMinutes: 10,
       appName: "Guru EduTech",
-      supportEmail: "support@guruedutech.com",
+      supportEmail: process.env.MAIL_FROM,
       year: new Date().getFullYear(),
     });
 
-    await transporter.sendMail({
-      from: `"Guru EduTech" <${process.env.MAIL_FROM}>`,
+    await sendMail({
       to: email,
       subject: "Verify your email address",
       html,
