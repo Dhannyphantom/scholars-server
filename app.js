@@ -41,6 +41,7 @@ const payoutRoutes = require("./routes/payouts");
 const adminRoutes = require("./routes/admin");
 const analyticsRoutes = require("./routes/analytics");
 const transactionsRoutes = require("./routes/transactions");
+const cronRoutes = require("./routes/cron");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -56,6 +57,7 @@ app.use("/payouts", payoutRoutes);
 app.use("/support", support);
 app.use("/analytics", analyticsRoutes);
 app.use("/transactions", transactionsRoutes);
+app.use("/cron", cronRoutes);
 app.use("/admin", adminRoutes);
 
 app.use(error);

@@ -581,6 +581,11 @@ const userSchema = new schema({
     lowercase: true,
     trim: true,
   },
+  leaderboardRank: {
+    type: Number,
+    default: null,
+    index: true,
+  },
   contactCode: {
     type: String,
     minlength: 2,

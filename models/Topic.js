@@ -11,6 +11,8 @@ const TopicSchema = new schema({
   },
   questions: [{ type: schema.Types.ObjectId, ref: "Question" }],
   categories: [{ type: schema.Types.ObjectId, ref: "Category" }],
+  subject: { type: schema.Types.ObjectId, ref: "Subject" },
+  subjectName: { type: String, trim: true },
   user: {
     type: schema.Types.ObjectId,
     ref: "User",

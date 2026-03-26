@@ -467,29 +467,77 @@ router.delete("/questions_auto", auth, async (req, res) => {
 router.get("/mod_questions", async (req, res) => {
   console.log("Modifying DB....");
 
-  // 1. Get the question IDs first
-  const questions = await Question.find(
-    { subject: "678d60356345f9e35e705eda", topic: "69b1b8b22ef27c21c2286204" },
-    { _id: 1 },
-  );
+  const topics = await Topic.find({ subject: { $exists: false } }).lean();
 
-  const questionIds = questions.map((q) => q._id);
+  console.log(`Found ${topics.length} topics to migrate`);
 
-  if (questionIds.length === 0) {
-    console.log("No questions found");
-    return;
+  let success = 0;
+  let failed = 0;
+
+  for (const topic of topics) {
+    if (!topic.questions?.length) {
+      console.warn(
+        `Topic ${topic._id} (${topic.name}) has no questions — skipping`,
+      );
+      failed++;
+      continue;
+    }
+
+    // Grab the first populated question to extract subject
+    const question = await Question.findOne({
+      _id: { $in: topic.questions },
+      subject: { $exists: true },
+    })
+      .populate("subject", "name")
+      .lean();
+
+    if (!question?.subject) {
+      console.warn(
+        `Topic ${topic._id} (${topic.name}) — no question with a subject found — skipping`,
+      );
+      failed++;
+      continue;
+    }
+
+    await Topic.updateOne(
+      { _id: topic._id },
+      {
+        $set: {
+          subject: question.subject._id,
+          subjectName: question.subject.name,
+        },
+      },
+    );
+
+    console.log(`✓ Topic "${topic.name}" → subject: ${question.subject.name}`);
+    success++;
   }
 
-  // 2. Delete those questions
-  const question = await Question.deleteMany({
-    _id: { $in: questionIds },
-  });
+  console.log(`\nDone. ${success} updated, ${failed} skipped.`);
 
-  // 3. Remove them from the topic.questions array
-  const topic = await Topic.updateOne(
-    { _id: "69b1b8b22ef27c21c2286204" },
-    { $pull: { questions: { $in: questionIds } } },
-  );
+  // 1. Get the question IDs first
+  // const questions = await Question.find(
+  //   { subject: "678d60356345f9e35e705eda", topic: "69b1b8b22ef27c21c2286204" },
+  //   { _id: 1 },
+  // );
+
+  // const questionIds = questions.map((q) => q._id);
+
+  // if (questionIds.length === 0) {
+  //   console.log("No questions found");
+  //   return;
+  // }
+
+  // // 2. Delete those questions
+  // const question = await Question.deleteMany({
+  //   _id: { $in: questionIds },
+  // });
+
+  // // 3. Remove them from the topic.questions array
+  // const topic = await Topic.updateOne(
+  //   { _id: "69b1b8b22ef27c21c2286204" },
+  //   { $pull: { questions: { $in: questionIds } } },
+  // );
 
   // // Step 1: get subject
   // const subject = await Subject.findById("678d60356345f9e35e705eda").select(
@@ -544,7 +592,7 @@ router.get("/mod_questions", async (req, res) => {
 
   // const checker = await Topic.find({ categories: { $size: 0 } });
 
-  res.send({ message: "DB modified successfully", topic, question });
+  res.send({ message: "DB modified successfully" });
 });
 
 module.exports = router;
