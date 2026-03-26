@@ -68,6 +68,10 @@ const cap = (str) => {
   return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
+// ── Helper: get friendly first name or fall back to username ──────────────
+const friendlyName = (user) =>
+  cap(user.firstName) || cap(user.username) || "Student";
+
 // =============================================================================
 // 1.  MORNING GREETING
 //
@@ -652,53 +656,67 @@ router.post("/notify/daily-quota-nudge", cronAuth, async (req, res) => {
 //
 //  POST  /api/cron/notify/leaderboard-delta
 //
-//  Compares each verified student's current global rank against the rank
-//  stored on their profile (user.rank is a badge string, so we compute a
-//  numeric rank freshly each run from totalPoints).  We store the last
-//  numeric rank in a lightweight in-memory cache between two consecutive
-//  cron runs (or, for persistence, write it to a separate collection —
-//  see the optional Redis/collection approach noted below).
+//  How it works (fully DB-backed — no in-memory state):
 //
-//  IMPORTANT: Because Express is stateless across restarts, this route
-//  uses a module-level Map as a short-lived cache.  For production with
-//  multiple instances / restarts you should persist `previousRanks` in a
-//  MongoDB collection (e.g. RankSnapshot) or Redis.  See the inline
-//  comment for the alternative.
+//  Each run has two phases:
+//
+//  PHASE A — READ & COMPARE
+//    1. Collect every verified school student.
+//    2. Sort by totalPoints DESC and assign a fresh numeric rank
+//       (tied scores share the same rank number).
+//    3. Read each user's previously-saved `leaderboardRank` field from
+//       the User document.
+//    4. Compare new rank vs saved rank:
+//         new > saved  →  position fell   → "dropped" notification
+//         new < saved  →  position rose   → "climbed"  notification
+//         new === saved or saved is null  →  no notification
+//
+//  PHASE B — PERSIST
+//    5. Bulk-write the new rank back to `user.leaderboardRank` for
+//       every student in one `bulkWrite` call so the NEXT run has
+//       an accurate baseline.
+//
+//  The `leaderboardRank` field must be added to the User model:
+//
+//    leaderboardRank: {
+//      type: Number,
+//      default: null,
+//    }
+//
+//  Add the migration note below as a one-time script or just let the
+//  first cron run initialise the field for all users (they'll receive
+//  no notification that first run, which is correct behaviour).
 //
 //  Recommended schedule:  21:00 WAT daily
 // =============================================================================
-
-// ── Module-level rank cache (see note above about persistence) ─────────────
-// Shape: Map<userId_string, number>
-const previousRanks = new Map();
-
 router.post("/notify/leaderboard-delta", cronAuth, async (req, res) => {
   try {
-    // ── Step 1: Compute current global rank for all verified students ────────
-    // We rank by totalPoints descending (same logic as /leaderboard/global).
-    // We only care about verified students (school-enrolled).
-    const schoolsWithVerifiedStudents = await School.find(
+    // ── PHASE A — Step 1: Gather verified school students ────────────────────
+    // Pull only the fields we need from every school so the query is lean.
+    const schoolDocs = await School.find(
       {},
       { "students.user": 1, "students.verified": 1 },
     ).lean();
 
     const verifiedUserIdSet = new Set();
-    schoolsWithVerifiedStudents.forEach((school) => {
+    schoolDocs.forEach((school) => {
       (school.students || []).forEach((s) => {
-        if (s.verified) verifiedUserIdSet.add(s.user?.toString());
+        if (s.verified && s.user) verifiedUserIdSet.add(s.user.toString());
       });
     });
 
     if (!verifiedUserIdSet.size) {
       return res.json({
         success: true,
-        message: "No verified students found",
+        message: "No verified students found — nothing to do",
         stats: { eligible: 0 },
       });
     }
 
-    // Fetch all verified students sorted by totalPoints DESC
-    const rankedStudents = await User.find(
+    // ── PHASE A — Step 2: Fetch all verified students sorted by points ───────
+    // We include `leaderboardRank` (previous snapshot) alongside the fields
+    // needed to compute the new rank and send notifications.
+    const students = await User.find(
       {
         _id: { $in: Array.from(verifiedUserIdSet) },
         accountType: "student",
@@ -709,99 +727,82 @@ router.post("/notify/leaderboard-delta", cronAuth, async (req, res) => {
         firstName: 1,
         username: 1,
         expoPushToken: 1,
+        leaderboardRank: 1, // ← persisted snapshot from previous run
       },
     )
-      .sort({ totalPoints: -1, _id: 1 })
+      .sort({ totalPoints: -1, _id: 1 }) // stable sort: points then ObjectId
       .lean();
 
-    // Assign numeric ranks (ties share the same rank)
-    const currentRankMap = new Map(); // userId → { rank, totalPoints }
-    let currentRank = 1;
-    for (let i = 0; i < rankedStudents.length; i++) {
-      if (
-        i > 0 &&
-        rankedStudents[i].totalPoints < rankedStudents[i - 1].totalPoints
-      ) {
-        currentRank = i + 1;
-      }
-      currentRankMap.set(rankedStudents[i]._id.toString(), {
-        rank: currentRank,
-        totalPoints: rankedStudents[i].totalPoints,
-        expoPushToken: rankedStudents[i].expoPushToken,
-        firstName: rankedStudents[i].firstName,
-        username: rankedStudents[i].username,
+    if (!students.length) {
+      return res.json({
+        success: true,
+        message: "No student documents matched verified IDs",
+        stats: { eligible: 0 },
       });
     }
 
-    // ── Step 2: Compare against previous snapshot & classify ────────────────
-    /*
-      OPTIONAL — Persist previous ranks in MongoDB for multi-instance safety:
+    // ── PHASE A — Step 3: Assign fresh numeric ranks (dense rank with ties) ──
+    // e.g. scores [100, 100, 80, 60] → ranks [1, 1, 3, 4]
+    const ranked = []; // { student, newRank }
+    let newRank = 1;
 
-      const RankSnapshot = mongoose.model("RankSnapshot", new mongoose.Schema({
-        userId: { type: mongoose.Schema.Types.ObjectId, unique: true },
-        rank: Number,
-        updatedAt: { type: Date, default: Date.now },
-      }));
+    for (let i = 0; i < students.length; i++) {
+      if (i > 0 && students[i].totalPoints < students[i - 1].totalPoints) {
+        newRank = i + 1; // jump rank to actual position on a score change
+      }
+      ranked.push({ student: students[i], newRank });
+    }
 
-      // Load:
-      const snapshots = await RankSnapshot.find({}).lean();
-      snapshots.forEach(s => previousRanks.set(s.userId.toString(), s.rank));
+    // ── PHASE A — Step 4: Classify each student as dropped / climbed / same ──
+    const droppedTokens = []; // position fell  (rank number increased)
+    const climbedTokens = []; // position rose  (rank number decreased)
+    const droppedDetails = []; // for response stats / debugging
+    const climbedDetails = [];
 
-      // Save after computation below:
-      const bulkOps = [...currentRankMap.entries()].map(([id, data]) => ({
+    for (const { student, newRank: curr } of ranked) {
+      const prev = student.leaderboardRank; // null on first-ever run
+
+      // No previous snapshot → initialise silently, no notification
+      if (prev == null) continue;
+
+      if (curr > prev) {
+        // Rank number went UP  →  position went DOWN  (bad for user)
+        if (student.expoPushToken) droppedTokens.push(student.expoPushToken);
+        droppedDetails.push({
+          userId: student._id.toString(),
+          prevRank: prev,
+          currRank: curr,
+          drop: curr - prev,
+        });
+      } else if (curr < prev) {
+        // Rank number went DOWN  →  position went UP  (good for user)
+        if (student.expoPushToken) climbedTokens.push(student.expoPushToken);
+        climbedDetails.push({
+          userId: student._id.toString(),
+          prevRank: prev,
+          currRank: curr,
+          rise: prev - curr,
+        });
+      }
+      // curr === prev → no change, no notification
+    }
+
+    // ── PHASE B — Step 5: Persist new ranks back to User documents ───────────
+    // Single bulkWrite — far cheaper than N individual updateOne calls.
+    if (ranked.length) {
+      const bulkOps = ranked.map(({ student, newRank: nr }) => ({
         updateOne: {
-          filter: { userId: id },
-          update: { $set: { rank: data.rank, updatedAt: new Date() } },
-          upsert: true,
+          filter: { _id: student._id },
+          update: { $set: { leaderboardRank: nr } },
         },
       }));
-      await RankSnapshot.bulkWrite(bulkOps);
-    */
 
-    const droppedTokens = []; // moved down in rank (bad)
-    const climbedTokens = []; // moved up in rank (good)
-
-    const droppedDetails = []; // { token, prevRank, currRank }
-    const climbedDetails = []; // { token, prevRank, currRank }
-
-    for (const [userIdStr, current] of currentRankMap.entries()) {
-      const prevRank = previousRanks.get(userIdStr);
-
-      if (prevRank == null) {
-        // First time we've seen this user — just store
-        continue;
-      }
-
-      if (current.rank > prevRank) {
-        // Rank number went UP → position went DOWN (bad)
-        droppedTokens.push(current.expoPushToken);
-        droppedDetails.push({
-          userId: userIdStr,
-          prevRank,
-          currRank: current.rank,
-          drop: current.rank - prevRank,
-        });
-      } else if (current.rank < prevRank) {
-        // Rank number went DOWN → position went UP (good)
-        climbedTokens.push(current.expoPushToken);
-        climbedDetails.push({
-          userId: userIdStr,
-          prevRank,
-          currRank: current.rank,
-          rise: prevRank - current.rank,
-        });
-      }
-      // Equal rank → no notification
+      await User.bulkWrite(bulkOps, { ordered: false });
     }
 
-    // ── Step 3: Snapshot current ranks for next run ───────────────────────────
-    for (const [userIdStr, current] of currentRankMap.entries()) {
-      previousRanks.set(userIdStr, current.rank);
-    }
-
-    // ── Step 4: Send notifications ───────────────────────────────────────────
-    const validDropped = droppedTokens.filter(Boolean);
-    const validClimbed = climbedTokens.filter(Boolean);
+    // ── Step 6: Send notifications ───────────────────────────────────────────
+    const validDropped = [...new Set(droppedTokens)].filter(Boolean);
+    const validClimbed = [...new Set(climbedTokens)].filter(Boolean);
 
     const [dropRes, riseRes] = await Promise.all([
       validDropped.length
@@ -835,19 +836,20 @@ router.post("/notify/leaderboard-delta", cronAuth, async (req, res) => {
       success: true,
       message: "Leaderboard delta notifications dispatched",
       stats: {
-        totalRanked: rankedStudents.length,
+        totalRanked: ranked.length,
+        firstRunUsersInitialised: ranked.filter(
+          ({ student }) => student.leaderboardRank == null,
+        ).length,
         droppedInRank: {
           count: validDropped.length,
           ...dropRes,
-          sample: droppedDetails.slice(0, 5), // first 5 for debugging
+          sample: droppedDetails.slice(0, 5),
         },
         climbedInRank: {
           count: validClimbed.length,
           ...riseRes,
           sample: climbedDetails.slice(0, 5),
         },
-        firstRunUsersSkipped:
-          currentRankMap.size - droppedDetails.length - climbedDetails.length,
       },
     });
   } catch (error) {
@@ -858,15 +860,12 @@ router.post("/notify/leaderboard-delta", cronAuth, async (req, res) => {
 
 // =============================================================================
 // HEALTH CHECK  —  GET /api/cron/health
-// Quick sanity-check endpoint (no auth required so your scheduler can
-// verify the server is up before firing cron jobs).
 // =============================================================================
 router.get("/health", (req, res) => {
   res.json({
     success: true,
     message: "Guru cron service is healthy",
     timestamp: new Date().toISOString(),
-    cachedRankSnapshots: previousRanks.size,
   });
 });
 
