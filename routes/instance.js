@@ -2089,7 +2089,7 @@ router.post("/freemium_quiz", auth, async (req, res) => {
     await User.findByIdAndUpdate(userId, {
       $set: {
         "quota.freemium_daily_count": newCount,
-        "quota.freemium_update": isToday
+        "quota.freemium_update": isNewDay
           ? quota.freemium_update
           : new Date().toISOString(),
       },

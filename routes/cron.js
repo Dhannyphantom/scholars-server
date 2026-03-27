@@ -18,10 +18,8 @@
 
 const express = require("express");
 const router = express.Router();
-const mongoose = require("mongoose");
 const { User } = require("../models/User");
 const { School } = require("../models/School");
-const { Quiz } = require("../models/Quiz");
 const expoNotifications = require("../controllers/expoNotifications");
 
 // ── Shared secret guard ────────────────────────────────────────────────────

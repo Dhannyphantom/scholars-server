@@ -467,6 +467,24 @@ router.delete("/questions_auto", auth, async (req, res) => {
 router.get("/mod_questions", async (req, res) => {
   console.log("Modifying DB....");
 
+  // const data = await Question.updateMany(
+  //   { topic: "69bc25a27450a5cc7c4aaf14" },
+  //   {
+  //     $set: {
+  //       categories: [
+  //         "678d59448f4a1d454f2ce813",
+  //         "678d59448f4a1d454f2ce811",
+  //         "678d59448f4a1d454f2ce80d",
+  //         "678d59448f4a1d454f2ce80f",
+  //       ],
+  //     },
+  //   },
+  // );
+
+  // console.log({ data });
+
+  // =======================================================================
+  // POPULATING THE TOPIC SUBJECT'S FIELDS
   const topics = await Topic.find({ subject: { $exists: false } }).lean();
 
   console.log(`Found ${topics.length} topics to migrate`);
@@ -514,6 +532,9 @@ router.get("/mod_questions", async (req, res) => {
   }
 
   console.log(`\nDone. ${success} updated, ${failed} skipped.`);
+  // ========================================================================================
+  // ========================================================================================
+  // ========================================================================================
 
   // 1. Get the question IDs first
   // const questions = await Question.find(
@@ -539,8 +560,9 @@ router.get("/mod_questions", async (req, res) => {
   //   { $pull: { questions: { $in: questionIds } } },
   // );
 
-  // // Step 1: get subject
-  // const subject = await Subject.findById("678d60356345f9e35e705eda").select(
+  // ==============================================================
+  // Step 1: get subject
+  // const subject = await Subject.findById("678d60356345f9e35e705ee0").select(
   //   "topics",
   // );
 
@@ -561,6 +583,8 @@ router.get("/mod_questions", async (req, res) => {
   //   },
   // );
 
+  // console.log({ data });
+  // =====================================================================================
   // const data = await Topic.updateMany(
   //   {
   //     _id: {
