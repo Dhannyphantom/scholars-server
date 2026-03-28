@@ -5281,6 +5281,340 @@ router.get("/:schoolId/dashboard", auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /school/leaderboard/schools
+ *
+ * Aggregates verified students' totalPoints per school and ranks schools.
+ * Supports pagination via limit/offset.
+ *
+ * Query params:
+ *   limit    {number}  default 25
+ *   offset   {number}  default 0
+ *   sortBy   {string}  "totalPoints" | "avgPoints" | "studentCount"  default "totalPoints"
+ *
+ * Response shape:
+ * {
+ *   success: true,
+ *   data: {
+ *     leaderboard: SchoolEntry[],
+ *     currentUser: { rank, schoolId, schoolName, ... } | null,
+ *     pagination: { total, limit, offset, hasMore }
+ *   }
+ * }
+ *
+ * SchoolEntry:
+ * {
+ *   _id          ObjectId   school _id
+ *   name         string
+ *   state        string
+ *   lga          string
+ *   type         string
+ *   avatar       object | null   (school logo / rep avatar)
+ *   totalPoints  number     sum of all verified students' totalPoints
+ *   avgPoints    number     mean totalPoints per student
+ *   studentCount number     verified students with ≥1 quiz taken
+ *   rank         number
+ * }
+ */
+
+router.get("/leaderboard_schools", auth, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+
+    const limit = Math.min(parseInt(req.query.limit) || 25, 100);
+    const offset = parseInt(req.query.offset) || 0;
+    const sortBy = ["totalPoints", "avgPoints", "studentCount"].includes(
+      req.query.sortBy,
+    )
+      ? req.query.sortBy
+      : "totalPoints";
+
+    // ── Sort spec ────────────────────────────────────────────────────────────
+    const sortSpec =
+      sortBy === "avgPoints"
+        ? { avgPoints: -1, totalPoints: -1 }
+        : sortBy === "studentCount"
+          ? { studentCount: -1, totalPoints: -1 }
+          : { totalPoints: -1, avgPoints: -1 };
+
+    // ── 1. Count total schools (for pagination) ──────────────────────────────
+    // A school qualifies if it has ≥1 verified student (subscription check
+    // is intentionally omitted — inactive schools still appear on the board
+    // but will naturally rank lower due to fewer active students).
+    const totalResult = await School.aggregate([
+      {
+        $project: {
+          verifiedStudents: {
+            $filter: {
+              input: "$students",
+              as: "s",
+              cond: { $eq: ["$$s.verified", true] },
+            },
+          },
+        },
+      },
+      {
+        $match: { "verifiedStudents.0": { $exists: true } },
+      },
+      { $count: "total" },
+    ]);
+
+    const total = totalResult[0]?.total ?? 0;
+
+    // ── 2. Main leaderboard aggregation ─────────────────────────────────────
+    const leaderboard = await School.aggregate([
+      // Keep only schools that have at least one verified student
+      {
+        $project: {
+          name: 1,
+          state: 1,
+          lga: 1,
+          type: 1,
+          avatar: 1,
+          rep: 1,
+          verifiedStudentIds: {
+            $map: {
+              input: {
+                $filter: {
+                  input: "$students",
+                  as: "s",
+                  cond: { $eq: ["$$s.verified", true] },
+                },
+              },
+              as: "vs",
+              in: "$$vs.user",
+            },
+          },
+        },
+      },
+      {
+        $match: { "verifiedStudentIds.0": { $exists: true } },
+      },
+
+      // Join the User collection to get each verified student's totalPoints
+      {
+        $lookup: {
+          from: "users",
+          let: { ids: "$verifiedStudentIds" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $in: ["$_id", "$$ids"] },
+              },
+            },
+            {
+              $project: { totalPoints: 1 },
+            },
+          ],
+          as: "studentDocs",
+        },
+      },
+
+      // Calculate aggregate stats
+      {
+        $addFields: {
+          totalPoints: { $sum: "$studentDocs.totalPoints" },
+          studentCount: { $size: "$studentDocs" },
+          avgPoints: {
+            $cond: [
+              { $gt: [{ $size: "$studentDocs" }, 0] },
+              {
+                $round: [
+                  {
+                    $divide: [
+                      { $sum: "$studentDocs.totalPoints" },
+                      { $size: "$studentDocs" },
+                    ],
+                  },
+                  0,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+
+      // Drop studentDocs — heavy, no longer needed
+      { $project: { studentDocs: 0, verifiedStudentIds: 0 } },
+
+      // Rank window function
+      {
+        $setWindowFields: {
+          sortBy:
+            sortBy === "avgPoints"
+              ? { avgPoints: -1 }
+              : sortBy === "studentCount"
+                ? { studentCount: -1 }
+                : { totalPoints: -1 },
+          output: { rank: { $rank: {} } },
+        },
+      },
+
+      { $sort: { ...sortSpec, _id: 1 } },
+      { $skip: offset },
+      { $limit: limit },
+
+      // Lookup rep avatar as school visual identity
+      {
+        $lookup: {
+          from: "users",
+          localField: "rep",
+          foreignField: "_id",
+          as: "repDoc",
+          pipeline: [{ $project: { avatar: 1 } }],
+        },
+      },
+      {
+        $addFields: {
+          repAvatar: { $arrayElemAt: ["$repDoc.avatar", 0] },
+        },
+      },
+      { $project: { repDoc: 0, rep: 0 } },
+    ]);
+
+    // ── 3. Current user's school rank ────────────────────────────────────────
+    let currentSchoolEntry = null;
+
+    try {
+      // Find which school the current user belongs to as a verified student
+      const userSchool = await School.findOne({
+        students: {
+          $elemMatch: {
+            user: new mongoose.Types.ObjectId(currentUserId),
+            verified: true,
+          },
+        },
+      })
+        .select("_id")
+        .lean();
+
+      if (userSchool) {
+        // Re-run the aggregation without pagination to find this school's rank
+        const rankResult = await School.aggregate([
+          {
+            $project: {
+              name: 1,
+              verifiedStudentIds: {
+                $map: {
+                  input: {
+                    $filter: {
+                      input: "$students",
+                      as: "s",
+                      cond: { $eq: ["$$s.verified", true] },
+                    },
+                  },
+                  as: "vs",
+                  in: "$$vs.user",
+                },
+              },
+            },
+          },
+          { $match: { "verifiedStudentIds.0": { $exists: true } } },
+          {
+            $lookup: {
+              from: "users",
+              let: { ids: "$verifiedStudentIds" },
+              pipeline: [
+                { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+                { $project: { totalPoints: 1 } },
+              ],
+              as: "studentDocs",
+            },
+          },
+          {
+            $addFields: {
+              totalPoints: { $sum: "$studentDocs.totalPoints" },
+              studentCount: { $size: "$studentDocs" },
+              avgPoints: {
+                $cond: [
+                  { $gt: [{ $size: "$studentDocs" }, 0] },
+                  {
+                    $round: [
+                      {
+                        $divide: [
+                          { $sum: "$studentDocs.totalPoints" },
+                          { $size: "$studentDocs" },
+                        ],
+                      },
+                      0,
+                    ],
+                  },
+                  0,
+                ],
+              },
+            },
+          },
+          { $project: { studentDocs: 0, verifiedStudentIds: 0 } },
+          {
+            $setWindowFields: {
+              sortBy:
+                sortBy === "avgPoints"
+                  ? { avgPoints: -1 }
+                  : sortBy === "studentCount"
+                    ? { studentCount: -1 }
+                    : { totalPoints: -1 },
+              output: { rank: { $rank: {} } },
+            },
+          },
+          {
+            $match: { _id: userSchool._id },
+          },
+          {
+            $project: {
+              rank: 1,
+              name: 1,
+              totalPoints: 1,
+              avgPoints: 1,
+              studentCount: 1,
+            },
+          },
+        ]);
+
+        if (rankResult.length > 0) {
+          currentSchoolEntry = {
+            schoolId: userSchool._id,
+            ...rankResult[0],
+          };
+        }
+      }
+    } catch (_) {
+      // Non-fatal — current user may not be in a school
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        leaderboard,
+        currentUser: currentSchoolEntry
+          ? {
+              rank: currentSchoolEntry.rank,
+              schoolId: currentSchoolEntry.schoolId,
+              schoolName: currentSchoolEntry.name,
+              totalPoints: currentSchoolEntry.totalPoints,
+              avgPoints: currentSchoolEntry.avgPoints,
+              studentCount: currentSchoolEntry.studentCount,
+            }
+          : null,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + leaderboard.length < total,
+        },
+        filters: { sortBy },
+      },
+    });
+  } catch (error) {
+    console.error("Schools leaderboard error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch schools leaderboard",
+      error: error.message,
+    });
+  }
+});
+
 // ============================================================
 // HELPER: Format school metadata for response
 // ============================================================
