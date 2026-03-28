@@ -1018,7 +1018,7 @@ router.put("/quiz", auth, async (req, res) => {
 router.put("/quiz_status", auth, async (req, res) => {
   const userId = req.user.userId;
 
-  const { schoolId, quizId, status, class: schoolClass } = req.body;
+  const { schoolId, quizId, status } = req.body;
 
   if (!schoolId && !quizId && !status)
     return res.status(422).send({ status: "failed", message: "Invalid info" });
@@ -1042,6 +1042,14 @@ router.put("/quiz_status", auth, async (req, res) => {
     return res
       .status(422)
       .send({ status: "failed", message: "School not found" });
+
+  const quiz = school.quiz.id(quizId);
+  if (!quiz)
+    return res
+      .status(422)
+      .send({ status: "failed", message: "Quiz not found" });
+
+  const schoolClass = quiz.class;
 
   // ── Notification helper scoped to this request ───────────────────────────
   const notifyClass = async ({ title, message, data = {} }) => {
@@ -1117,12 +1125,6 @@ router.put("/quiz_status", auth, async (req, res) => {
       data: { status: "inactive" },
     };
   } else if (status === "review") {
-    const quiz = school.quiz.id(quizId);
-    if (!quiz)
-      return res
-        .status(422)
-        .send({ status: "failed", message: "Quiz not found" });
-
     // Try to find the current session
     let session = quiz.sessions.id(quiz.currentSession);
 
@@ -1153,6 +1155,21 @@ router.put("/quiz_status", auth, async (req, res) => {
       title: "🔒 Quiz Closed",
       message: `${teacherName} has closed the quiz. Sit tight — your scores will be released soon!`,
       data: { status: "review" },
+    };
+  } else if (status === "result") {
+    await School.updateOne(
+      { _id: schoolId, "quiz._id": quizId },
+      {
+        $set: {
+          "quiz.$.status": "inactive",
+        },
+      },
+    );
+
+    pendingNotification = {
+      title: "Quiz Results",
+      message: `${teacherName} has released quiz results for your class.`,
+      data: { status: "inactive", quizId },
     };
   }
 
