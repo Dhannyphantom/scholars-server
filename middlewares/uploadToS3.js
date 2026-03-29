@@ -59,26 +59,33 @@ const processAndUpload =
 
     try {
       const unique = crypto.randomBytes(8).toString("hex");
-
       const metadata = await sharp(req.file.buffer).metadata();
+
+      const isPng = metadata.format === "png";
+      const ext = isPng ? "png" : "jpg";
+      const mainName = `${unique}.${ext}`;
+      const thumbName = `thumb_${unique}.${ext}`;
+      const contentType = isPng ? "image/png" : "image/jpeg";
 
       /* ==== MAIN IMAGE ==== */
       const mainBuffer = await sharp(req.file.buffer)
         .resize({ width: 1024, withoutEnlargement: true })
-        .jpeg({ quality: 70, mozjpeg: true })
+        .toFormat(
+          isPng ? "png" : "jpeg",
+          isPng ? { compressionLevel: 8 } : { quality: 70, mozjpeg: true },
+        )
         .toBuffer();
 
       /* ==== THUMB ==== */
       const thumbBuffer = await sharp(req.file.buffer)
         .resize({ width: 250, withoutEnlargement: true })
-        .jpeg({ quality: 40, mozjpeg: true })
+        .toFormat(
+          isPng ? "png" : "jpeg",
+          isPng ? { compressionLevel: 8 } : { quality: 40, mozjpeg: true },
+        )
         .toBuffer();
 
-      const mainName = `${unique}.jpg`;
-      const thumbName = `thumb_${unique}.jpg`;
-
       /* ================= ONLINE ================= */
-
       if (_NET === "online") {
         const mainKey = `${bucketName}/${mainName}`;
         const thumbKey = `thumbs/${thumbName}`;
@@ -88,7 +95,7 @@ const processAndUpload =
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: mainKey,
             Body: mainBuffer,
-            ContentType: "image/jpeg",
+            ContentType: contentType,
           }),
         );
 
@@ -97,7 +104,7 @@ const processAndUpload =
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: thumbKey,
             Body: thumbBuffer,
-            ContentType: "image/jpeg",
+            ContentType: contentType,
           }),
         );
 
@@ -106,13 +113,12 @@ const processAndUpload =
           thumb: `${process.env.CLOUDFRONT_URL}/${thumbKey}`,
           key: mainName,
           assetId: unique,
-          type: "image/jpg",
+          type: contentType,
           width: metadata.width,
           height: metadata.height,
         };
       } else {
-
-      /* ================= OFFLINE ================= */
+        /* ================= OFFLINE ================= */
         const mainDir = path.join("uploads", bucketName);
         const thumbDir = path.join("uploads", "thumbs");
 
@@ -127,7 +133,7 @@ const processAndUpload =
           thumb: `${ADDRESS}:${PORT}/uploads/thumbs/${thumbName}`,
           key: mainName,
           assetId: unique,
-          type: "image/jpg",
+          type: contentType,
           width: metadata.width,
           height: metadata.height,
         };
@@ -138,7 +144,6 @@ const processAndUpload =
       next(err);
     }
   };
-
 /* ================= DELETE ================= */
 
 const deleteFile = async (fileUrl) => {

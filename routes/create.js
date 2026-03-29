@@ -10,6 +10,7 @@ const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const { Question } = require("../models/Question");
 const { User } = require("../models/User");
+const { migrateMedia } = require("../controllers/migrateToS3");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -618,6 +619,32 @@ router.get("/mod_questions", async (req, res) => {
   // const checker = await Topic.find({ categories: { $size: 0 } });
 
   res.send({ message: "DB modified successfully" });
+});
+
+router.post("/api", async (req, res) => {
+  // Question.image is an inline mediaSchema object: { uri, type, thumb, width, height }
+  // Passing "image" (the object field) — the helper writes to image.uri + image.thumb
+  await migrateMedia({
+    model: Question,
+    files: [{ field: "image", folder: "questions", type: "image" }],
+  });
+
+  // ── 2. Subject ──────────────────────────────────────────────────────────────
+  // Subject.image is also a mediaSchema object (imported from User.js)
+  // Same pattern — pass "image", helper resolves .uri and writes back .uri + .thumb
+  await migrateMedia({
+    model: Subject,
+    files: [{ field: "image", folder: "subjects", type: "image" }],
+  });
+
+  // ── 3. Category ─────────────────────────────────────────────────────────────
+  // Category.image — identical shape, same pattern
+  await migrateMedia({
+    model: Category,
+    files: [{ field: "image", folder: "categories", type: "image" }],
+  });
+
+  res.send({ status: "success", message: "Media migration completed" });
 });
 
 module.exports = router;

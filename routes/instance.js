@@ -23,6 +23,11 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEN_KEY });
 
 const Groq = require("groq-sdk");
 const { School } = require("../models/School");
+const {
+  processAndUpload,
+  uploadSingle,
+  deleteFile,
+} = require("../middlewares/uploadToS3");
 
 const groq = new Groq({
   apiKey: process.env.GROQ_KEY,
@@ -737,111 +742,211 @@ router.get("/my_questions", auth, async (req, res) => {
   }
 });
 
+// router.put(
+//   "/subject",
+//   [auth, uploader.array("media", 2), mediaUploader],
+//   async (req, res) => {
+//     const data = req.data;
+
+//     if (data?.delete) {
+//       await Subject.deleteOne({ _id: data?._id });
+//       await Category.updateMany(
+//         { subjects: { $in: data?._id } },
+//         {
+//           $pull: {
+//             subjects: data?._id,
+//           },
+//         },
+//       );
+//     } else {
+//       if (data?.media) {
+//         const media = getUploadUri(req.media, data?.bucket);
+
+//         const asset = media.find((obj) => obj.key == data?.image?.assetId);
+//         delete asset.key;
+
+//         await Subject.updateOne(
+//           { _id: data?._id },
+//           {
+//             $set: {
+//               name: data?.name,
+//               image: asset,
+//             },
+//           },
+//         );
+//       } else {
+//         await Subject.updateOne(
+//           { _id: data?._id },
+//           {
+//             $set: {
+//               name: data?.name,
+//             },
+//           },
+//         );
+//       }
+//       // update categories
+//       const catIds = data.categories.map((item) => item._id);
+//       await Category.updateMany(
+//         { _id: { $nin: catIds } },
+//         {
+//           $pull: {
+//             subjects: data?._id,
+//           },
+//         },
+//       );
+//       await Category.updateMany(
+//         { _id: { $in: catIds } },
+//         {
+//           $addToSet: {
+//             subjects: data?._id,
+//           },
+//         },
+//       );
+//     }
+
+//     res.send({ status: "success" });
+//   },
+// );
+
 router.put(
   "/subject",
-  [auth, uploader.array("media", 2), mediaUploader],
+  [auth, uploadSingle, processAndUpload("subjects")], // bucket from client
   async (req, res) => {
-    const data = req.data;
+    try {
+      const data = req.body.file
+        ? JSON.parse(req.body.data) // FormData path — data is a JSON string
+        : req.body;
 
-    if (data?.delete) {
-      await Subject.deleteOne({ _id: data?._id });
-      await Category.updateMany(
-        { subjects: { $in: data?._id } },
-        {
-          $pull: {
-            subjects: data?._id,
-          },
-        },
-      );
-    } else {
-      if (data?.media) {
-        const media = getUploadUri(req.media, data?.bucket);
-
-        const asset = media.find((obj) => obj.key == data?.image?.assetId);
-        delete asset.key;
-
-        await Subject.updateOne(
-          { _id: data?._id },
-          {
-            $set: {
-              name: data?.name,
-              image: asset,
-            },
-          },
+      if (data?.delete) {
+        await Subject.deleteOne({ _id: data?._id });
+        await Category.updateMany(
+          { subjects: { $in: data?._id } },
+          { $pull: { subjects: data?._id } },
         );
       } else {
-        await Subject.updateOne(
-          { _id: data?._id },
-          {
-            $set: {
-              name: data?.name,
-            },
-          },
+        if (req.body.file) {
+          /* ================= DELETE OLD IMAGE ================= */
+          const existing = await Subject.findById(data?._id).select("image");
+          if (existing?.image?.uri) await deleteFile(existing.image.uri);
+          if (existing?.image?.thumb) await deleteFile(existing.image.thumb);
+
+          /* ================= SAVE WITH NEW IMAGE ================= */
+          await Subject.updateOne(
+            { _id: data?._id },
+            { $set: { name: data?.name, image: req.body.file } },
+          );
+        } else {
+          await Subject.updateOne(
+            { _id: data?._id },
+            { $set: { name: data?.name } },
+          );
+        }
+
+        /* ================= UPDATE CATEGORIES ================= */
+        const catIds = data.categories.map((item) => item._id);
+        await Category.updateMany(
+          { _id: { $nin: catIds } },
+          { $pull: { subjects: data?._id } },
+        );
+        await Category.updateMany(
+          { _id: { $in: catIds } },
+          { $addToSet: { subjects: data?._id } },
         );
       }
-      // update categories
-      const catIds = data.categories.map((item) => item._id);
-      await Category.updateMany(
-        { _id: { $nin: catIds } },
-        {
-          $pull: {
-            subjects: data?._id,
-          },
-        },
-      );
-      await Category.updateMany(
-        { _id: { $in: catIds } },
-        {
-          $addToSet: {
-            subjects: data?._id,
-          },
-        },
-      );
-    }
 
-    res.send({ status: "success" });
+      res.send({ status: "success" });
+    } catch (err) {
+      console.log({ err });
+      res.status(500).json({
+        status: "failed",
+        message: "Subject update failed!",
+        error: err.message,
+      });
+    }
   },
 );
 
 router.put(
   "/category",
-  [auth, uploader.array("media", 100), mediaUploader],
+  [auth, uploadSingle, processAndUpload("categories")],
   async (req, res) => {
-    const data = req.data;
+    try {
+      const data = req.body.file ? JSON.parse(req.body.data) : req.body;
 
-    if (data?.delete) {
-      await Category.deleteOne({ _id: data?._id });
-    } else {
-      if (data?.media) {
-        const media = getUploadUri(req.media, data?.bucket);
-
-        const asset = media.find((obj) => obj.key == data?.image?.assetId);
-        delete asset.key;
-
-        await Category.updateOne(
-          { _id: data?._id },
-          {
-            $set: {
-              name: data?.name,
-              image: asset,
-            },
-          },
-        );
+      if (data?.delete) {
+        await Category.deleteOne({ _id: data?._id });
       } else {
-        await Category.updateOne(
-          { _id: data?._id },
-          {
-            $set: {
-              name: data?.name,
-            },
-          },
-        );
-      }
-    }
+        if (req.body.file) {
+          /* ================= DELETE OLD IMAGE ================= */
+          const existing = await Category.findById(data?._id).select("image");
+          if (existing?.image?.uri) await deleteFile(existing.image.uri);
+          if (existing?.image?.thumb) await deleteFile(existing.image.thumb);
 
-    res.send({ status: "success", data });
+          /* ================= SAVE WITH NEW IMAGE ================= */
+          await Category.updateOne(
+            { _id: data?._id },
+            { $set: { name: data?.name, image: req.body.file } },
+          );
+        } else {
+          await Category.updateOne(
+            { _id: data?._id },
+            { $set: { name: data?.name } },
+          );
+        }
+      }
+
+      res.send({ status: "success" });
+    } catch (err) {
+      res.status(500).json({
+        status: "failed",
+        message: "Category update failed!",
+        error: err.message,
+      });
+    }
   },
 );
+
+// router.put(
+//   "/category",
+//   [auth, uploadSingle, processAndUpload("categories")],
+//   async (req, res) => {
+//     const data = req.body.file
+//       ? JSON.parse(req.body.data) // FormData path — data is a JSON string
+//       : req.body;
+
+//     if (data?.delete) {
+//       await Category.deleteOne({ _id: data?._id });
+//     } else {
+//       if (data?.media) {
+//         const media = getUploadUri(req.media, data?.bucket);
+
+//         const asset = media.find((obj) => obj.key == data?.image?.assetId);
+//         delete asset.key;
+
+//         await Category.updateOne(
+//           { _id: data?._id },
+//           {
+//             $set: {
+//               name: data?.name,
+//               image: asset,
+//             },
+//           },
+//         );
+//       } else {
+//         await Category.updateOne(
+//           { _id: data?._id },
+//           {
+//             $set: {
+//               name: data?.name,
+//             },
+//           },
+//         );
+//       }
+//     }
+
+//     res.send({ status: "success", data });
+//   },
+// );
 
 router.put("/topic", auth, async (req, res) => {
   const { name, subject, _id } = req.body;
