@@ -857,6 +857,217 @@ router.post("/notify/leaderboard-delta", cronAuth, async (req, res) => {
 });
 
 // =============================================================================
+// =============================================================================
+// 7b. TEACHER — SUBSCRIBE SCHOOL REMINDER
+// =============================================================================
+router.post("/notify/teacher-subscribe-school", cronAuth, async (req, res) => {
+  try {
+    const schools = await School.find(
+      {
+        "subscription.isActive": false,
+      },
+      {
+        teachers: 1,
+      },
+    ).lean();
+
+    const teacherIds = new Set();
+
+    schools.forEach((school) => {
+      (school.teachers || []).forEach((t) => {
+        if (t.user) teacherIds.add(t.user.toString());
+      });
+    });
+
+    const teachers = await User.find(
+      {
+        _id: { $in: Array.from(teacherIds) },
+        expoPushToken: { $exists: true, $ne: null },
+      },
+      { expoPushToken: 1 },
+    ).lean();
+
+    const tokens = teachers.map((t) => t.expoPushToken);
+
+    const { sent, failed } = await sendInBatches(tokens, {
+      title: "⚠️ Your school is incomplete",
+      message:
+        "You created a school, but it’s not active. Students can’t fully learn, track progress, or compete. Activate your subscription now and unlock everything.",
+      data: { type: "teacher_subscribe_school", channel: "School" },
+    });
+
+    return res.json({
+      success: true,
+      message: "Teacher subscription reminders sent",
+      stats: { eligible: tokens.length, sent, failed },
+    });
+  } catch (error) {
+    console.error("[cron/teacher-subscribe-school]", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// =============================================================================
+// 7a. TEACHER — CREATE SCHOOL REMINDER
+// =============================================================================
+router.post("/notify/teacher-create-school", cronAuth, async (req, res) => {
+  try {
+    const teachers = await User.find(
+      {
+        accountType: "teacher",
+        expoPushToken: { $exists: true, $ne: null },
+        school: { $exists: false },
+      },
+      { expoPushToken: 1 },
+    ).lean();
+
+    const tokens = teachers.map((t) => t.expoPushToken);
+
+    const { sent, failed } = await sendInBatches(tokens, {
+      title: "📢 Your students are waiting...",
+      message:
+        "You haven’t created your school yet. Every day you delay, your students lose structured learning. Set it up now and take control.",
+      data: { type: "teacher_create_school", channel: "School" },
+    });
+
+    return res.json({
+      success: true,
+      message: "Teacher create-school reminders sent",
+      stats: { eligible: tokens.length, sent, failed },
+    });
+  } catch (error) {
+    console.error("[cron/teacher-create-school]", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// =============================================================================
+// 6. FOLLOW BACK REMINDER (PERSONALISED + ROTATING)
+//
+// POST /api/cron/notify/follow-back-reminder
+//
+// Picks 1 random follower (not followed back), injects username,
+// rotates title + message for higher engagement.
+//
+// Recommended schedule: 18:00 WAT daily
+// =============================================================================
+router.post("/notify/follow-back-reminder", cronAuth, async (req, res) => {
+  try {
+    // 🎯 Title variations
+    const titlePool = [
+      "🔥 Someone followed you!",
+      "👀 You’ve got attention",
+      "⚔️ A new challenger appeared",
+      "🚀 Activity on your profile",
+      "🎯 Someone wants to compete",
+    ];
+
+    // 💬 Message variations (personalised)
+    const messagePool = [
+      (u) => `🔥 ${u} followed you. Follow back and challenge them now!`,
+      (u) => `👀 ${u} is watching your progress. Ready to compete?`,
+      (u) => `⚔️ ${u} just stepped into your arena. Don’t ignore this.`,
+      (u) => `🚀 ${u} is climbing the leaderboard. Can you keep up?`,
+      (u) => `🎯 ${u} is ready to play. Follow back and start a challenge!`,
+    ];
+
+    // 🧠 Fetch users who can receive notifications
+    const users = await User.find(
+      {
+        expoPushToken: { $exists: true, $ne: null },
+        followers: { $exists: true, $ne: [] },
+      },
+      {
+        _id: 1,
+        followers: 1,
+        following: 1,
+        expoPushToken: 1,
+      },
+    ).lean();
+
+    let sent = 0;
+    let failed = 0;
+
+    // ⚡ OPTIONAL OPTIMIZATION: Preload all follower usernames in one go
+    const allFollowerIds = new Set();
+    users.forEach((u) => {
+      (u.followers || []).forEach((id) => allFollowerIds.add(id.toString()));
+    });
+
+    const followerDocs = await User.find(
+      { _id: { $in: Array.from(allFollowerIds) } },
+      { _id: 1, username: 1 },
+    ).lean();
+
+    const followerMap = new Map();
+    followerDocs.forEach((f) => {
+      followerMap.set(f._id.toString(), f.username);
+    });
+
+    // 🔁 Loop through users
+    for (const user of users) {
+      const followers = (user.followers || []).map((f) => f.toString());
+      const followingSet = new Set(
+        (user.following || []).map((f) => f.toString()),
+      );
+
+      // Find followers NOT followed back
+      const notFollowingBack = followers.filter((id) => !followingSet.has(id));
+
+      if (!notFollowingBack.length) continue;
+
+      // 🎲 Pick one random follower
+      const randomFollowerId =
+        notFollowingBack[Math.floor(Math.random() * notFollowingBack.length)];
+
+      const username = followerMap.get(randomFollowerId);
+      if (!username) continue;
+
+      // 🎲 Rotate title
+      const title = titlePool[Math.floor(Math.random() * titlePool.length)];
+
+      // 🎲 Rotate message
+      const messageFn =
+        messagePool[Math.floor(Math.random() * messagePool.length)];
+
+      const message = messageFn(username);
+
+      try {
+        await expoNotifications([user.expoPushToken], {
+          title,
+          message,
+          data: {
+            type: "follow_back_reminder",
+            userId: randomFollowerId,
+            channel: "Social",
+          },
+        });
+
+        sent++;
+      } catch (err) {
+        failed++;
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "Personalized follow-back reminders sent",
+      stats: {
+        totalUsersChecked: users.length,
+        sent,
+        failed,
+      },
+    });
+  } catch (error) {
+    console.error("[cron/follow-back-reminder]", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// =============================================================================
 // HEALTH CHECK  —  GET /api/cron/health
 // =============================================================================
 router.get("/health", (req, res) => {

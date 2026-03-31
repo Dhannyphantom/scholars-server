@@ -1,5 +1,6 @@
 const express = require("express");
 const fs = require("fs");
+const mongoose = require("mongoose");
 // const nodemailer = require("nodemailer");
 const mediaUploader = require("../middlewares/mediaUploader");
 const multer = require("multer");
@@ -468,6 +469,51 @@ router.delete("/questions_auto", auth, async (req, res) => {
 router.get("/mod_questions", async (req, res) => {
   console.log("Modifying DB....");
 
+  // const data = await Question.find({ categories: { $size: 0 } }).lean();
+
+  // console.log(`Found ${data.length} questions with empty categories`);
+
+  // const docs = await Question.aggregate([
+  //   {
+  //     $match: {
+  //       $or: [{ categories: { $exists: false } }, { categories: { $size: 0 } }],
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "topics",
+  //       localField: "topic",
+  //       foreignField: "_id",
+  //       as: "topicData",
+  //     },
+  //   },
+  //   {
+  //     $project: {
+  //       _id: 1,
+  //       categories: {
+  //         $cond: [
+  //           { $gt: [{ $size: "$topicData" }, 0] },
+  //           { $arrayElemAt: ["$topicData.categories", 0] },
+  //           [],
+  //         ],
+  //       },
+  //     },
+  //   },
+  // ]);
+
+  // const result = await Question.bulkWrite(
+  //   docs.map((d) => ({
+  //     updateOne: {
+  //       filter: { _id: d._id },
+  //       update: { $set: { categories: d.categories } },
+  //     },
+  //   })),
+  // );
+
+  // console.log("Modified:", result.modifiedCount);
+
+  // console.log({ result });
+
   // const data = await Question.updateMany(
   //   { topic: "69bc25a27450a5cc7c4aaf14" },
   //   {
@@ -486,53 +532,53 @@ router.get("/mod_questions", async (req, res) => {
 
   // =======================================================================
   // POPULATING THE TOPIC SUBJECT'S FIELDS
-  const topics = await Topic.find({ subject: { $exists: false } }).lean();
+  // const topics = await Topic.find({ subject: { $exists: false } }).lean();
 
-  console.log(`Found ${topics.length} topics to migrate`);
+  // console.log(`Found ${topics.length} topics to migrate`);
 
-  let success = 0;
-  let failed = 0;
+  // let success = 0;
+  // let failed = 0;
 
-  for (const topic of topics) {
-    if (!topic.questions?.length) {
-      console.warn(
-        `Topic ${topic._id} (${topic.name}) has no questions — skipping`,
-      );
-      failed++;
-      continue;
-    }
+  // for (const topic of topics) {
+  //   if (!topic.questions?.length) {
+  //     console.warn(
+  //       `Topic ${topic._id} (${topic.name}) has no questions — skipping`,
+  //     );
+  //     failed++;
+  //     continue;
+  //   }
 
-    // Grab the first populated question to extract subject
-    const question = await Question.findOne({
-      _id: { $in: topic.questions },
-      subject: { $exists: true },
-    })
-      .populate("subject", "name")
-      .lean();
+  //   // Grab the first populated question to extract subject
+  //   const question = await Question.findOne({
+  //     _id: { $in: topic.questions },
+  //     subject: { $exists: true },
+  //   })
+  //     .populate("subject", "name")
+  //     .lean();
 
-    if (!question?.subject) {
-      console.warn(
-        `Topic ${topic._id} (${topic.name}) — no question with a subject found — skipping`,
-      );
-      failed++;
-      continue;
-    }
+  //   if (!question?.subject) {
+  //     console.warn(
+  //       `Topic ${topic._id} (${topic.name}) — no question with a subject found — skipping`,
+  //     );
+  //     failed++;
+  //     continue;
+  //   }
 
-    await Topic.updateOne(
-      { _id: topic._id },
-      {
-        $set: {
-          subject: question.subject._id,
-          subjectName: question.subject.name,
-        },
-      },
-    );
+  //   await Topic.updateOne(
+  //     { _id: topic._id },
+  //     {
+  //       $set: {
+  //         subject: question.subject._id,
+  //         subjectName: question.subject.name,
+  //       },
+  //     },
+  //   );
 
-    console.log(`✓ Topic "${topic.name}" → subject: ${question.subject.name}`);
-    success++;
-  }
+  //   console.log(`✓ Topic "${topic.name}" → subject: ${question.subject.name}`);
+  //   success++;
+  // }
 
-  console.log(`\nDone. ${success} updated, ${failed} skipped.`);
+  // console.log(`\nDone. ${success} updated, ${failed} skipped.`);
 
   // ========================================================================================
   // ========================================================================================
