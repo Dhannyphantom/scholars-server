@@ -17,6 +17,7 @@ const {
   reconcileSchool,
   getGrade,
   syncSchoolClassesWithStudents,
+  capCapitalize,
 } = require("../controllers/helpers");
 const { default: mongoose } = require("mongoose");
 const { Quiz } = require("../models/Quiz");
@@ -59,7 +60,7 @@ router.post("/create", auth, async (req, res) => {
     type: data?.type?.name,
     rep: userId,
     createdAt: now,
-    teachers: [{ user: userId }],
+    teachers: [{ user: userId, verified: true }],
     subscription: {
       current: now,
       expiry: threeMonthsFromNow,
@@ -68,8 +69,21 @@ router.post("/create", auth, async (req, res) => {
   });
 
   await school.save();
+  await reconcileSchool(school._id);
 
   res.send({ status: "success", data: school });
+
+  const professionals = await User.find({
+    accountType: { $in: ["manager", "professional"] },
+  }).select("expoPushToken");
+
+  const tokens = professionals.map((p) => p.expoPushToken);
+
+  await expoNotifications(tokens, {
+    title: `🏫 New School Created`,
+    message: `🎉 ${capCapitalize(school.name)} school has just been created`,
+    data: {},
+  });
 });
 
 router.post("/verify", auth, async (req, res) => {
