@@ -45,6 +45,10 @@ router.post("/create", auth, async (req, res) => {
   const data = req.body;
   const userId = req.user.userId;
 
+  const now = new Date();
+  const threeMonthsFromNow = new Date(now);
+  threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+
   const school = new School({
     contact: data.contact,
     email: data.email,
@@ -54,8 +58,13 @@ router.post("/create", auth, async (req, res) => {
     state: data?.state?.name,
     type: data?.type?.name,
     rep: userId,
-    createdAt: new Date(),
+    createdAt: now,
     teachers: [{ user: userId }],
+    subscription: {
+      current: now,
+      expiry: threeMonthsFromNow,
+      isActive: true,
+    },
   });
 
   await school.save();

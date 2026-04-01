@@ -472,6 +472,8 @@ router.get("/mod_questions", async (req, res) => {
   // const data = await Question.find({ categories: { $size: 0 } }).lean();
 
   // console.log(`Found ${data.length} questions with empty categories`);
+  // ================================================================================
+  // ================================================================================
 
   // const docs = await Question.aggregate([
   //   {
@@ -513,6 +515,12 @@ router.get("/mod_questions", async (req, res) => {
   // console.log("Modified:", result.modifiedCount);
 
   // console.log({ result });
+  const cats = [
+    "678d59448f4a1d454f2ce813",
+    "678d59448f4a1d454f2ce811",
+    "678d59448f4a1d454f2ce80d",
+    "678d59448f4a1d454f2ce80f",
+  ];
 
   // const data = await Question.updateMany(
   //   { topic: "69bc25a27450a5cc7c4aaf14" },
@@ -570,6 +578,7 @@ router.get("/mod_questions", async (req, res) => {
   //       $set: {
   //         subject: question.subject._id,
   //         subjectName: question.subject.name,
+  //         categories: question.categories || cats,
   //       },
   //     },
   //   );
