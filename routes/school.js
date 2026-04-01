@@ -81,7 +81,7 @@ router.post("/create", auth, async (req, res) => {
 
   await expoNotifications(tokens, {
     title: `🏫 New School Created`,
-    message: `🎉 ${capCapitalize(school.name)} school has just been created`,
+    message: `🎉 ${capCapitalize(school.name)} — ${school.lga}, ${school.state} school has just been created`,
     data: {},
   });
 });
