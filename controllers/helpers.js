@@ -282,33 +282,49 @@ const day = (d = new Date()) => {
 };
 
 const logUserActivityDay = async (userId) => {
-  const today = day();
+  const todayStart = day();
+  const todayEnd = new Date(todayStart.getTime() + 86400000 - 1);
 
   await User.updateOne(
     {
       _id: userId,
-      activeDays: { $ne: today }, // prevent duplicates
+      activeDays: {
+        $not: {
+          $elemMatch: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
     },
-    {
-      $push: { activeDays: today },
-    },
+    { $push: { activeDays: todayStart } },
   );
 };
 
 const calculateStreakFromDays = (activeDays = []) => {
   if (!activeDays.length) return 0;
 
-  const days = activeDays.map((d) => day(d).getTime()).sort((a, b) => b - a); // newest → oldest
+  // Normalize all to midnight timestamps and deduplicate
+  const uniqueDays = [...new Set(activeDays.map((d) => day(d).getTime()))].sort(
+    (a, b) => b - a,
+  ); // newest → oldest
+
+  const todayMs = day().getTime();
+  const yesterdayMs = todayMs - 86400000;
+
+  // Streak is only valid if user was active today OR yesterday
+  // (yesterday allows the streak to survive until end of current day)
+  if (uniqueDays[0] !== todayMs && uniqueDays[0] !== yesterdayMs) {
+    return 0;
+  }
 
   let streak = 0;
-  let cursor = day().getTime();
+  // Start cursor from the most recent active day, not necessarily today
+  let cursor = uniqueDays[0];
 
-  for (const d of days) {
+  for (const d of uniqueDays) {
     if (d === cursor) {
       streak += 1;
-      cursor -= 86400000; // go back one day
-    } else if (d < cursor) {
-      break; // gap → streak ends
+      cursor -= 86400000;
+    } else {
+      break; // gap found
     }
   }
 
@@ -316,22 +332,26 @@ const calculateStreakFromDays = (activeDays = []) => {
 };
 
 const syncUserStreak = async (userId) => {
-  const user = await User.findById(userId).select("activeDays");
-
+  const user = await User.findById(userId).select("activeDays quizStats");
   if (!user) return;
 
   const currentStreak = calculateStreakFromDays(user.activeDays);
+  const longestStreak = Math.max(
+    user.quizStats?.longestStreak || 0,
+    currentStreak,
+  );
 
-  user.streak = currentStreak;
-
-  // user.quizStats.longestStreak = Math.max(
-  //   user.quizStats.longestStreak || 0,
-  //   currentStreak,
-  // );
-
-  // user.quizStats.lastStreakDate = day();
-
-  await user.save();
+  // Safe atomic update — no risk of overwriting other fields
+  await User.updateOne(
+    { _id: userId },
+    {
+      $set: {
+        streak: currentStreak,
+        "quizStats.longestStreak": longestStreak,
+        "quizStats.lastStreakDate": day(),
+      },
+    },
+  );
 };
 
 module.exports.sendPushInBatches = async (
