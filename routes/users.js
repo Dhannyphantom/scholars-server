@@ -631,6 +631,15 @@ router.get("/user", auth, async (req, res) => {
     await userData.save();
   }
 
+  if (userData.invites?.length) {
+    const now = new Date();
+    const hadExpired = userData.invites.some((inv) => inv.expiresAt < now);
+    if (hadExpired) {
+      userData.invites = userData.invites.filter((inv) => inv.expiresAt >= now);
+      await userData.save();
+    }
+  }
+
   // ── Midnight-based quota reset ──────────────────────────────────────────
   // Reset if last_update was on a DIFFERENT calendar day (not rolling 24h)
   const quota = userData.quota;
