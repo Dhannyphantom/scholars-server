@@ -1068,6 +1068,165 @@ router.post("/notify/follow-back-reminder", cronAuth, async (req, res) => {
 });
 
 // =============================================================================
+// 8.  STUDENT — NO SCHOOL NUDGE
+//
+//  POST  /api/cron/notify/student-no-school
+//
+//  Targets students who have no school affiliation at all — `school` is
+//  null/undefined AND they do not appear in any School.students array.
+//  We cross-check both because `user.school` can lag behind the School
+//  document in edge cases (e.g. joined via school but backfill not yet run).
+//
+//  Three sub-groups receive different copy based on account age:
+//
+//   A) New        (< 3 days)   — gentle onboarding nudge
+//   B) Mid-term   (3–14 days)  — stronger CTA with social proof
+//   C) Long-term  (> 14 days)  — urgency + Guru EduTech fallback school offer
+//
+//  Recommended schedule:  11:00 WAT daily
+// =============================================================================
+router.post("/notify/student-no-school", cronAuth, async (req, res) => {
+  try {
+    const now = new Date();
+
+    // ── Step 1: Fast first-pass — students with no school field set ──────────
+    // Some of these may actually appear in a School.students list (school
+    // joined them but user.school backfill hasn't run yet), so we cross-check.
+    const candidateStudents = await User.find(
+      {
+        accountType: "student",
+        expoPushToken: { $exists: true, $ne: null },
+        $or: [{ school: { $exists: false } }, { school: null }],
+      },
+      { _id: 1, expoPushToken: 1, createdAt: 1 },
+    ).lean();
+
+    if (!candidateStudents.length) {
+      return res.json({
+        success: true,
+        message: "All students are affiliated with a school — nothing to do",
+        stats: { eligible: 0 },
+      });
+    }
+
+    // ── Step 2: Cross-check against School documents ─────────────────────────
+    const candidateIds = candidateStudents.map((s) => s._id);
+
+    const schoolsContainingCandidates = await School.find(
+      { "students.user": { $in: candidateIds } },
+      { "students.user": 1 },
+    ).lean();
+
+    const alreadyInSchoolSet = new Set();
+    schoolsContainingCandidates.forEach((school) => {
+      (school.students || []).forEach((s) => {
+        if (s.user) alreadyInSchoolSet.add(s.user.toString());
+      });
+    });
+
+    // Only keep students who are genuinely not in any school
+    const trulyUnaffiliatedStudents = candidateStudents.filter(
+      (s) => !alreadyInSchoolSet.has(s._id.toString()),
+    );
+
+    if (!trulyUnaffiliatedStudents.length) {
+      return res.json({
+        success: true,
+        message: "No truly unaffiliated students found after cross-check",
+        stats: {
+          candidates: candidateStudents.length,
+          removedBySchoolCrossCheck: candidateStudents.length,
+          eligible: 0,
+        },
+      });
+    }
+
+    // ── Step 3: Bucket by account age ────────────────────────────────────────
+    const DAY_MS = 86_400_000;
+
+    const newStudents = []; // < 3 days   — gentle onboarding
+    const midStudents = []; // 3–14 days  — stronger CTA
+    const longStudents = []; // > 14 days  — urgency + fallback offer
+
+    for (const student of trulyUnaffiliatedStudents) {
+      const ageDays = (now - new Date(student.createdAt || 0)) / DAY_MS;
+
+      if (ageDays < 3) {
+        newStudents.push(student.expoPushToken);
+      } else if (ageDays <= 14) {
+        midStudents.push(student.expoPushToken);
+      } else {
+        longStudents.push(student.expoPushToken);
+      }
+    }
+
+    // ── Step 4: Send tier-specific notifications ──────────────────────────────
+    const [newRes, midRes, longRes] = await Promise.all([
+      // Group A — brand new, show them the path without pressure
+      newStudents.length
+        ? sendInBatches(newStudents.filter(Boolean), {
+            title: "🏫 Welcome! Time to find your school",
+            message:
+              "You're all set — now join your school to unlock quizzes, assignments, leaderboards and more! Search for your school in the app, or ask your teacher to add you.",
+            data: {
+              type: "student_no_school_new",
+              channel: "School",
+              screen: "school_search",
+            },
+          })
+        : { sent: 0, failed: 0 },
+
+      // Group B — been around a while, should have joined by now
+      midStudents.length
+        ? sendInBatches(midStudents.filter(Boolean), {
+            title: "📌 You're missing out — join your school!",
+            message:
+              "Your classmates are already taking quizzes, earning points, and climbing the leaderboard. Don't get left behind — search for your school now, or ask your teacher to invite you.",
+            data: {
+              type: "student_no_school_mid",
+              channel: "School",
+              screen: "school_search",
+            },
+          })
+        : { sent: 0, failed: 0 },
+
+      // Group C — long-term unaffiliated, offer the Guru EduTech fallback school
+      longStudents.length
+        ? sendInBatches(longStudents.filter(Boolean), {
+            title: "⚠️ Still no school? We've got you covered",
+            message:
+              'No school yet? No problem — join the official Guru EduTech school to access all features while you wait for your school to sign up. Search "Guru EduTech" in the school finder!',
+            data: {
+              type: "student_no_school_long",
+              channel: "School",
+              screen: "school_search",
+              searchQuery: "Guru EduTech", // frontend can pre-fill the search bar
+            },
+          })
+        : { sent: 0, failed: 0 },
+    ]);
+
+    return res.json({
+      success: true,
+      message: "Student no-school nudge notifications dispatched",
+      stats: {
+        totalCandidates: candidateStudents.length,
+        removedBySchoolCrossCheck: alreadyInSchoolSet.size,
+        trulyUnaffiliated: trulyUnaffiliatedStudents.length,
+        groups: {
+          new: { count: newStudents.length, ...newRes },
+          mid: { count: midStudents.length, ...midRes },
+          long: { count: longStudents.length, ...longRes },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("[cron/student-no-school]", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// =============================================================================
 // HEALTH CHECK  —  GET /api/cron/health
 // =============================================================================
 router.get("/health", (req, res) => {
