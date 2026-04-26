@@ -682,8 +682,17 @@ router.get("/user", auth, async (req, res) => {
 
 router.get("/userInfo", auth, async (req, res) => {
   const { userId } = req.query;
+  const currentUserId = req.user.userId;
 
-  const userData = await User.findById(userId).select(userSelector);
+  const [userData, currentUser] = await Promise.all([
+    User.findById(userId)
+      .populate({ path: "school", select: "name" })
+      .select(
+        userSelector +
+          " points totalPoints streak leaderboardRank rank following followers",
+      ),
+    User.findById(currentUserId).select("following followers"),
+  ]);
 
   if (!userData)
     return res.status(422).json("User data not found. Please sign in again");
@@ -692,12 +701,42 @@ router.get("/userInfo", auth, async (req, res) => {
   const expiryDate = new Date(userData?.subscription?.expiry);
 
   if (expiryDate < today && userData?.subscription?.isActive) {
-    // subscription expired
     userData.subscription.isActive = false;
     await userData.save();
   }
 
-  res.json({ user: userData, status: "success" });
+  // ── Relationship flags ────────────────────────────────────────────────────
+  // isFollowingViewer: the viewed user follows the current user (they are a follower of viewer)
+  // isViewerFollowing: the current user follows the viewed user
+  const viewedFollowerIds =
+    userData.followers?.map((id) => id.toString()) ?? [];
+  const viewedFollowingIds =
+    userData.following?.map((id) => id.toString()) ?? [];
+  const currentUserIdStr = currentUserId.toString();
+  const viewedUserIdStr = userId.toString();
+
+  const isViewerFollowing =
+    currentUser?.following?.some((id) => id.toString() === viewedUserIdStr) ??
+    false;
+
+  const isFollowingViewer =
+    currentUser?.followers?.some((id) => id.toString() === viewedUserIdStr) ??
+    false;
+
+  // Strip the raw arrays from the response — only expose the flags
+  const userObj = userData.toObject();
+  delete userObj.following;
+  delete userObj.followers;
+
+  res.json({
+    user: userObj,
+    status: "success",
+    relationship: {
+      isViewerFollowing, // current user → viewed user
+      isFollowingViewer, // viewed user → current user
+      isSelf: currentUserIdStr === viewedUserIdStr,
+    },
+  });
 });
 
 router.get("/professionals", auth, async (req, res) => {
