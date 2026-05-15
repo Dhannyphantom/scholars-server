@@ -72,6 +72,7 @@ const {
   deleteFile,
 } = require("../middlewares/uploadToS3");
 const { sendMail } = require("../controllers/mailer");
+const { Quiz } = require("../models/Quiz");
 // ─────────────────────────────────────────────────────────────────────────────
 
 // In-memory OTP store — swap for Redis or a DB table in production
@@ -80,6 +81,7 @@ const otpStore = new Map();
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_ATTEMPTS = 5;
+const GURU_SCHOOL_ID = "6a078a1db815f789b602f3cd";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -687,10 +689,7 @@ router.get("/userInfo", auth, async (req, res) => {
   const [userData, currentUser] = await Promise.all([
     User.findById(userId)
       .populate({ path: "school", select: "name" })
-      .select(
-        userSelector +
-          " points totalPoints streak leaderboardRank rank following followers",
-      ),
+      .select(userSelector + " streak leaderboardRank following followers"),
     User.findById(currentUserId).select("following followers"),
   ]);
 
@@ -2454,6 +2453,42 @@ router.put("/updateProfile", auth, async (req, res) => {
     },
   ).select(fullUserSelector);
 
+  // ── Auto-join students to Guru EduTech school ─────────────────────────────
+  // Every new student is added as a verified member of the Guru EduTech school
+  // so they have access to school features immediately after registration.
+
+  if (updatedUser?.accountType === "student" && !updatedUser.school) {
+    try {
+      const guruSchool = await School.findById(GURU_SCHOOL_ID);
+
+      if (guruSchool) {
+        const alreadyMember = guruSchool.students.some(
+          (s) => s.user?.toString() === updatedUser._id.toString(),
+        );
+
+        if (!alreadyMember) {
+          guruSchool.students.push({ user: updatedUser._id, verified: true });
+          await guruSchool.save();
+        }
+
+        // Reflect school membership and verification on the User document
+        await User.updateOne(
+          { _id: updatedUser._id },
+          {
+            $set: {
+              school: guruSchool._id,
+              verified: true,
+            },
+          },
+        );
+      }
+    } catch (schoolErr) {
+      // Non-fatal — registration still succeeds if school join fails
+      console.error("[register] Guru school auto-join error:", schoolErr);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   res.json({ user: updatedUser });
 });
 
@@ -3437,4 +3472,184 @@ router.get("/suggestions/smart", auth, async (req, res) => {
   }
 });
 
+// =============================================================================
+// AUTO-JOIN UNAFFILIATED STUDENTS TO GURU EDUTECH SCHOOL
+//
+// POST /api/users/auto-join-guru
+//
+// Finds every student who is not a member of any school document and adds
+// them to the Guru EduTech school as a verified student.  Idempotent — safe
+// to call multiple times; students already in the school are skipped.
+//
+// Protection: requires the shared CRON_SECRET header (same key used in
+// cron.js) so it can be triggered by a scheduler or an admin script.
+//
+//   Headers:  x-cron-secret: <CRON_SECRET>
+//   Body:     (none required)
+//
+// Recommended: run daily via cron alongside the other cleanup jobs.
+// =============================================================================
+const AUTO_JOIN_SECRET = process.env.CRON_SECRET;
+
+router.post("/auto-join-guru", async (req, res) => {
+  // ── Auth guard ──────────────────────────────────────────────────────────
+  const secret =
+    req.headers["x-cron-secret"] || req.query.secret || req.body?.secret;
+  if (!secret || secret !== AUTO_JOIN_SECRET) {
+    return res.status(401).json({ success: false, message: "Unauthorised" });
+  }
+
+  // await User.updateMany(
+  //   { school: "69b86446e290d18b5cca2e7f", accountType: "student" },
+  //   { $unset: { school: "" } },
+  // );
+
+  // await Quiz.updateMany(
+  //   { school: "69d62c539811541cfedd6581" },
+  //   { $set: { school: GURU_SCHOOL_ID } },
+  // );
+
+  try {
+    // ── 1. Load Guru EduTech school ────────────────────────────────────────
+    const guruSchool = await School.findById(GURU_SCHOOL_ID);
+    if (!guruSchool) {
+      return res.status(404).json({
+        success: false,
+        message: "Guru EduTech school not found. Check GURU_SCHOOL_ID.",
+      });
+    }
+
+    // ── 2. Collect IDs already in the school ──────────────────────────────
+    const alreadyInSchool = new Set(
+      guruSchool.students.map((s) => s.user?.toString()),
+    );
+
+    // ── 3. Find students not present in ANY school document ────────────────
+    // Fast first-pass: students whose user.school field is null/missing AND
+    // whose profile is complete enough to be placed in a real school context.
+    //
+    // Required fields:
+    //   firstName, lastName       — identity
+    //   class.level               — school placement
+    //   email, emailVerified      — verified contact
+    //   avatar.image.uri          — profile picture uploaded
+    //   state, lga                — location
+    //   contact                   — phone number
+    //   gender                    — demographic
+    const candidateStudents = await User.find(
+      {
+        accountType: "student",
+
+        // Not already in a school
+        $or: [
+          { school: { $exists: false } },
+          { school: null },
+          { school: GURU_SCHOOL_ID },
+        ],
+
+        // ── Profile completeness requirements ───────────────────────────
+        // All string fields must exist AND be non-empty strings.
+        // avatar.image.uri must be a non-empty string.
+        // emailVerified must be true.
+        // class.level must be one of the valid enum values.
+        firstName: { $exists: true, $ne: "" },
+        lastName: { $exists: true, $ne: "" },
+        "class.level": { $exists: true, $ne: "" },
+        email: { $exists: true, $ne: "" },
+        emailVerified: true,
+        "avatar.image.uri": { $exists: true, $ne: "" },
+        state: { $exists: true, $ne: "" },
+        lga: { $exists: true, $ne: "" },
+        contact: { $exists: true, $ne: "" },
+        gender: { $exists: true, $ne: "" },
+      },
+      { _id: 1 },
+    ).lean();
+
+    if (!candidateStudents.length) {
+      return res.json({
+        success: true,
+        message:
+          "No unaffiliated students with complete profiles found — nothing to do",
+        stats: {
+          checked: 0,
+          incompleteProfileSkipped: 0,
+          joined: 0,
+          alreadyMember: 0,
+        },
+      });
+    }
+
+    const candidateIds = candidateStudents.map((s) => s._id);
+
+    // ── 4. Cross-check: some candidates may still appear in a school's
+    //       students[] even if user.school wasn't backfilled ──────────────
+    const schoolsContaining = await School.find(
+      { "students.user": { $in: candidateIds } },
+      { "students.user": 1 },
+    ).lean();
+
+    const trulyInASchool = new Set();
+    schoolsContaining.forEach((school) => {
+      (school.students || []).forEach((s) => {
+        if (s.user) trulyInASchool.add(s.user.toString());
+      });
+    });
+
+    const trulyUnaffiliated = candidateIds.filter(
+      (id) => !trulyInASchool.has(id.toString()),
+    );
+
+    if (!trulyUnaffiliated.length) {
+      return res.json({
+        success: true,
+        message:
+          "All profile-complete candidates are already in a school after cross-check",
+        stats: {
+          checked: candidateIds.length,
+          joined: 0,
+          alreadyMember: 0,
+        },
+      });
+    }
+
+    // ── 5. Separate: new additions vs already in Guru school ──────────────
+    const toAdd = trulyUnaffiliated.filter(
+      (id) => !alreadyInSchool.has(id.toString()),
+    );
+    const alreadyMemberCount = trulyUnaffiliated.length - toAdd.length;
+
+    // ── 6. Push new students into the Guru school ─────────────────────────
+    if (toAdd.length > 0) {
+      const newEntries = toAdd.map((id) => ({ user: id, verified: true }));
+      guruSchool.students.push(...newEntries);
+      await guruSchool.save();
+
+      // Backfill user.school + user.verified on the User documents
+      await User.updateMany(
+        { _id: { $in: toAdd } },
+        {
+          $set: {
+            school: guruSchool._id,
+            verified: true,
+          },
+        },
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: `Auto-join complete. ${toAdd.length} student(s) with complete profiles added to Guru EduTech school.`,
+      stats: {
+        checked: candidateIds.length,
+        trulyUnaffiliated: trulyUnaffiliated.length,
+        joined: toAdd.length,
+        alreadyMember: alreadyMemberCount,
+      },
+    });
+  } catch (error) {
+    console.error("[auto-join-guru]", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 module.exports = router;

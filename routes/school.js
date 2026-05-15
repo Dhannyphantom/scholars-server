@@ -5654,4 +5654,397 @@ function formatSchoolMeta(school, totalStudents, totalTeachers) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD THESE TWO ROUTE BLOCKS into your existing routes/school.js
+// Place them anywhere after the existing router.post("/join", ...) block.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// =============================================================================
+// LEAVE SCHOOL
+//
+// POST /api/school/leave
+//
+// Allows a verified student or teacher to leave their current school.
+// The request body may optionally include `nextSchoolId` — if supplied the
+// user is immediately added to that school as an unverified member (same flow
+// as /join).  If omitted the user is simply removed and can search later.
+//
+// Body:
+//   { schoolId: string, nextSchoolId?: string }
+//
+// Steps:
+//  1. Validate the user is actually a member of schoolId.
+//  2. Remove them from School.students / School.teachers.
+//  3. Remove them from any class inside that school (students array).
+//  4. Clear user.school, user.class, user.verified.
+//  5. Optionally add them to nextSchoolId (unverified) and notify those teachers.
+//  6. Notify the original school's verified teachers that the member left.
+// =============================================================================
+router.post("/leave", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { schoolId, nextSchoolId } = req.body;
+
+  if (!schoolId || !mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res
+      .status(400)
+      .json({ status: "failed", message: "Valid schoolId is required" });
+  }
+
+  // ── 1. Load user ───────────────────────────────────────────────────────────
+  const userInfo = await User.findById(userId).select(
+    "accountType firstName lastName username prefix expoPushToken",
+  );
+  if (!userInfo) {
+    return res
+      .status(422)
+      .json({ status: "failed", message: "User not found" });
+  }
+
+  const { accountType } = userInfo;
+  const isTeacher = accountType === "teacher";
+  const isStudent = accountType === "student";
+
+  if (!isTeacher && !isStudent) {
+    return res.status(403).json({
+      status: "failed",
+      message: "Only students and teachers can leave a school",
+    });
+  }
+
+  // ── 2. Load school ─────────────────────────────────────────────────────────
+  const school = await School.findById(schoolId);
+  if (!school) {
+    return res
+      .status(404)
+      .json({ status: "failed", message: "School not found" });
+  }
+
+  // ── 3. Confirm membership ──────────────────────────────────────────────────
+  const memberList = isTeacher ? school.teachers : school.students;
+  const isMember = memberList.some((m) => m.user?.toString() === userId);
+
+  if (!isMember) {
+    return res.status(422).json({
+      status: "failed",
+      message: "You are not a member of this school",
+    });
+  }
+
+  // ── 4. Remove from school ──────────────────────────────────────────────────
+  if (isTeacher) {
+    school.teachers = school.teachers.filter(
+      (t) => t.user?.toString() !== userId,
+    );
+  } else {
+    school.students = school.students.filter(
+      (s) => s.user?.toString() !== userId,
+    );
+
+    // Also evict from every class inside this school
+    school.classes.forEach((cls) => {
+      cls.students = cls.students.filter((s) => s.toString() !== userId);
+    });
+  }
+
+  // ── 5. Add leave announcement ──────────────────────────────────────────────
+  const leaverName =
+    `${capFirstLetter(userInfo.firstName)} ${capFirstLetter(userInfo.lastName)}`.trim() ||
+    userInfo.username;
+  school.announcements.push({
+    type: "system",
+    message: `${leaverName} has left the school.`,
+    visibility: "teacher",
+  });
+
+  await school.save();
+
+  // ── 6. Clear user's school / class fields ──────────────────────────────────
+  await User.updateOne(
+    { _id: userId },
+    {
+      $unset: {
+        school: "",
+        "class.level": "",
+        "class.alias": "",
+        "class.id": "",
+      },
+      $set: { "class.hasChanged": false, verified: false },
+    },
+  );
+
+  // ── 7. Optionally join a new school ───────────────────────────────────────
+  let joinedNext = false;
+  let nextSchool = null;
+
+  if (nextSchoolId && mongoose.Types.ObjectId.isValid(nextSchoolId)) {
+    nextSchool = await School.findById(nextSchoolId);
+
+    if (nextSchool && nextSchool.subscription?.isActive) {
+      const alreadyInNext = isTeacher
+        ? nextSchool.teachers.some((t) => t.user?.toString() === userId)
+        : nextSchool.students.some((s) => s.user?.toString() === userId);
+
+      if (!alreadyInNext) {
+        const joinMessage = isTeacher
+          ? `${leaverName} has requested to join ${nextSchool.name} as a teacher`
+          : `${leaverName} has requested to join ${nextSchool.name} as a student`;
+
+        if (isTeacher) {
+          nextSchool.teachers.push({ user: userId });
+        } else {
+          nextSchool.students.push({ user: userId });
+        }
+
+        nextSchool.announcements.push({
+          type: "system",
+          message: joinMessage,
+          visibility: "teacher",
+        });
+
+        await nextSchool.save();
+        joinedNext = true;
+      }
+    }
+  }
+
+  // ── 8. Flush response ──────────────────────────────────────────────────────
+  res.json({
+    status: "success",
+    message: joinedNext
+      ? `You have left ${school.name} and sent a join request to ${nextSchool.name}`
+      : `You have successfully left ${school.name}`,
+    joinedNext,
+  });
+
+  // ── 9. Background notifications ────────────────────────────────────────────
+  try {
+    // Notify verified teachers of the old school
+    const verifiedTeacherIds = school.teachers
+      .filter((t) => t.verified)
+      .map((t) => t.user);
+
+    if (verifiedTeacherIds.length) {
+      const teachers = await User.find(
+        { _id: { $in: verifiedTeacherIds } },
+        { expoPushToken: 1 },
+      ).lean();
+
+      const tokens = teachers.map((t) => t.expoPushToken).filter(Boolean);
+
+      if (tokens.length) {
+        await expoNotifications(tokens, {
+          title: `🚪 Member Left School`,
+          message: `${leaverName} has left ${school.name}.`,
+          data: { type: "member_left", channel: "School" },
+        });
+      }
+    }
+
+    // Notify verified teachers of the next school (if applicable)
+    if (joinedNext && nextSchool) {
+      const nextVerifiedTeacherIds = nextSchool.teachers
+        .filter((t) => t.verified)
+        .map((t) => t.user);
+
+      if (nextVerifiedTeacherIds.length) {
+        const nextTeachers = await User.find(
+          { _id: { $in: nextVerifiedTeacherIds } },
+          { expoPushToken: 1 },
+        ).lean();
+
+        const nextTokens = nextTeachers
+          .map((t) => t.expoPushToken)
+          .filter(Boolean);
+
+        if (nextTokens.length) {
+          const notifTitle = isTeacher
+            ? "🙋 New Teacher Join Request"
+            : "🙋 New Student Join Request";
+          await expoNotifications(nextTokens, {
+            title: notifTitle,
+            message: `${leaverName} has requested to join ${nextSchool.name}.`,
+            data: { type: "join_request", channel: "School" },
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("leave-school notification error:", err);
+  }
+});
+
+// =============================================================================
+// FLAG / REPORT A STUDENT
+//
+// POST /api/school/flag
+//
+// Any verified school member (student or teacher) can flag another student
+// they believe does not genuinely belong to the school.
+//
+// Body:
+//   { schoolId: string, targetUserId: string, reason?: string }
+//
+// Behaviour:
+//  • A flag record is stored inside School.announcements as a special
+//    "alert" type so it surfaces in the teacher notification feed.
+//  • Each (reporter, target) pair can only create ONE active flag per school
+//    (idempotent — subsequent calls update the existing one).
+//  • All verified teachers in the school receive a push notification.
+//  • The target student is NOT notified (to avoid tipping them off).
+// =============================================================================
+router.post("/flag", auth, async (req, res) => {
+  const reporterId = req.user.userId;
+  const { schoolId, targetUserId, reason } = req.body;
+
+  // ── Validate inputs ────────────────────────────────────────────────────────
+  if (!schoolId || !mongoose.Types.ObjectId.isValid(schoolId)) {
+    return res
+      .status(400)
+      .json({ status: "failed", message: "Valid schoolId is required" });
+  }
+
+  if (!targetUserId || !mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res
+      .status(400)
+      .json({ status: "failed", message: "Valid targetUserId is required" });
+  }
+
+  if (reporterId === targetUserId) {
+    return res
+      .status(400)
+      .json({ status: "failed", message: "You cannot flag yourself" });
+  }
+
+  // ── Load participants ──────────────────────────────────────────────────────
+  const [reporter, targetUser, school] = await Promise.all([
+    User.findById(reporterId).select("firstName lastName username accountType"),
+    User.findById(targetUserId).select(
+      "firstName lastName username accountType",
+    ),
+    School.findById(schoolId).select(
+      "name announcements students teachers classes",
+    ),
+  ]);
+
+  if (!reporter) {
+    return res
+      .status(422)
+      .json({ status: "failed", message: "Reporter not found" });
+  }
+  if (!targetUser) {
+    return res
+      .status(422)
+      .json({ status: "failed", message: "Target user not found" });
+  }
+  if (!school) {
+    return res
+      .status(404)
+      .json({ status: "failed", message: "School not found" });
+  }
+
+  // ── Reporter must be a verified member of this school ─────────────────────
+  const isReporterStudent = school.students.some(
+    (s) => s.user?.toString() === reporterId && s.verified,
+  );
+  const isReporterTeacher = school.teachers.some(
+    (t) => t.user?.toString() === reporterId && t.verified,
+  );
+
+  if (!isReporterStudent && !isReporterTeacher) {
+    return res.status(403).json({
+      status: "failed",
+      message: "Only verified school members can flag other students",
+    });
+  }
+
+  // ── Target must be a student in this school ───────────────────────────────
+  const isTargetStudent = school.students.some(
+    (s) => s.user?.toString() === targetUserId,
+  );
+
+  if (!isTargetStudent) {
+    return res.status(422).json({
+      status: "failed",
+      message: "The reported user is not a student in this school",
+    });
+  }
+
+  // ── Build the announcement message ────────────────────────────────────────
+  const reporterName =
+    `${capFirstLetter(reporter.firstName)} ${capFirstLetter(reporter.lastName)}`.trim() ||
+    reporter.username;
+
+  const targetName =
+    `${capFirstLetter(targetUser.firstName)} ${capFirstLetter(targetUser.lastName)}`.trim() ||
+    targetUser.username;
+
+  const flagMessage = reason
+    ? `⚑ FLAG: ${reporterName} reported ${targetName} as a non-genuine school member. Reason: ${reason.slice(0, 120)}`
+    : `⚑ FLAG: ${reporterName} reported ${targetName} as a non-genuine school member.`;
+
+  // ── Store as an alert-type announcement (teachers only visibility) ────────
+  // We embed the reporter and target IDs in the message so the teacher UI
+  // can surface a "Unverify" shortcut without an extra lookup.
+  // Format: flagged:<targetUserId>:<reporterId>
+  const flagTag = `flagged:${targetUserId}:${reporterId}`;
+
+  // Check for an existing flag from this reporter for this target — update it
+  // rather than creating a duplicate.
+  const existingIndex = school.announcements.findIndex(
+    (a) => a.type === "alert" && a.message.includes(flagTag),
+  );
+
+  if (existingIndex !== -1) {
+    // Update the timestamp so it bubbles back to the top
+    school.announcements[existingIndex].date = new Date();
+    school.announcements[existingIndex].message = `${flagMessage} [${flagTag}]`;
+  } else {
+    school.announcements.push({
+      teacher: reporterId, // reusing the field to store the reporter
+      message: `${flagMessage} [${flagTag}]`,
+      type: "alert",
+      visibility: "teacher",
+    });
+  }
+
+  await school.save();
+
+  // ── Flush response ─────────────────────────────────────────────────────────
+  res.json({
+    status: "success",
+    message: "Report submitted. School teachers have been notified.",
+  });
+
+  // ── Notify all verified teachers ───────────────────────────────────────────
+  try {
+    const verifiedTeacherIds = school.teachers
+      .filter((t) => t.verified)
+      .map((t) => t.user);
+
+    if (!verifiedTeacherIds.length) return;
+
+    const teachers = await User.find(
+      { _id: { $in: verifiedTeacherIds } },
+      { expoPushToken: 1 },
+    ).lean();
+
+    const tokens = teachers.map((t) => t.expoPushToken).filter(Boolean);
+
+    if (tokens.length) {
+      await expoNotifications(tokens, {
+        title: "⚠️ Student Flagged",
+        message: `${reporterName} has flagged ${targetName} as a possible non-member. Please review and take action.`,
+        data: {
+          type: "flag_student",
+          channel: "School",
+          schoolId,
+          targetUserId,
+        },
+      });
+    }
+  } catch (err) {
+    console.error("flag-student notification error:", err);
+  }
+});
+
 module.exports = router;
