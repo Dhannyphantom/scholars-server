@@ -396,6 +396,7 @@ module.exports.checkUserSub = async (userInfo) => {
 };
 
 const reconcileSchool = async (school) => {
+  if (!school) return;
   try {
     const schoolObj = school?.toObject();
 

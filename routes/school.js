@@ -69,7 +69,8 @@ router.post("/create", auth, async (req, res) => {
   });
 
   await school.save();
-  await reconcileSchool(school._id);
+  await User.updateOne({ _id: userId }, { $set: { school: school._id } });
+  await reconcileSchool(school);
 
   res.send({ status: "success", data: school });
 
@@ -374,16 +375,14 @@ router.post("/join", auth, async (req, res) => {
     if (!alreadyJoined) {
       const message = `${capFirstLetter(userInfo.firstName)} ${capFirstLetter(
         userInfo?.lastName,
-      )} has requested to join ${
-        school.name
-      } as a student, you may verify or decline this request`;
+      )} just joined ${school.name} as a student and is ready to start practicing, competing, and climbing the leaderboard!`;
 
-      school.students.push({ user: userId });
+      school.students.push({ user: userId, verified: true });
       school.announcements.push({ type: "system", message, visibility: "all" });
       await school.save();
 
       notificationPayload = {
-        title: "New Student Join Request",
+        title: "📚 New Student Enrollment",
         body: message,
       };
     }

@@ -241,7 +241,7 @@ const announcementSchema = new schema({
   },
   message: {
     type: String,
-    maxlength: 180,
+    maxlength: 250,
     required: true,
   },
   type: {
