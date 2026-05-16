@@ -69,6 +69,18 @@ router.post("/create", auth, async (req, res) => {
   });
 
   await school.save();
+  // remove teacher from any previous school
+  const prevSchool = await School.findOne({
+    _id: { $ne: school._id },
+    "teachers.user": userId,
+  });
+
+  if (prevSchool) {
+    await School.updateOne(
+      { _id: prevSchool._id },
+      { $pull: { teachers: { user: userId } } },
+    );
+  }
   await User.updateOne({ _id: userId }, { $set: { school: school._id } });
   await reconcileSchool(school);
 
@@ -1615,21 +1627,90 @@ router.get("/classes", auth, async (req, res) => {
 });
 
 router.get("/search", auth, async (req, res) => {
-  const { q } = req.query;
-  // Split query into words, escaping special regex characters
-  const regex = new RegExp(q.split(/\s+/).join(".*"), "i");
+  try {
+    const { q = "" } = req.query;
 
-  const search = await School.find({ name: regex })
-    .select("name state lga subscription rep")
-    .populate([
-      {
-        path: "rep",
-        model: "User",
-        select: "avatar username firstName lastName preffix",
-      },
-    ]);
+    if (!q.trim()) {
+      return res.send({
+        status: "success",
+        data: [],
+      });
+    }
 
-  res.send({ status: "success", data: search });
+    const query = q.trim().toLowerCase();
+
+    // Escape regex special chars
+    const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    const words = query
+      .split(/\s+/)
+      .map((w) => escapeRegex(w))
+      .filter(Boolean);
+
+    /**
+     * STRICTER MATCHING
+     */
+
+    const regexPatterns = [];
+
+    // Exact phrase with flexible spaces
+    regexPatterns.push(words.join(".*"));
+
+    // Reverse order
+    if (words.length > 1) {
+      regexPatterns.push([...words].reverse().join(".*"));
+    }
+
+    // Individual meaningful words only
+    words.forEach((word) => {
+      if (word.length >= 3) {
+        regexPatterns.push(`\\b${word}`);
+      }
+    });
+
+    /**
+     * TYPO SUPPORT
+     * Only allow SMALL typo tolerance
+     */
+
+    const fuzzyPatterns = words
+      .filter((word) => word.length >= 5)
+      .map((word) => {
+        // Example:
+        // edtech => e.?d.?t.?e.?c.?h
+        return word.split("").join(".?");
+      });
+
+    const allPatterns = [...new Set([...regexPatterns, ...fuzzyPatterns])];
+
+    const search = await School.find({
+      $or: allPatterns.map((pattern) => ({
+        name: {
+          $regex: pattern,
+          $options: "i",
+        },
+      })),
+    })
+      .select("name state lga subscription rep")
+      .populate([
+        {
+          path: "rep",
+          model: "User",
+          select: "avatar username firstName lastName preffix",
+        },
+      ])
+      .limit(20);
+
+    res.send({
+      status: "success",
+      data: search,
+    });
+  } catch (error) {
+    res.status(500).send({
+      status: "error",
+      message: error.message,
+    });
+  }
 });
 
 router.get("/instances", auth, async (req, res) => {
@@ -5763,11 +5844,11 @@ router.post("/leave", auth, async (req, res) => {
     {
       $unset: {
         school: "",
-        "class.level": "",
-        "class.alias": "",
-        "class.id": "",
+        // "class.level": "",
+        // "class.alias": "",
+        // "class.id": "",
       },
-      $set: { "class.hasChanged": false, verified: false },
+      // $set: { "class.hasChanged": false, verified: false },
     },
   );
 
@@ -5786,12 +5867,12 @@ router.post("/leave", auth, async (req, res) => {
       if (!alreadyInNext) {
         const joinMessage = isTeacher
           ? `${leaverName} has requested to join ${nextSchool.name} as a teacher`
-          : `${leaverName} has requested to join ${nextSchool.name} as a student`;
+          : `${leaverName} just joined ${nextSchool.name} as a student and is ready to start learning, practicing, and competing with other students!`;
 
         if (isTeacher) {
           nextSchool.teachers.push({ user: userId });
         } else {
-          nextSchool.students.push({ user: userId });
+          nextSchool.students.push({ user: userId, verified: true });
         }
 
         nextSchool.announcements.push({
@@ -5858,10 +5939,12 @@ router.post("/leave", auth, async (req, res) => {
         if (nextTokens.length) {
           const notifTitle = isTeacher
             ? "🙋 New Teacher Join Request"
-            : "🙋 New Student Join Request";
+            : "🙋 New Student Enrollment";
           await expoNotifications(nextTokens, {
             title: notifTitle,
-            message: `${leaverName} has requested to join ${nextSchool.name}.`,
+            message: isTeacher
+              ? `${leaverName} has requested to join ${nextSchool.name}.`
+              : `${leaverName} just joined ${nextSchool.name} as a student, ready to start learning, practicing, and competing with other students!`,
             data: { type: "join_request", channel: "School" },
           });
         }
