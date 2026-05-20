@@ -1227,6 +1227,82 @@ router.post("/notify/student-no-school", cronAuth, async (req, res) => {
 });
 
 // =============================================================================
+// MONTHLY QUIZ COMPETITION FINALIZE
+//
+//  POST  /cron/competition/finalize
+//
+//  Run shortly after each competition's 24hr window ends.
+//  Finalizes rankings, awards top-3 prize points, marks competition finished.
+// =============================================================================
+router.post("/competition/finalize", cronAuth, async (req, res) => {
+  try {
+    const {
+      OnlineQuizCompetition,
+    } = require("../models/OnlineQuizCompetition");
+    const { rankParticipants } = require("../controllers/competitionHelpers");
+
+    const now = new Date();
+    const comps = await OnlineQuizCompetition.find({
+      status: "active",
+      endTime: { $lte: now },
+    });
+
+    const results = [];
+
+    for (const comp of comps) {
+      const ranked = rankParticipants(comp.participants || []);
+      comp.participants = ranked;
+      comp.totalParticipants = ranked.filter((p) => p.hasParticipated).length;
+
+      const top3 = ranked.slice(0, 3);
+      comp.finalRankings = top3.map((p, idx) => ({
+        user: p.user,
+        rank: idx + 1,
+        score: p.score,
+        prizeAwarded: false,
+      }));
+
+      const prizeMap = {
+        1: comp.prizes?.first?.reward || 0,
+        2: comp.prizes?.second?.reward || 0,
+        3: comp.prizes?.third?.reward || 0,
+      };
+
+      for (const entry of comp.finalRankings) {
+        const reward = prizeMap[entry.rank];
+        if (reward > 0) {
+          await User.findByIdAndUpdate(entry.user, {
+            $inc: { points: reward, totalPoints: reward },
+          });
+          entry.prizeAwarded = true;
+        }
+      }
+
+      comp.status = "finished";
+      comp.updatedAt = now;
+      await comp.save();
+
+      results.push({
+        competitionId: comp._id,
+        month: comp.month,
+        year: comp.year,
+        winners: top3.length,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Competition finalize complete",
+      finalized: results.length,
+      results,
+    });
+  } catch (error) {
+    console.error("[cron/competition/finalize]", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// =============================================================================
 // HEALTH CHECK  —  GET /api/cron/health
 // =============================================================================
 router.get("/health", (req, res) => {

@@ -682,6 +682,73 @@ router.get("/user", auth, async (req, res) => {
   res.json({ user: userData });
 });
 
+router.post("/account/delete", auth, async (req, res) => {
+  const userId = req.user.userId;
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: "Password is required to delete your account." });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ error: "Account not found." });
+  }
+
+  const passValid = await bcrypt.compare(password, user.password);
+  if (!passValid) {
+    return res.status(400).json({ error: "Incorrect password." });
+  }
+
+  const schools = await School.find({
+    $or: [
+      { "students.user": userId },
+      { "teachers.user": userId },
+      { "classes.students": userId },
+    ],
+  });
+
+  for (const school of schools) {
+    school.students = (school.students || []).filter(
+      (s) => s.user?.toString() !== userId.toString(),
+    );
+    school.teachers = (school.teachers || []).filter(
+      (t) => t.user?.toString() !== userId.toString(),
+    );
+    (school.classes || []).forEach((cls) => {
+      cls.students = (cls.students || []).filter(
+        (s) => s?.toString() !== userId.toString(),
+      );
+    });
+    await school.save();
+  }
+
+  await User.updateMany(
+    { $or: [{ followers: userId }, { following: userId }] },
+    {
+      $pull: {
+        followers: userId,
+        following: userId,
+      },
+    },
+  );
+
+  if (user.avatar?.image?.key) {
+    try {
+      await deleteFile(user.avatar.image.key);
+    } catch (_) {
+      // Non-blocking: still delete the account if media cleanup fails.
+    }
+  }
+
+  await User.deleteOne({ _id: userId });
+
+  res.json({
+    status: "success",
+    message: "Your account and personal data have been permanently deleted.",
+  });
+});
+
 router.get("/userInfo", auth, async (req, res) => {
   const { userId } = req.query;
   const currentUserId = req.user.userId;

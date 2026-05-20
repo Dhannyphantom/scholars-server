@@ -42,6 +42,7 @@ const adminRoutes = require("./routes/admin");
 const analyticsRoutes = require("./routes/analytics");
 const transactionsRoutes = require("./routes/transactions");
 const cronRoutes = require("./routes/cron");
+const competitionRoutes = require("./routes/competition");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -58,6 +59,7 @@ app.use("/support", support);
 app.use("/analytics", analyticsRoutes);
 app.use("/transactions", transactionsRoutes);
 app.use("/cron", cronRoutes);
+app.use("/competition", competitionRoutes);
 app.use("/admin", adminRoutes);
 
 app.use(error);
