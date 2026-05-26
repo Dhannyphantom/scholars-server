@@ -33,7 +33,13 @@ const populateCompetition = (query) =>
     .populate("finalRankings.user", "username firstName lastName avatar points")
     .populate("createdBy", "username");
 
-const formatCompetition = (comp, userId) => {
+/**
+ * formatCompetition
+ *
+ * isManager = true  → always include full leaderboard/rankings/participant details
+ * isManager = false → gate sensitive data behind resultsPublished flag
+ */
+const formatCompetition = (comp, userId, isManager = false) => {
   const now = new Date();
   const participant = comp.participants?.find(
     (p) => (p.user?._id || p.user)?.toString() === userId?.toString(),
@@ -46,6 +52,10 @@ const formatCompetition = (comp, userId) => {
 
   const isUpcoming = now < new Date(comp.startTime);
   const isEnded = now >= new Date(comp.endTime) || comp.status === "finished";
+
+  // Participants can only see results once a manager publishes them.
+  // Managers always see everything.
+  const canSeeResults = isManager || comp.resultsPublished;
 
   return {
     _id: comp._id,
@@ -60,18 +70,22 @@ const formatCompetition = (comp, userId) => {
     prizes: comp.prizes,
     totalQuestions: comp.totalQuestions,
     approxDuration: comp.approxDuration,
+    // Always expose total participant count
     totalParticipants: comp.totalParticipants,
-    finalRankings: comp.finalRankings,
+    finalRankings: canSeeResults ? (comp.finalRankings ?? []) : [],
+    resultsPublished: comp.resultsPublished,
     isLive,
     isUpcoming,
     isEnded,
+    // Personal performance — only revealed when results are published
     hasParticipated: participant?.hasParticipated ?? false,
-    myScore: participant?.score ?? null,
-    myRank: participant?.rank ?? null,
+    myScore: canSeeResults ? (participant?.score ?? null) : null,
+    myRank: canSeeResults ? (participant?.rank ?? null) : null,
   };
 };
 
-// GET /competition/active — current or next competition for home card
+// ─── GET /competition/active ─────────────────────────────────────────────────
+// Current or next competition for the home card
 router.get("/active", auth, async (req, res) => {
   try {
     const now = new Date();
@@ -103,11 +117,10 @@ router.get("/active", auth, async (req, res) => {
       return res.send({ status: "success", data: null });
     }
 
-    const populated = await populateCompetition(
+    const doc = await populateCompetition(
       OnlineQuizCompetition.findById(comp._id),
     );
 
-    const doc = await populated;
     const lastWinners =
       doc.status === "finished" && doc.finalRankings?.length
         ? doc.finalRankings
@@ -122,7 +135,7 @@ router.get("/active", auth, async (req, res) => {
     return res.send({
       status: "success",
       data: {
-        ...formatCompetition(doc.toObject(), userId),
+        ...formatCompetition(doc.toObject(), userId, false),
         lastWinners,
       },
     });
@@ -135,7 +148,7 @@ router.get("/active", auth, async (req, res) => {
   }
 });
 
-// ─── Manager routes (must be before /:id) ───────────────────────────────────
+// ─── Manager routes (must be declared before /:id) ───────────────────────────
 
 router.get("/manage/list", auth, requireManager, async (req, res) => {
   try {
@@ -187,6 +200,7 @@ router.get(
   },
 );
 
+// POST /competition/manage — create draft
 router.post("/manage", auth, requireManager, async (req, res) => {
   try {
     const { month, year, title, rules, subjects, prizes } = req.body;
@@ -220,6 +234,7 @@ router.post("/manage", auth, requireManager, async (req, res) => {
       subjects: subjects || [],
       prizes,
       status: "draft",
+      resultsPublished: false,
       createdBy: userId,
       totalQuestions: meta.totalQuestions,
       approxDuration: meta.approxDuration,
@@ -245,15 +260,15 @@ router.post("/manage", auth, requireManager, async (req, res) => {
   }
 });
 
+// PUT /competition/manage/:id — update draft or active competition
 router.put("/manage/:id", auth, requireManager, async (req, res) => {
   try {
     const comp = await OnlineQuizCompetition.findById(req.params.id);
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
     }
 
     if (comp.status === "finished") {
@@ -304,15 +319,15 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
   }
 });
 
+// POST /competition/manage/:id/publish — activate competition (make it live)
 router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
   try {
     const comp = await OnlineQuizCompetition.findById(req.params.id);
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
     }
 
     if (!comp.subjects?.length) {
@@ -347,28 +362,95 @@ router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
   }
 });
 
-// GET /competition/:id — full details
+// POST /competition/manage/:id/publish-results — release results to participants
+// Managers can see results at any time; this makes them visible to everyone else.
+router.post(
+  "/manage/:id/publish-results",
+  auth,
+  requireManager,
+  async (req, res) => {
+    try {
+      const comp = await OnlineQuizCompetition.findById(req.params.id);
+
+      if (!comp) {
+        return res
+          .status(404)
+          .send({ status: "failed", message: "Competition not found" });
+      }
+
+      if (comp.resultsPublished) {
+        return res.status(422).send({
+          status: "failed",
+          message: "Results have already been published",
+        });
+      }
+
+      // Results can only be released once the competition has ended
+      const now = new Date();
+      if (now < new Date(comp.endTime) && comp.status !== "finished") {
+        return res.status(422).send({
+          status: "failed",
+          message: "Competition has not ended yet",
+        });
+      }
+
+      comp.resultsPublished = true;
+      comp.status = "finished";
+      comp.updatedAt = now;
+      await comp.save();
+
+      return res.send({
+        status: "success",
+        message: "Results published — participants can now view their scores",
+        data: { resultsPublished: true },
+      });
+    } catch (err) {
+      console.error("manage publish-results error:", err);
+      return res.status(500).send({
+        status: "failed",
+        message: "Failed to publish results",
+      });
+    }
+  },
+);
+
+// ─── GET /competition/:id ─────────────────────────────────────────────────────
+// Full details — managers always see everything; participants see gated data
 router.get("/:id", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
+
+    const userInfo = await User.findById(userId).select("accountType").lean();
+    const isManager = userInfo?.accountType === "manager";
+
     const comp = await populateCompetition(
       OnlineQuizCompetition.findById(req.params.id),
     );
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
     }
 
     const ranked = rankParticipants(comp.participants || []);
-    const topTen = ranked.slice(0, 10);
+
+    // Managers see the full top-10 leaderboard at all times.
+    // Participants only see the live leaderboard while the competition is live
+    // (so they can see who's ahead); once ended, it's gated behind resultsPublished.
+    const now = new Date();
+    const isLive =
+      comp.status === "active" &&
+      now >= new Date(comp.startTime) &&
+      now < new Date(comp.endTime);
+
+    const canSeeLeaderboard = isManager || isLive || comp.resultsPublished;
+    const topTen = canSeeLeaderboard ? ranked.slice(0, 10) : [];
 
     return res.send({
       status: "success",
       data: {
-        ...formatCompetition(comp.toObject(), userId),
+        ...formatCompetition(comp.toObject(), userId, isManager),
         leaderboard: topTen,
         participantsCount: comp.totalParticipants,
       },
@@ -385,6 +467,10 @@ router.get("/:id", auth, async (req, res) => {
 // GET /competition/:id/leaderboard
 router.get("/:id/leaderboard", auth, async (req, res) => {
   try {
+    const userId = req.user.userId;
+    const userInfo = await User.findById(userId).select("accountType").lean();
+    const isManager = userInfo?.accountType === "manager";
+
     const comp = await OnlineQuizCompetition.findById(req.params.id)
       .populate(
         "participants.user",
@@ -393,9 +479,23 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
       .lean();
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
+    }
+
+    const now = new Date();
+    const isLive =
+      comp.status === "active" &&
+      now >= new Date(comp.startTime) &&
+      now < new Date(comp.endTime);
+
+    if (!isManager && !isLive && !comp.resultsPublished) {
+      return res.send({
+        status: "success",
+        data: [],
+        resultsPublished: false,
+        totalParticipants: comp.totalParticipants,
       });
     }
 
@@ -403,6 +503,8 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
 
     return res.send({
       status: "success",
+      resultsPublished: comp.resultsPublished,
+      totalParticipants: comp.totalParticipants,
       data: ranked.map((p) => ({
         _id: p.user?._id,
         username: p.user?.username,
@@ -433,10 +535,9 @@ router.post("/:id/questions", auth, async (req, res) => {
       .lean();
 
     if (!userInfo) {
-      return res.status(422).send({
-        status: "failed",
-        message: "User not found",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "User not found" });
     }
 
     if (userInfo.accountType !== "student") {
@@ -460,18 +561,16 @@ router.post("/:id/questions", auth, async (req, res) => {
     );
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
     }
 
     const now = new Date();
     if (comp.status !== "active") {
-      return res.status(422).send({
-        status: "failed",
-        message: "Competition is not active",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "Competition is not active" });
     }
 
     if (now < comp.startTime || now >= comp.endTime) {
@@ -601,10 +700,9 @@ router.post("/:id/submit", auth, async (req, res) => {
     );
 
     if (!userInfo) {
-      return res.status(422).send({
-        status: "failed",
-        message: "User not found",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "User not found" });
     }
 
     if (!userInfo.subscription?.isActive) {
@@ -618,10 +716,9 @@ router.post("/:id/submit", auth, async (req, res) => {
     const comp = await OnlineQuizCompetition.findById(req.params.id);
 
     if (!comp) {
-      return res.status(404).send({
-        status: "failed",
-        message: "Competition not found",
-      });
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
     }
 
     const now = new Date();
@@ -648,10 +745,9 @@ router.post("/:id/submit", auth, async (req, res) => {
     }
 
     if (comp.participants[participantIdx].hasParticipated) {
-      return res.status(422).send({
-        status: "failed",
-        message: "You have already submitted",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "You have already submitted" });
     }
 
     const qBankMap = new Map(
@@ -697,7 +793,8 @@ router.post("/:id/submit", auth, async (req, res) => {
         correctAnswers: result.correctAnswers,
         totalQuestions: result.totalQuestions,
         accuracy: result.accuracy,
-        rank: myEntry?.rank ?? null,
+        // Don't reveal rank yet — manager must publish results first
+        rank: null,
         pointsEarned: result.score,
         duration,
       },

@@ -2,6 +2,34 @@ const mongoose = require("mongoose");
 
 const schema = mongoose.Schema;
 
+const prizeEntrySchema = {
+  title: {
+    type: String,
+    required: true,
+  },
+  // "points" = automated GT points; "cash" = manual payout by admin
+  type: {
+    type: String,
+    enum: ["points", "cash"],
+    default: "points",
+  },
+  // Primary reward amount (GT points for "points" type; cash value for "cash" type)
+  reward: {
+    type: Number,
+    required: true,
+  },
+  // Only meaningful when type === "cash" (e.g. "NGN", "USD")
+  currency: {
+    type: String,
+    default: null,
+  },
+  // Optional human-readable note (e.g. "Paid via bank transfer within 7 days")
+  description: {
+    type: String,
+    default: null,
+  },
+};
+
 const competitionSchema = new schema({
   title: {
     type: String,
@@ -11,6 +39,7 @@ const competitionSchema = new schema({
     type: String,
     default: "",
   },
+
   // Month/year identifier and time window
   month: {
     type: Number,
@@ -59,42 +88,22 @@ const competitionSchema = new schema({
   ],
 
   prizes: {
-    first: {
-      title: {
-        type: String,
-        required: true,
-      },
-      reward: {
-        type: Number,
-        required: true,
-      },
-    },
-    second: {
-      title: {
-        type: String,
-        required: true,
-      },
-      reward: {
-        type: Number,
-        required: true,
-      },
-    },
-    third: {
-      title: {
-        type: String,
-        required: true,
-      },
-      reward: {
-        type: Number,
-        required: true,
-      },
-    },
+    first: prizeEntrySchema,
+    second: prizeEntrySchema,
+    third: prizeEntrySchema,
   },
 
   status: {
     type: String,
     enum: ["draft", "active", "finished"],
     default: "draft",
+  },
+
+  // Manager explicitly releases results to participants
+  // Managers can always view; participants only see after this is true
+  resultsPublished: {
+    type: Boolean,
+    default: false,
   },
 
   // Tracking participants
