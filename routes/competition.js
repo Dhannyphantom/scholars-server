@@ -9,7 +9,7 @@ const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
 const {
   getCompetitionWindow,
-  computeCompetitionMeta,
+  computeFullMeta,
   calculateCompetitionScore,
   rankParticipants,
 } = require("../controllers/competitionHelpers");
@@ -46,36 +46,6 @@ const shuffleArray = (arr) => {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
-};
-
-/**
- * computeFullMeta — counts questions across both DB subjects AND custom subjects.
- * Used when saving/updating a competition so totalQuestions and approxDuration
- * are always accurate.
- *
- * @param {Array} subjects       - DB subject configs
- * @param {Array} customSubjects - Custom subject configs
- */
-const computeFullMeta = (subjects = [], customSubjects = []) => {
-  // DB subjects
-  const dbTotal = subjects.reduce((s, c) => s + (c.questionsCount || 0), 0);
-  const dbDuration = subjects.reduce(
-    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
-    0,
-  );
-  // Custom subjects
-  const customTotal = customSubjects.reduce(
-    (s, c) => s + (c.questionsCount || 0),
-    0,
-  );
-  const customDuration = customSubjects.reduce(
-    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
-    0,
-  );
-  return {
-    totalQuestions: dbTotal + customTotal,
-    approxDuration: dbDuration + customDuration,
-  };
 };
 
 /**
@@ -219,8 +189,6 @@ router.get(
         .populate("topics", "name")
         .lean();
 
-      console.log({ subjects });
-
       return res.send({ status: "success", data: subjects });
     } catch (err) {
       console.error("subjects-topics error:", err);
@@ -235,8 +203,18 @@ router.get(
 // POST /competition/manage — create draft
 router.post("/manage", auth, requireManager, async (req, res) => {
   try {
-    const { month, year, title, rules, subjects, customSubjects, prizes } =
-      req.body;
+    const {
+      month,
+      year,
+      title,
+      rules,
+      subjects,
+      customSubjects,
+      prizes,
+      startTime: startOverride,
+      endTime: endOverride,
+    } = req.body;
+
     const userId = req.user.userId;
 
     if (!month || !year) {
@@ -253,7 +231,14 @@ router.post("/manage", auth, requireManager, async (req, res) => {
       });
     }
 
-    const { startTime, endTime } = getCompetitionWindow(year, month);
+    // Use manager-supplied window if provided, otherwise default to first Saturday
+    const { startTime, endTime } = getCompetitionWindow(
+      year,
+      month,
+      startOverride || null,
+      endOverride || null,
+    );
+
     const meta = computeFullMeta(subjects || [], customSubjects || []);
 
     const comp = new OnlineQuizCompetition({
@@ -305,8 +290,17 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
       });
     }
 
-    const { title, rules, subjects, customSubjects, prizes, month, year } =
-      req.body;
+    const {
+      title,
+      rules,
+      subjects,
+      customSubjects,
+      prizes,
+      month,
+      year,
+      startTime: startOverride,
+      endTime: endOverride,
+    } = req.body;
 
     if (title !== undefined) comp.title = title;
     if (rules !== undefined) comp.rules = rules;
@@ -315,11 +309,21 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
     if (prizes !== undefined) comp.prizes = prizes;
 
     if (month && year) {
-      const { startTime, endTime } = getCompetitionWindow(year, month);
+      // Recompute window for the new month/year, respecting any manual override
+      const { startTime, endTime } = getCompetitionWindow(
+        year,
+        month,
+        startOverride || null,
+        endOverride || null,
+      );
       comp.month = month;
       comp.year = year;
       comp.startTime = startTime;
       comp.endTime = endTime;
+    } else if (startOverride && endOverride) {
+      // month/year unchanged but manager edited the times directly
+      comp.startTime = new Date(startOverride);
+      comp.endTime = new Date(endOverride);
     }
 
     // Recalculate meta whenever subjects or customSubjects change
@@ -691,8 +695,6 @@ router.post("/:id/questions", auth, async (req, res) => {
     }
 
     // ── 2. Custom subjects ────────────────────────────────────────────────────
-    // Shuffle the full pool and slice to questionsCount.
-    // Custom questions have no DB _id dependency so we inject synthetic subject info.
     for (const customSubj of comp.customSubjects || []) {
       if (!customSubj.questions || customSubj.questions.length === 0) continue;
 
@@ -716,7 +718,6 @@ router.post("/:id/questions", auth, async (req, res) => {
           isLatex: q.isLatex ?? false,
           isTheory: false,
           hasAnswered: false,
-          // Synthetic subject block — same shape as DB questions
           subject: { _id: customSubj._id, name: customSubj.name },
         }));
 
@@ -819,7 +820,7 @@ router.post("/:id/submit", auth, async (req, res) => {
     );
 
     for (const [questionId, correct] of Object.entries(result.qBankUpdates)) {
-      if (customQuestionIds.has(questionId)) continue; // skip custom questions
+      if (customQuestionIds.has(questionId)) continue;
       const existingEntry = userInfo.qBank.find(
         (e) => e.question.toString() === questionId,
       );
@@ -851,7 +852,7 @@ router.post("/:id/submit", auth, async (req, res) => {
         correctAnswers: result.correctAnswers,
         totalQuestions: result.totalQuestions,
         accuracy: result.accuracy,
-        rank: null, // revealed only after manager publishes results
+        rank: null,
         pointsEarned: result.score,
         duration,
       },

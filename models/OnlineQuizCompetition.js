@@ -17,13 +17,16 @@ const customAnswerSchema = new schema(
     name: { type: String, required: true },
     correct: { type: Boolean, default: false },
   },
-  { _id: true },
+  { _id: true }, // answers are small; auto ObjectId is fine here
 );
 
 // ─── Custom question (lives only on the competition document) ─────────────────
+// _id is stored as String so the frontend's local timestamp+random keys
+// (e.g. "1780180529222evgfr2gxuvm") pass through without ObjectId casting errors.
 // Shape mirrors what QuestionDisplay expects — quiz screen needs zero changes.
 const customQuestionSchema = new schema(
   {
+    _id: { type: String }, // ← String, not ObjectId
     question: { type: String, required: true, trim: true },
     answers: [customAnswerSchema],
     explanation: { type: String, default: "" },
@@ -32,19 +35,21 @@ const customQuestionSchema = new schema(
     isLatex: { type: Boolean, default: false },
     isTheory: { type: Boolean, default: false },
   },
-  { _id: true },
+  { _id: false }, // we manage _id ourselves via the field above
 );
 
 // ─── Custom subject (standalone — no DB Subject/Topic reference) ──────────────
+// Same treatment: _id stored as String.
 const customSubjectSchema = new schema(
   {
+    _id: { type: String }, // ← String, not ObjectId
     name: { type: String, required: true, trim: true },
     questionsCount: { type: Number, required: true, min: 1, max: 50 },
     timePerQuestion: { type: Number, default: 40 },
     // Full pool — participant gets a random questionsCount-sized slice at quiz time
     questions: [customQuestionSchema],
   },
-  { _id: true },
+  { _id: false }, // we manage _id ourselves via the field above
 );
 
 // ─── Main competition schema ──────────────────────────────────────────────────

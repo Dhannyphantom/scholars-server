@@ -10,13 +10,43 @@ const getFirstSaturday = (year, month) => {
   return new Date(year, month - 1, dayOfMonth);
 };
 
-const getCompetitionWindow = (year, month) => {
+/**
+ * getCompetitionWindow
+ *
+ * Returns the competition window for a given month/year.
+ * Default: first Saturday of the month, 00:00 → +24 h.
+ *
+ * If both startOverride and endOverride are supplied (ISO strings or Dates)
+ * those values are used as-is — allowing managers to shift the window without
+ * touching the default logic.
+ *
+ * @param {number}           year
+ * @param {number}           month         1-based
+ * @param {string|Date|null} startOverride optional manager-supplied start
+ * @param {string|Date|null} endOverride   optional manager-supplied end
+ */
+const getCompetitionWindow = (
+  year,
+  month,
+  startOverride = null,
+  endOverride = null,
+) => {
+  if (startOverride && endOverride) {
+    return {
+      startTime: new Date(startOverride),
+      endTime: new Date(endOverride),
+    };
+  }
+
   const start = getFirstSaturday(year, month);
   start.setHours(0, 0, 0, 0);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { startTime: start, endTime: end };
 };
 
+/**
+ * computeCompetitionMeta — DB subjects only (legacy, kept for compatibility).
+ */
 const computeCompetitionMeta = (subjects = []) => {
   let totalQuestions = 0;
   let approxDuration = 0;
@@ -29,6 +59,33 @@ const computeCompetitionMeta = (subjects = []) => {
   });
 
   return { totalQuestions, approxDuration };
+};
+
+/**
+ * computeFullMeta — counts questions across both DB subjects AND custom subjects.
+ * Use this everywhere a competition is created or updated.
+ *
+ * @param {Array} subjects       DB subject configs
+ * @param {Array} customSubjects Custom subject configs
+ */
+const computeFullMeta = (subjects = [], customSubjects = []) => {
+  const dbTotal = subjects.reduce((s, c) => s + (c.questionsCount || 0), 0);
+  const dbDuration = subjects.reduce(
+    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
+    0,
+  );
+  const customTotal = customSubjects.reduce(
+    (s, c) => s + (c.questionsCount || 0),
+    0,
+  );
+  const customDuration = customSubjects.reduce(
+    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
+    0,
+  );
+  return {
+    totalQuestions: dbTotal + customTotal,
+    approxDuration: dbDuration + customDuration,
+  };
 };
 
 const calculateCompetitionScore = (questions, qBankMap) => {
@@ -102,6 +159,7 @@ module.exports = {
   getFirstSaturday,
   getCompetitionWindow,
   computeCompetitionMeta,
+  computeFullMeta,
   calculateCompetitionScore,
   rankParticipants,
 };
