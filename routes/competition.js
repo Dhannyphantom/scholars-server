@@ -5,6 +5,8 @@ const auth = require("../middlewares/authRoutes");
 const { User } = require("../models/User");
 const { Question } = require("../models/Question");
 const { OnlineQuizCompetition } = require("../models/OnlineQuizCompetition");
+const { Subject } = require("../models/Subject");
+const { Topic } = require("../models/Topic");
 const {
   getCompetitionWindow,
   computeCompetitionMeta,
@@ -12,15 +14,16 @@ const {
   rankParticipants,
 } = require("../controllers/competitionHelpers");
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 const requireManager = async (req, res, next) => {
   const user = await User.findById(req.user.userId)
     .select("accountType")
     .lean();
   if (!user || user.accountType !== "manager") {
-    return res.status(403).send({
-      status: "failed",
-      message: "Manager access required",
-    });
+    return res
+      .status(403)
+      .send({ status: "failed", message: "Manager access required" });
   }
   next();
 };
@@ -34,10 +37,55 @@ const populateCompetition = (query) =>
     .populate("createdBy", "username");
 
 /**
+ * Fisher-Yates shuffle — returns a NEW shuffled array, does not mutate input.
+ */
+const shuffleArray = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+/**
+ * computeFullMeta — counts questions across both DB subjects AND custom subjects.
+ * Used when saving/updating a competition so totalQuestions and approxDuration
+ * are always accurate.
+ *
+ * @param {Array} subjects       - DB subject configs
+ * @param {Array} customSubjects - Custom subject configs
+ */
+const computeFullMeta = (subjects = [], customSubjects = []) => {
+  // DB subjects
+  const dbTotal = subjects.reduce((s, c) => s + (c.questionsCount || 0), 0);
+  const dbDuration = subjects.reduce(
+    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
+    0,
+  );
+  // Custom subjects
+  const customTotal = customSubjects.reduce(
+    (s, c) => s + (c.questionsCount || 0),
+    0,
+  );
+  const customDuration = customSubjects.reduce(
+    (s, c) => s + (c.questionsCount || 0) * (c.timePerQuestion || 40),
+    0,
+  );
+  return {
+    totalQuestions: dbTotal + customTotal,
+    approxDuration: dbDuration + customDuration,
+  };
+};
+
+/**
  * formatCompetition
  *
- * isManager = true  → always include full leaderboard/rankings/participant details
+ * isManager = true  → always include full leaderboard / rankings / participant details
  * isManager = false → gate sensitive data behind resultsPublished flag
+ *
+ * customSubjects are NEVER sent to participants (they would expose the full question
+ * pool). They are only visible to managers via the manage endpoints.
  */
 const formatCompetition = (comp, userId, isManager = false) => {
   const now = new Date();
@@ -53,8 +101,6 @@ const formatCompetition = (comp, userId, isManager = false) => {
   const isUpcoming = now < new Date(comp.startTime);
   const isEnded = now >= new Date(comp.endTime) || comp.status === "finished";
 
-  // Participants can only see results once a manager publishes them.
-  // Managers always see everything.
   const canSeeResults = isManager || comp.resultsPublished;
 
   return {
@@ -67,25 +113,24 @@ const formatCompetition = (comp, userId, isManager = false) => {
     endTime: comp.endTime,
     status: comp.status,
     subjects: comp.subjects,
+    // customSubjects exposed only to managers (for editing); never to participants
+    customSubjects: isManager ? (comp.customSubjects ?? []) : undefined,
     prizes: comp.prizes,
     totalQuestions: comp.totalQuestions,
     approxDuration: comp.approxDuration,
-    // Always expose total participant count
     totalParticipants: comp.totalParticipants,
     finalRankings: canSeeResults ? (comp.finalRankings ?? []) : [],
     resultsPublished: comp.resultsPublished,
     isLive,
     isUpcoming,
     isEnded,
-    // Personal performance — only revealed when results are published
     hasParticipated: participant?.hasParticipated ?? false,
     myScore: canSeeResults ? (participant?.score ?? null) : null,
     myRank: canSeeResults ? (participant?.rank ?? null) : null,
   };
 };
 
-// ─── GET /competition/active ─────────────────────────────────────────────────
-// Current or next competition for the home card
+// ─── GET /competition/active ──────────────────────────────────────────────────
 router.get("/active", auth, async (req, res) => {
   try {
     const now = new Date();
@@ -113,9 +158,7 @@ router.get("/active", auth, async (req, res) => {
         .lean();
     }
 
-    if (!comp) {
-      return res.send({ status: "success", data: null });
-    }
+    if (!comp) return res.send({ status: "success", data: null });
 
     const doc = await populateCompetition(
       OnlineQuizCompetition.findById(comp._id),
@@ -141,14 +184,13 @@ router.get("/active", auth, async (req, res) => {
     });
   } catch (err) {
     console.error("competition/active error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to fetch competition",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to fetch competition" });
   }
 });
 
-// ─── Manager routes (must be declared before /:id) ───────────────────────────
+// ─── Manager routes ───────────────────────────────────────────────────────────
 
 router.get("/manage/list", auth, requireManager, async (req, res) => {
   try {
@@ -157,14 +199,12 @@ router.get("/manage/list", auth, requireManager, async (req, res) => {
       .populate("subjects.subject", "name")
       .populate("subjects.topics", "name")
       .lean();
-
     return res.send({ status: "success", data: list });
   } catch (err) {
     console.error("manage list error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to list competitions",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to list competitions" });
   }
 });
 
@@ -174,22 +214,14 @@ router.get(
   requireManager,
   async (req, res) => {
     try {
-      const { Subject } = require("../models/Subject");
-      const { Topic } = require("../models/Topic");
-
       const subjects = await Subject.find()
-        .select("name image categories")
+        .select("name topics image categories")
+        .populate("topics", "name")
         .lean();
-      const topics = await Topic.find().select("name subject").lean();
 
-      const grouped = subjects.map((s) => ({
-        ...s,
-        topics: topics.filter(
-          (t) => t.subject?.toString() === s._id.toString(),
-        ),
-      }));
+      console.log({ subjects });
 
-      return res.send({ status: "success", data: grouped });
+      return res.send({ status: "success", data: subjects });
     } catch (err) {
       console.error("subjects-topics error:", err);
       return res.status(500).send({
@@ -203,14 +235,14 @@ router.get(
 // POST /competition/manage — create draft
 router.post("/manage", auth, requireManager, async (req, res) => {
   try {
-    const { month, year, title, rules, subjects, prizes } = req.body;
+    const { month, year, title, rules, subjects, customSubjects, prizes } =
+      req.body;
     const userId = req.user.userId;
 
     if (!month || !year) {
-      return res.status(422).send({
-        status: "failed",
-        message: "month and year are required",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "month and year are required" });
     }
 
     const existing = await OnlineQuizCompetition.findOne({ month, year });
@@ -222,7 +254,7 @@ router.post("/manage", auth, requireManager, async (req, res) => {
     }
 
     const { startTime, endTime } = getCompetitionWindow(year, month);
-    const meta = computeCompetitionMeta(subjects || []);
+    const meta = computeFullMeta(subjects || [], customSubjects || []);
 
     const comp = new OnlineQuizCompetition({
       month,
@@ -232,12 +264,12 @@ router.post("/manage", auth, requireManager, async (req, res) => {
       startTime,
       endTime,
       subjects: subjects || [],
+      customSubjects: customSubjects || [],
       prizes,
       status: "draft",
       resultsPublished: false,
       createdBy: userId,
-      totalQuestions: meta.totalQuestions,
-      approxDuration: meta.approxDuration,
+      ...meta,
     });
 
     await comp.save();
@@ -245,7 +277,6 @@ router.post("/manage", auth, requireManager, async (req, res) => {
     const populated = await populateCompetition(
       OnlineQuizCompetition.findById(comp._id),
     );
-
     return res.send({
       status: "success",
       data: populated,
@@ -253,24 +284,20 @@ router.post("/manage", auth, requireManager, async (req, res) => {
     });
   } catch (err) {
     console.error("manage create error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to create competition",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to create competition" });
   }
 });
 
-// PUT /competition/manage/:id — update draft or active competition
+// PUT /competition/manage/:id — update
 router.put("/manage/:id", auth, requireManager, async (req, res) => {
   try {
     const comp = await OnlineQuizCompetition.findById(req.params.id);
-
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
-
     if (comp.status === "finished") {
       return res.status(422).send({
         status: "failed",
@@ -278,16 +305,13 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
       });
     }
 
-    const { title, rules, subjects, prizes, month, year } = req.body;
+    const { title, rules, subjects, customSubjects, prizes, month, year } =
+      req.body;
 
     if (title !== undefined) comp.title = title;
     if (rules !== undefined) comp.rules = rules;
-    if (subjects !== undefined) {
-      comp.subjects = subjects;
-      const meta = computeCompetitionMeta(subjects);
-      comp.totalQuestions = meta.totalQuestions;
-      comp.approxDuration = meta.approxDuration;
-    }
+    if (subjects !== undefined) comp.subjects = subjects;
+    if (customSubjects !== undefined) comp.customSubjects = customSubjects;
     if (prizes !== undefined) comp.prizes = prizes;
 
     if (month && year) {
@@ -298,13 +322,20 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
       comp.endTime = endTime;
     }
 
+    // Recalculate meta whenever subjects or customSubjects change
+    const meta = computeFullMeta(
+      subjects !== undefined ? subjects : comp.subjects,
+      customSubjects !== undefined ? customSubjects : comp.customSubjects,
+    );
+    comp.totalQuestions = meta.totalQuestions;
+    comp.approxDuration = meta.approxDuration;
     comp.updatedAt = new Date();
+
     await comp.save();
 
     const populated = await populateCompetition(
       OnlineQuizCompetition.findById(comp._id),
     );
-
     return res.send({
       status: "success",
       data: populated,
@@ -312,29 +343,39 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
     });
   } catch (err) {
     console.error("manage update error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to update competition",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to update competition" });
   }
 });
 
-// POST /competition/manage/:id/publish — activate competition (make it live)
+// POST /competition/manage/:id/publish — make competition live
 router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
   try {
     const comp = await OnlineQuizCompetition.findById(req.params.id);
-
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
 
-    if (!comp.subjects?.length) {
+    const hasDbSubjects = comp.subjects?.length > 0;
+    const hasCustomSubjects = comp.customSubjects?.length > 0;
+
+    if (!hasDbSubjects && !hasCustomSubjects) {
       return res.status(422).send({
         status: "failed",
-        message: "Add at least one subject before publishing",
+        message: "Add at least one subject (DB or custom) before publishing",
       });
+    }
+
+    // Validate custom subjects have enough questions
+    for (const cs of comp.customSubjects || []) {
+      if (cs.questions.length < cs.questionsCount) {
+        return res.status(422).send({
+          status: "failed",
+          message: `Custom subject "${cs.name}" needs at least ${cs.questionsCount} questions (has ${cs.questions.length})`,
+        });
+      }
     }
 
     if (!comp.prizes?.first?.reward) {
@@ -355,15 +396,13 @@ router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
     });
   } catch (err) {
     console.error("manage publish error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to publish competition",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to publish competition" });
   }
 });
 
 // POST /competition/manage/:id/publish-results — release results to participants
-// Managers can see results at any time; this makes them visible to everyone else.
 router.post(
   "/manage/:id/publish-results",
   auth,
@@ -371,13 +410,10 @@ router.post(
   async (req, res) => {
     try {
       const comp = await OnlineQuizCompetition.findById(req.params.id);
-
-      if (!comp) {
+      if (!comp)
         return res
           .status(404)
           .send({ status: "failed", message: "Competition not found" });
-      }
-
       if (comp.resultsPublished) {
         return res.status(422).send({
           status: "failed",
@@ -385,13 +421,11 @@ router.post(
         });
       }
 
-      // Results can only be released once the competition has ended
       const now = new Date();
       if (now < new Date(comp.endTime) && comp.status !== "finished") {
-        return res.status(422).send({
-          status: "failed",
-          message: "Competition has not ended yet",
-        });
+        return res
+          .status(422)
+          .send({ status: "failed", message: "Competition has not ended yet" });
       }
 
       comp.resultsPublished = true;
@@ -406,38 +440,29 @@ router.post(
       });
     } catch (err) {
       console.error("manage publish-results error:", err);
-      return res.status(500).send({
-        status: "failed",
-        message: "Failed to publish results",
-      });
+      return res
+        .status(500)
+        .send({ status: "failed", message: "Failed to publish results" });
     }
   },
 );
 
 // ─── GET /competition/:id ─────────────────────────────────────────────────────
-// Full details — managers always see everything; participants see gated data
 router.get("/:id", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
-
     const userInfo = await User.findById(userId).select("accountType").lean();
     const isManager = userInfo?.accountType === "manager";
 
     const comp = await populateCompetition(
       OnlineQuizCompetition.findById(req.params.id),
     );
-
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
 
     const ranked = rankParticipants(comp.participants || []);
-
-    // Managers see the full top-10 leaderboard at all times.
-    // Participants only see the live leaderboard while the competition is live
-    // (so they can see who's ahead); once ended, it's gated behind resultsPublished.
     const now = new Date();
     const isLive =
       comp.status === "active" &&
@@ -478,11 +503,10 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
       )
       .lean();
 
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
 
     const now = new Date();
     const isLive =
@@ -500,7 +524,6 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
     }
 
     const ranked = rankParticipants(comp.participants || []);
-
     return res.send({
       status: "success",
       resultsPublished: comp.resultsPublished,
@@ -518,14 +541,14 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
     });
   } catch (err) {
     console.error("competition leaderboard error:", err);
-    return res.status(500).send({
-      status: "failed",
-      message: "Failed to fetch leaderboard",
-    });
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to fetch leaderboard" });
   }
 });
 
-// POST /competition/:id/questions — fetch quiz questions (subscribed, live window)
+// ─── POST /competition/:id/questions ─────────────────────────────────────────
+// Fetch quiz questions for a participant — DB subjects + custom subjects combined.
 router.post("/:id/questions", auth, async (req, res) => {
   const userId = req.user.userId;
 
@@ -534,17 +557,15 @@ router.post("/:id/questions", auth, async (req, res) => {
       .select("accountType subscription qBank")
       .lean();
 
-    if (!userInfo) {
+    if (!userInfo)
       return res
         .status(422)
         .send({ status: "failed", message: "User not found" });
-    }
 
     if (userInfo.accountType !== "student") {
-      return res.status(422).send({
-        status: "failed",
-        message: "Only students can participate",
-      });
+      return res
+        .status(422)
+        .send({ status: "failed", message: "Only students can participate" });
     }
 
     if (!userInfo.subscription?.isActive) {
@@ -559,12 +580,10 @@ router.post("/:id/questions", auth, async (req, res) => {
       "subjects.subject",
       "name",
     );
-
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
 
     const now = new Date();
     if (comp.status !== "active") {
@@ -572,7 +591,6 @@ router.post("/:id/questions", auth, async (req, res) => {
         .status(422)
         .send({ status: "failed", message: "Competition is not active" });
     }
-
     if (now < comp.startTime || now >= comp.endTime) {
       return res.status(422).send({
         status: "failed",
@@ -583,7 +601,6 @@ router.post("/:id/questions", auth, async (req, res) => {
     const existing = comp.participants.find(
       (p) => p.user.toString() === userId,
     );
-
     if (existing?.hasParticipated) {
       return res.status(422).send({
         status: "failed",
@@ -597,11 +614,15 @@ router.post("/:id/questions", auth, async (req, res) => {
 
     const qBankResults = [];
 
+    // ── 1. DB subjects ────────────────────────────────────────────────────────
     for (const subjConfig of comp.subjects) {
       const subjectId = subjConfig.subject._id || subjConfig.subject;
-      const topicIds = (subjConfig.topics || []).map(
-        (t) => new mongoose.Types.ObjectId(t.toString()),
-      );
+
+      // Only filter by topics when the manager actually selected some;
+      // empty array means "all topics" — no $in filter applied.
+      const topicIds = (subjConfig.topics || [])
+        .filter(Boolean)
+        .map((t) => new mongoose.Types.ObjectId(t.toString()));
 
       const matchStage = {
         subject: new mongoose.Types.ObjectId(subjectId.toString()),
@@ -620,6 +641,7 @@ router.post("/:id/questions", auth, async (req, res) => {
             randomSeed: { $rand: {} },
           },
         },
+        // Prioritise unseen questions, then randomise within each bucket
         { $sort: { hasAnswered: 1, randomSeed: 1 } },
         { $limit: subjConfig.questionsCount },
         {
@@ -654,9 +676,10 @@ router.post("/:id/questions", auth, async (req, res) => {
       ]);
 
       if (questions.length < subjConfig.questionsCount) {
+        const topicNote = topicIds.length > 0 ? " (with selected topics)" : "";
         return res.status(404).send({
           status: "failed",
-          message: `Not enough questions for ${subjConfig.subject?.name || "a subject"}. Need ${subjConfig.questionsCount}, found ${questions.length}.`,
+          message: `Not enough questions for "${subjConfig.subject?.name || "a subject"}"${topicNote}. Need ${subjConfig.questionsCount}, found ${questions.length}.`,
         });
       }
 
@@ -667,6 +690,44 @@ router.post("/:id/questions", auth, async (req, res) => {
       });
     }
 
+    // ── 2. Custom subjects ────────────────────────────────────────────────────
+    // Shuffle the full pool and slice to questionsCount.
+    // Custom questions have no DB _id dependency so we inject synthetic subject info.
+    for (const customSubj of comp.customSubjects || []) {
+      if (!customSubj.questions || customSubj.questions.length === 0) continue;
+
+      if (customSubj.questions.length < customSubj.questionsCount) {
+        return res.status(404).send({
+          status: "failed",
+          message: `Custom subject "${customSubj.name}" needs at least ${customSubj.questionsCount} questions (has ${customSubj.questions.length}).`,
+        });
+      }
+
+      const shuffled = shuffleArray(customSubj.questions);
+      const selected = shuffled
+        .slice(0, customSubj.questionsCount)
+        .map((q) => ({
+          _id: q._id,
+          question: q.question,
+          answers: q.answers,
+          explanation: q.explanation || "",
+          point: q.point ?? 5,
+          timer: customSubj.timePerQuestion || q.timer || 40,
+          isLatex: q.isLatex ?? false,
+          isTheory: false,
+          hasAnswered: false,
+          // Synthetic subject block — same shape as DB questions
+          subject: { _id: customSubj._id, name: customSubj.name },
+        }));
+
+      qBankResults.push({
+        subject: { _id: customSubj._id, name: customSubj.name },
+        questions: selected,
+        timePerQuestion: customSubj.timePerQuestion || 40,
+      });
+    }
+
+    // Register participant if first time
     if (!existing) {
       comp.participants.push({ user: userId, hasParticipated: false });
     }
@@ -675,10 +736,7 @@ router.post("/:id/questions", auth, async (req, res) => {
     return res.send({
       status: "success",
       data: qBankResults,
-      meta: {
-        competitionId: comp._id,
-        totalQuestions: comp.totalQuestions,
-      },
+      meta: { competitionId: comp._id, totalQuestions: comp.totalQuestions },
     });
   } catch (err) {
     console.error("competition questions error:", err);
@@ -689,7 +747,7 @@ router.post("/:id/questions", auth, async (req, res) => {
   }
 });
 
-// POST /competition/:id/submit
+// ─── POST /competition/:id/submit ─────────────────────────────────────────────
 router.post("/:id/submit", auth, async (req, res) => {
   const userId = req.user.userId;
   const { questions, duration } = req.body;
@@ -698,12 +756,10 @@ router.post("/:id/submit", auth, async (req, res) => {
     const userInfo = await User.findById(userId).select(
       "accountType subscription qBank points totalPoints quizStats",
     );
-
-    if (!userInfo) {
+    if (!userInfo)
       return res
         .status(422)
         .send({ status: "failed", message: "User not found" });
-    }
 
     if (!userInfo.subscription?.isActive) {
       return res.status(403).send({
@@ -714,12 +770,10 @@ router.post("/:id/submit", auth, async (req, res) => {
     }
 
     const comp = await OnlineQuizCompetition.findById(req.params.id);
-
-    if (!comp) {
+    if (!comp)
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
-    }
 
     const now = new Date();
     if (
@@ -736,14 +790,12 @@ router.post("/:id/submit", auth, async (req, res) => {
     const participantIdx = comp.participants.findIndex(
       (p) => p.user.toString() === userId,
     );
-
     if (participantIdx === -1) {
       return res.status(422).send({
         status: "failed",
         message: "Start the competition before submitting",
       });
     }
-
     if (comp.participants[participantIdx].hasParticipated) {
       return res
         .status(422)
@@ -759,12 +811,20 @@ router.post("/:id/submit", auth, async (req, res) => {
 
     const result = calculateCompetitionScore(questions, qBankMap);
 
+    // Only update qBank for DB questions (custom questions have no DB _id to track)
+    const customQuestionIds = new Set(
+      (comp.customSubjects || []).flatMap((cs) =>
+        cs.questions.map((q) => q._id.toString()),
+      ),
+    );
+
     for (const [questionId, correct] of Object.entries(result.qBankUpdates)) {
-      const existing = userInfo.qBank.find(
+      if (customQuestionIds.has(questionId)) continue; // skip custom questions
+      const existingEntry = userInfo.qBank.find(
         (e) => e.question.toString() === questionId,
       );
-      if (existing) {
-        existing.correct = correct;
+      if (existingEntry) {
+        existingEntry.correct = correct;
       } else {
         userInfo.qBank.push({ question: questionId, correct });
       }
@@ -781,8 +841,6 @@ router.post("/:id/submit", auth, async (req, res) => {
     comp.totalParticipants = ranked.filter((p) => p.hasParticipated).length;
     comp.updatedAt = now;
 
-    const myEntry = ranked.find((p) => p.user.toString() === userId);
-
     await comp.save();
     await userInfo.save();
 
@@ -793,8 +851,7 @@ router.post("/:id/submit", auth, async (req, res) => {
         correctAnswers: result.correctAnswers,
         totalQuestions: result.totalQuestions,
         accuracy: result.accuracy,
-        // Don't reveal rank yet — manager must publish results first
-        rank: null,
+        rank: null, // revealed only after manager publishes results
         pointsEarned: result.score,
         duration,
       },

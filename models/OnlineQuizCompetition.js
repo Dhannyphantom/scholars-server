@@ -2,65 +2,62 @@ const mongoose = require("mongoose");
 
 const schema = mongoose.Schema;
 
+// ─── Prize entry ──────────────────────────────────────────────────────────────
 const prizeEntrySchema = {
-  title: {
-    type: String,
-    required: true,
-  },
-  // "points" = automated GT points; "cash" = manual payout by admin
-  type: {
-    type: String,
-    enum: ["points", "cash"],
-    default: "points",
-  },
-  // Primary reward amount (GT points for "points" type; cash value for "cash" type)
-  reward: {
-    type: Number,
-    required: true,
-  },
-  // Only meaningful when type === "cash" (e.g. "NGN", "USD")
-  currency: {
-    type: String,
-    default: null,
-  },
-  // Optional human-readable note (e.g. "Paid via bank transfer within 7 days")
-  description: {
-    type: String,
-    default: null,
-  },
+  title: { type: String, required: true },
+  type: { type: String, enum: ["points", "cash"], default: "points" },
+  reward: { type: Number, required: true },
+  currency: { type: String, default: null },
+  description: { type: String, default: null },
 };
 
+// ─── Custom question answer option ───────────────────────────────────────────
+const customAnswerSchema = new schema(
+  {
+    name: { type: String, required: true },
+    correct: { type: Boolean, default: false },
+  },
+  { _id: true },
+);
+
+// ─── Custom question (lives only on the competition document) ─────────────────
+// Shape mirrors what QuestionDisplay expects — quiz screen needs zero changes.
+const customQuestionSchema = new schema(
+  {
+    question: { type: String, required: true, trim: true },
+    answers: [customAnswerSchema],
+    explanation: { type: String, default: "" },
+    point: { type: Number, default: 5 },
+    timer: { type: Number, default: 40 },
+    isLatex: { type: Boolean, default: false },
+    isTheory: { type: Boolean, default: false },
+  },
+  { _id: true },
+);
+
+// ─── Custom subject (standalone — no DB Subject/Topic reference) ──────────────
+const customSubjectSchema = new schema(
+  {
+    name: { type: String, required: true, trim: true },
+    questionsCount: { type: Number, required: true, min: 1, max: 50 },
+    timePerQuestion: { type: Number, default: 40 },
+    // Full pool — participant gets a random questionsCount-sized slice at quiz time
+    questions: [customQuestionSchema],
+  },
+  { _id: true },
+);
+
+// ─── Main competition schema ──────────────────────────────────────────────────
 const competitionSchema = new schema({
-  title: {
-    type: String,
-    default: "Monthly Guru Quiz Tournament",
-  },
-  rules: {
-    type: String,
-    default: "",
-  },
+  title: { type: String, default: "Monthly Guru Quiz Tournament" },
+  rules: { type: String, default: "" },
 
-  // Month/year identifier and time window
-  month: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 12,
-  },
-  year: {
-    type: Number,
-    required: true,
-  },
-  startTime: {
-    type: Date,
-    required: true,
-  },
-  endTime: {
-    type: Date,
-    required: true,
-  },
+  month: { type: Number, required: true, min: 1, max: 12 },
+  year: { type: Number, required: true },
+  startTime: { type: Date, required: true },
+  endTime: { type: Date, required: true },
 
-  // Configuration
+  // DB-backed subjects: questions fetched from Question collection at quiz time
   subjects: [
     {
       subject: {
@@ -68,24 +65,15 @@ const competitionSchema = new schema({
         ref: "Subject",
         required: true,
       },
-      topics: [
-        {
-          type: mongoose.Types.ObjectId,
-          ref: "Topic",
-        },
-      ],
-      questionsCount: {
-        type: Number,
-        required: true,
-        min: 5,
-        max: 50,
-      },
-      timePerQuestion: {
-        type: Number,
-        default: 40,
-      },
+      // Empty = all topics for that subject; populated = filter by these topics
+      topics: [{ type: mongoose.Types.ObjectId, ref: "Topic" }],
+      questionsCount: { type: Number, required: true, min: 5, max: 50 },
+      timePerQuestion: { type: Number, default: 40 },
     },
   ],
+
+  // Standalone custom subjects — questions stored inline, never touch Question collection
+  customSubjects: [customSubjectSchema],
 
   prizes: {
     first: prizeEntrySchema,
@@ -98,97 +86,38 @@ const competitionSchema = new schema({
     enum: ["draft", "active", "finished"],
     default: "draft",
   },
+  resultsPublished: { type: Boolean, default: false },
 
-  // Manager explicitly releases results to participants
-  // Managers can always view; participants only see after this is true
-  resultsPublished: {
-    type: Boolean,
-    default: false,
-  },
-
-  // Tracking participants
   participants: [
     {
-      user: {
-        type: mongoose.Types.ObjectId,
-        ref: "User",
-        required: true,
-      },
-      score: {
-        type: Number,
-        default: 0,
-      },
-      rank: {
-        type: Number,
-        default: null,
-      },
-      duration: {
-        type: Number,
-        default: 0,
-      },
-      submittedAt: {
-        type: Date,
-        default: null,
-      },
-      hasParticipated: {
-        type: Boolean,
-        default: false,
-      },
+      user: { type: mongoose.Types.ObjectId, ref: "User", required: true },
+      score: { type: Number, default: 0 },
+      rank: { type: Number, default: null },
+      duration: { type: Number, default: 0 },
+      submittedAt: { type: Date, default: null },
+      hasParticipated: { type: Boolean, default: false },
     },
   ],
 
-  // Final rankings (populated after endTime)
   finalRankings: [
     {
-      user: {
-        type: mongoose.Types.ObjectId,
-        ref: "User",
-      },
-      rank: {
-        type: Number,
-        enum: [1, 2, 3],
-      },
-      score: {
-        type: Number,
-      },
-      prizeAwarded: {
-        type: Boolean,
-        default: false,
-      },
+      user: { type: mongoose.Types.ObjectId, ref: "User" },
+      rank: { type: Number, enum: [1, 2, 3] },
+      score: { type: Number },
+      prizeAwarded: { type: Boolean, default: false },
     },
   ],
 
-  // Auto-calculated values
-  totalQuestions: {
-    type: Number,
-    default: 0,
-  },
-  approxDuration: {
-    type: Number,
-    default: 0,
-  },
-  totalParticipants: {
-    type: Number,
-    default: 0,
-  },
+  // Auto-calculated (DB subjects + custom subjects combined)
+  totalQuestions: { type: Number, default: 0 },
+  approxDuration: { type: Number, default: 0 },
+  totalParticipants: { type: Number, default: 0 },
 
-  // Metadata
-  createdBy: {
-    type: mongoose.Types.ObjectId,
-    ref: "User",
-    required: true,
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now,
-  },
+  createdBy: { type: mongoose.Types.ObjectId, ref: "User", required: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 });
 
-// Indexes for faster queries
 competitionSchema.index({ month: 1, year: 1 }, { unique: true });
 competitionSchema.index({ status: 1 });
 competitionSchema.index({ startTime: 1, endTime: 1 });
