@@ -81,7 +81,8 @@ const otpStore = new Map();
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_ATTEMPTS = 5;
-const GURU_SCHOOL_ID = "6a078a1db815f789b602f3cd";
+// const GURU_SCHOOL_ID = "699f5bc18a97f685879ab32a";
+const GURU_SCHOOL_ID = "6a078a1db815f789b602f3cd"; // <- PRODUCTION GURU SCHOOL
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -687,7 +688,9 @@ router.post("/account/delete", auth, async (req, res) => {
   const { password } = req.body;
 
   if (!password) {
-    return res.status(400).json({ error: "Password is required to delete your account." });
+    return res
+      .status(400)
+      .json({ error: "Password is required to delete your account." });
   }
 
   const user = await User.findById(userId);
@@ -2525,6 +2528,7 @@ router.put("/updateProfile", auth, async (req, res) => {
   // so they have access to school features immediately after registration.
 
   if (updatedUser?.accountType === "student" && !updatedUser.school) {
+    console.log("Hello " + updatedUser.username);
     try {
       const guruSchool = await School.findById(GURU_SCHOOL_ID);
 

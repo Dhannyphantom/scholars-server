@@ -145,10 +145,25 @@ router.get("/active", auth, async (req, res) => {
             )
             .then((prev) => prev?.finalRankings ?? []);
 
+    const docObj = doc.toObject();
+
+    // Merge customSubjects into subjects using the same shape as DB subjects
+    const customAsSubjects = (docObj.customSubjects ?? []).map((cs) => ({
+      _id: cs._id,
+      subject: { _id: cs._id, name: cs.name },
+      topics: [],
+      questionsCount: cs.questionsCount,
+      timePerQuestion: cs.timePerQuestion ?? 40,
+      isCustom: true,
+    }));
+
+    const mergedSubjects = [...(docObj.subjects ?? []), ...customAsSubjects];
+
     return res.send({
       status: "success",
       data: {
-        ...formatCompetition(doc.toObject(), userId, false),
+        ...formatCompetition(docObj, userId, false),
+        subjects: mergedSubjects,
         lastWinners,
       },
     });
@@ -269,6 +284,21 @@ router.post("/manage", auth, requireManager, async (req, res) => {
     });
   } catch (err) {
     console.error("manage create error:", err);
+    // Surface validation errors (e.g. required field missing, enum mismatch)
+    // instead of a generic 500 so the client can show something useful.
+    if (err?.name === "ValidationError") {
+      const firstError = Object.values(err.errors || {})[0];
+      return res.status(422).send({
+        status: "failed",
+        message: firstError?.message || "Invalid competition data",
+      });
+    }
+    if (err?.code === 11000) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Competition for this month already exists",
+      });
+    }
     return res
       .status(500)
       .send({ status: "failed", message: "Failed to create competition" });
@@ -347,9 +377,69 @@ router.put("/manage/:id", auth, requireManager, async (req, res) => {
     });
   } catch (err) {
     console.error("manage update error:", err);
+    if (err?.name === "ValidationError") {
+      const firstError = Object.values(err.errors || {})[0];
+      return res.status(422).send({
+        status: "failed",
+        message: firstError?.message || "Invalid competition data",
+      });
+    }
     return res
       .status(500)
       .send({ status: "failed", message: "Failed to update competition" });
+  }
+});
+
+// DELETE /competition/manage/:id — delete a draft
+// Only allowed when the competition is NOT currently live and has NOT already
+// ended (i.e. it's a draft, or an "active" competition whose start time is
+// still in the future). Finished competitions, live competitions, and
+// competitions that have already ended can never be deleted.
+router.delete("/manage/:id", auth, requireManager, async (req, res) => {
+  try {
+    const comp = await OnlineQuizCompetition.findById(req.params.id);
+    if (!comp)
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
+
+    const now = new Date();
+    const isOngoing =
+      comp.status === "active" &&
+      now >= new Date(comp.startTime) &&
+      now < new Date(comp.endTime);
+    const hasEnded = now >= new Date(comp.endTime);
+
+    if (comp.status === "finished") {
+      return res.status(422).send({
+        status: "failed",
+        message: "Cannot delete a finished competition",
+      });
+    }
+    if (isOngoing) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Cannot delete a competition that is currently live",
+      });
+    }
+    if (comp.status === "active" && hasEnded) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Cannot delete a competition that has already ended",
+      });
+    }
+
+    await comp.deleteOne();
+
+    return res.send({
+      status: "success",
+      message: "Draft deleted",
+    });
+  } catch (err) {
+    console.error("manage delete error:", err);
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to delete competition" });
   }
 });
 
@@ -697,13 +787,6 @@ router.post("/:id/questions", auth, async (req, res) => {
     // ── 2. Custom subjects ────────────────────────────────────────────────────
     for (const customSubj of comp.customSubjects || []) {
       if (!customSubj.questions || customSubj.questions.length === 0) continue;
-
-      if (customSubj.questions.length < customSubj.questionsCount) {
-        return res.status(404).send({
-          status: "failed",
-          message: `Custom subject "${customSubj.name}" needs at least ${customSubj.questionsCount} questions (has ${customSubj.questions.length}).`,
-        });
-      }
 
       const shuffled = shuffleArray(customSubj.questions);
       const selected = shuffled
