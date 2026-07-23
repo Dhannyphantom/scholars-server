@@ -7,6 +7,7 @@ const { Question } = require("../models/Question");
 const { OnlineQuizCompetition } = require("../models/OnlineQuizCompetition");
 const { Subject } = require("../models/Subject");
 const { Topic } = require("../models/Topic");
+const WalletTransaction = require("../models/WalletTransaction");
 const {
   getCompetitionWindow,
   computeFullMeta,
@@ -497,6 +498,13 @@ router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
 });
 
 // POST /competition/manage/:id/publish-results — release results to participants
+//
+// This is also the point at which prize money is settled:
+//   - "points" prizes for the top 3 are credited straight to the winner's
+//     wallet/points balance and logged as a WalletTransaction.
+//   - "cash" prizes are NEVER auto-credited — they're flagged as unpaid
+//     (finalRankings[i].prizeAwarded = false) and must be settled manually
+//     by an admin outside the app.
 router.post(
   "/manage/:id/publish-results",
   auth,
@@ -522,6 +530,78 @@ router.post(
           .send({ status: "failed", message: "Competition has not ended yet" });
       }
 
+      // Rank all participants (score desc, then duration/submittedAt tiebreak)
+      const ranked = rankParticipants(comp.participants || []);
+      comp.participants = ranked;
+
+      const PLACE_KEYS = ["first", "second", "third"];
+      const topThree = ranked.slice(0, 3);
+      const finalRankings = [];
+
+      for (let i = 0; i < topThree.length; i++) {
+        const participant = topThree[i];
+        const placeKey = PLACE_KEYS[i];
+        const prize = comp.prizes?.[placeKey];
+        let prizeAwarded = false;
+
+        // Only points-type prizes are credited automatically.
+        // Cash prizes are always handled manually by an admin.
+        if (prize && prize.type === "points" && Number(prize.reward) > 0) {
+          try {
+            const winner = await User.findById(participant.user);
+            if (winner) {
+              const balanceBefore = winner.points || 0;
+              const reward = Number(prize.reward);
+              winner.points = balanceBefore + reward;
+              winner.totalPoints = (winner.totalPoints || 0) + reward;
+              await winner.save();
+
+              // Deterministic reference (comp + place) makes this idempotent —
+              // safe even if this block were ever re-run for the same comp.
+              await WalletTransaction.findOneAndUpdate(
+                { reference: `COMP-${comp._id}-${placeKey}` },
+                {
+                  accountType: "student",
+                  transactionType: "points",
+                  category: "adjustment",
+                  amount: reward,
+                  balanceBefore,
+                  balanceAfter: winner.points,
+                  reference: `COMP-${comp._id}-${placeKey}`,
+                  userId: winner._id,
+                  description: `${prize.title || `${placeKey} place`} prize — ${comp.title} (${comp.month}/${comp.year})`,
+                  metadata: {
+                    competitionId: comp._id.toString(),
+                    place: i + 1,
+                    month: comp.month,
+                    year: comp.year,
+                  },
+                  status: "completed",
+                },
+                { upsert: true, setDefaultsOnInsert: true },
+              );
+
+              prizeAwarded = true;
+            }
+          } catch (creditErr) {
+            // Don't let a single failed credit block publishing overall results —
+            // log it so it can be resolved manually, same as a cash prize would be.
+            console.error(
+              `Failed to credit points to winner (place ${i + 1}) for competition ${comp._id}:`,
+              creditErr,
+            );
+          }
+        }
+
+        finalRankings.push({
+          user: participant.user,
+          rank: i + 1,
+          score: participant.score,
+          prizeAwarded,
+        });
+      }
+
+      comp.finalRankings = finalRankings;
       comp.resultsPublished = true;
       comp.status = "finished";
       comp.updatedAt = now;
@@ -530,7 +610,7 @@ router.post(
       return res.send({
         status: "success",
         message: "Results published — participants can now view their scores",
-        data: { resultsPublished: true },
+        data: { resultsPublished: true, finalRankings },
       });
     } catch (err) {
       console.error("manage publish-results error:", err);
