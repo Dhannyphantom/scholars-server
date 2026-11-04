@@ -109,7 +109,19 @@ const competitionSchema = new schema({
       user: { type: mongoose.Types.ObjectId, ref: "User" },
       rank: { type: Number, enum: [1, 2, 3] },
       score: { type: Number },
+      // What this place won: "points" (auto-credited), "cash" (manual payout),
+      // or "none" (no prize configured for this place)
+      prizeType: {
+        type: String,
+        enum: ["points", "cash", "none"],
+        default: "none",
+      },
+      // true = points were credited to the winner. Always false for cash prizes
+      // (those are paid manually, outside the app).
       prizeAwarded: { type: Boolean, default: false },
+      awardedAt: { type: Date, default: null },
+      // true = the in-app notification (+ push) for this winner has been sent
+      notified: { type: Boolean, default: false },
     },
   ],
 
