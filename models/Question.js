@@ -131,7 +131,31 @@ const QuestionSchema = new schema({
     type: [schema.Types.ObjectId],
     ref: "User",
   },
+
+  // ── JAMB Score Predictor ─────────────────────────────────────────────────
+  // Optional difficulty used to balance JAMB papers (30% easy / 50% medium / 20% hard).
+  difficulty: {
+    type: String,
+    enum: ["easy", "medium", "hard"],
+  },
+
+  // Soft-disable a question everywhere. The JAMB module treats a MISSING value as
+  // true, so existing questions keep working without a data migration.
+  active: {
+    type: Boolean,
+    default: true,
+  },
+
+  // Set to false to keep a question out of JAMB papers only (missing = eligible).
+  jambEligible: {
+    type: Boolean,
+    default: true,
+  },
 });
+
+// JAMB paper building / bank counts
+QuestionSchema.index({ subject: 1, active: 1, jambEligible: 1 });
+QuestionSchema.index({ subject: 1, topic: 1 });
 
 const Question = mongoose.model("Question", QuestionSchema);
 

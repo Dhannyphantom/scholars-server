@@ -43,11 +43,23 @@ const analyticsRoutes = require("./routes/analytics");
 const transactionsRoutes = require("./routes/transactions");
 const cronRoutes = require("./routes/cron");
 const competitionRoutes = require("./routes/competition");
+const jambRoutes = require("./routes/jamb");
+
+// ── Admin dashboard integration ──────────────────────────────────────────────
+const adminPanel = require("./routes/adminPanel");
+const { suspensionGuard, trackActivity, auditCompetition, startGuard } = require("./middlewares/guard");
+const { startNotificationWorker } = require("./controllers/notificationService");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Blocks suspended users/schools on the mobile API + records request-driven activity
+app.use(suspensionGuard);
+app.use(trackActivity);
+
+app.use("/admin-panel", adminPanel);
 
 app.use("/users", users);
 app.use("/payments", payments);
@@ -59,13 +71,18 @@ app.use("/support", support);
 app.use("/analytics", analyticsRoutes);
 app.use("/transactions", transactionsRoutes);
 app.use("/cron", cronRoutes);
+app.use("/competition/manage", auditCompetition); // audit trail for competition management
 app.use("/competition", competitionRoutes);
 app.use("/admin", adminRoutes);
+app.use("/jamb", jambRoutes);
+app.use("/api/jamb", jambRoutes);
 
 app.use(error);
 
 /// FUNCTION EXPORTS
 db();
+startGuard();
+startNotificationWorker();
 socs(io);
 app.set("io", io);
 // chat(http, app);

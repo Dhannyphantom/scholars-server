@@ -18,6 +18,9 @@ const SubjectSchema = new schema({
     ref: "User",
     required: true,
   },
+  // JAMB Score Predictor flags
+  jambEligible: { type: Boolean, default: false }, // appears in the selector
+  jambCompulsory: { type: Boolean, default: false }, // true ONLY for English Language
 });
 
 const Subject = mongoose.model("Subject", SubjectSchema);
