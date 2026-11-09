@@ -10,6 +10,8 @@
 //  * Grading is done from the immutable paper snapshot; the client only sends ids.
 //  * Rounds are created lazily the first time the user touches the feature after
 //    the rest period.
+//  * JAMB eligibility = the subject is listed in the "JAMB" Category's `subjects`
+//    array. (`Subject.jambCompulsory` still marks the compulsory subject(s).)
 
 const mongoose = require("mongoose");
 const CFG = require("./jambConfig");
@@ -87,6 +89,36 @@ function questionCountFor(subject) {
   if (CFG.USE_MOCK_COUNTS)
     return compulsory ? CFG.QUESTIONS.mockCompulsory : CFG.QUESTIONS.mockOther;
   return compulsory ? CFG.QUESTIONS.compulsory : CFG.QUESTIONS.other;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JAMB category (source of truth for which subjects are JAMB-eligible)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Subject ids listed on the "JAMB" Category (ObjectIds). Empty array if the
+// category is missing or has no subjects.
+async function getJambCategorySubjectIds() {
+  const category = await Category.findOne({ name: JAMB_CATEGORY })
+    .collation({ locale: "en", strength: 2 }) // match the schema's case-insensitive collation
+    .select("subjects")
+    .lean();
+  return (category && category.subjects) || [];
+}
+
+/**
+ * JAMB subjects = the subjects listed on the "JAMB" Category.
+ * One query for the category, one for its subjects (small list, ~9 docs).
+ * Returns a Map<idString, subjectDoc>.
+ */
+async function getJambSubjects() {
+  const subjectIds = await getJambCategorySubjectIds();
+  if (!subjectIds.length) return new Map();
+
+  const subjects = await Subject.find({ _id: { $in: subjectIds } })
+    .select("name image jambCompulsory")
+    .lean();
+
+  return new Map(subjects.map((s) => [str(s._id), s]));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,15 +406,18 @@ async function abandonActiveRound(userId) {
   );
 }
 
-// Edge case: a chosen subject was un-flagged/deleted mid-round -> abandon, require re-selection.
+// Edge case: a chosen subject was removed from the JAMB category / deleted mid-round
+// -> abandon, require re-selection.
+// NOTE: this used to count `Subject.jambEligible: true`, which no longer reflects
+// eligibility now that the JAMB Category is the source of truth. That mismatch wiped
+// every fresh selection and produced "Choose your 4 JAMB subjects first."
 async function reconcileSelection(userId, profile) {
   if (!profile || profile.selection.length !== CFG.SUBJECTS_PER_ROUND)
     return profile;
-  const ok = await Subject.countDocuments({
-    _id: { $in: profile.selection },
-    jambEligible: true,
-  });
-  if (ok === CFG.SUBJECTS_PER_ROUND) return profile;
+
+  const jamb = await getJambSubjects();
+  if (profile.selection.every((id) => jamb.has(str(id)))) return profile;
+
   await abandonActiveRound(userId);
   return JambProfile.findOneAndUpdate(
     { userId: oid(userId) },
@@ -623,27 +658,6 @@ async function subjectPerformance(userId, subjectIds) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Selection
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * JAMB subjects = the subjects listed on the "JAMB" Category.
- * One query for the category, one for its subjects (small list, ~9 docs).
- * Returns a Map<idString, subjectDoc>.
- */
-async function getJambSubjects() {
-  const category = await Category.findOne({ name: JAMB_CATEGORY })
-    .collation({ locale: "en", strength: 2 }) // match the schema's case-insensitive collation
-    .select("subjects")
-    .lean();
-
-  if (!category?.subjects?.length) return new Map();
-
-  const subjects = await Subject.find({ _id: { $in: category.subjects } })
-    .select("name jambCompulsory")
-    .lean();
-
-  return new Map(subjects.map((s) => [str(s._id), s]));
-}
-
 async function saveSelection(userId, subjectIds) {
   const bad = (msg, details) => jerr(422, "INVALID_SELECTION", msg, details);
 
@@ -1408,19 +1422,23 @@ async function devSkipCooldown(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Admin helpers (flag which subjects JAMB uses)
+// Admin helpers (which subjects JAMB uses)
+//   * jambEligible  -> membership in the "JAMB" Category's `subjects` array
+//   * jambCompulsory -> flag on the Subject document
 // ─────────────────────────────────────────────────────────────────────────────
 async function adminListSubjects() {
-  const subjects = await Subject.find({})
-    .select("name jambEligible jambCompulsory")
-    .sort({ name: 1 })
-    .lean();
+  const [subjects, jambIds] = await Promise.all([
+    Subject.find({}).select("name jambCompulsory").sort({ name: 1 }).lean(),
+    getJambCategorySubjectIds(),
+  ]);
+  const eligible = new Set(jambIds.map(str));
+
   const items = [];
   for (const s of subjects)
     items.push({
       _id: str(s._id),
       name: s.name,
-      jambEligible: !!s.jambEligible,
+      jambEligible: eligible.has(str(s._id)),
       jambCompulsory: !!s.jambCompulsory,
       bankSize: await Question.countDocuments(poolFilter(s._id)),
     });
@@ -1429,30 +1447,54 @@ async function adminListSubjects() {
 
 async function adminUpdateSubject(subjectId, body) {
   if (!isValidId(subjectId)) throw jerr(404, "NOT_FOUND", "Subject not found.");
-  const set = {};
+  const want = {};
   for (const k of ["jambEligible", "jambCompulsory"]) {
     if (body && body[k] !== undefined) {
       if (typeof body[k] !== "boolean")
         throw jerr(422, "VALIDATION_FAILED", `${k} must be a boolean.`);
-      set[k] = body[k];
+      want[k] = body[k];
     }
   }
-  if (!Object.keys(set).length)
+  if (!Object.keys(want).length)
     throw jerr(422, "VALIDATION_FAILED", "Nothing to update.");
-  if (set.jambCompulsory === true) set.jambEligible = true; // a compulsory subject must be selectable
-  const s = await Subject.findByIdAndUpdate(
-    subjectId,
-    { $set: set },
-    { new: true },
-  )
-    .select("name jambEligible jambCompulsory")
-    .lean();
-  if (!s) throw jerr(404, "NOT_FOUND", "Subject not found.");
+  if (want.jambCompulsory === true) want.jambEligible = true; // a compulsory subject must be selectable
+  if (want.jambEligible === false) want.jambCompulsory = false; // ...and a non-JAMB subject can't be compulsory
+
+  const exists = await Subject.exists({ _id: oid(subjectId) });
+  if (!exists) throw jerr(404, "NOT_FOUND", "Subject not found.");
+
+  // Eligibility lives on the JAMB category.
+  if (want.jambEligible !== undefined) {
+    const res = await Category.updateOne(
+      { name: JAMB_CATEGORY },
+      want.jambEligible
+        ? { $addToSet: { subjects: oid(subjectId) } }
+        : { $pull: { subjects: oid(subjectId) } },
+    ).collation({ locale: "en", strength: 2 });
+    if (!res.matchedCount)
+      throw jerr(
+        409,
+        "JAMB_CATEGORY_MISSING",
+        `Category "${JAMB_CATEGORY}" does not exist.`,
+      );
+  }
+
+  // Compulsory flag lives on the Subject.
+  if (want.jambCompulsory !== undefined)
+    await Subject.updateOne(
+      { _id: oid(subjectId) },
+      { $set: { jambCompulsory: want.jambCompulsory } },
+    );
+
+  const [s, jambIds] = await Promise.all([
+    Subject.findById(subjectId).select("name jambCompulsory").lean(),
+    getJambCategorySubjectIds(),
+  ]);
   dbTotalCache.delete(str(s._id));
   return {
     _id: str(s._id),
     name: s.name,
-    jambEligible: !!s.jambEligible,
+    jambEligible: jambIds.some((id) => str(id) === str(s._id)),
     jambCompulsory: !!s.jambCompulsory,
   };
 }
