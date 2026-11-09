@@ -22,6 +22,9 @@ const {
 const { User } = require("../models/User");
 const { Subject } = require("../models/Subject");
 const { Question } = require("../models/Question");
+const { Category } = require("../models/Category"); // adjust path
+
+const JAMB_CATEGORY = CFG.JAMB_CATEGORY_NAME || "JAMB";
 
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -43,7 +46,8 @@ const oid = (v) => new ObjectId(String(v));
 const str = (v) => String(v);
 const toMs = (d) => (d ? +new Date(d) : 0);
 const iso = (d) => (d ? new Date(d).toISOString() : null);
-const plain = (doc) => (doc && typeof doc.toObject === "function" ? doc.toObject() : doc);
+const plain = (doc) =>
+  doc && typeof doc.toObject === "function" ? doc.toObject() : doc;
 const sameSet = (a, b) => {
   const A = new Set(a.map(str));
   const B = new Set(b.map(str));
@@ -60,7 +64,9 @@ function shuffle(arr) {
 }
 
 function activeCooldownMs(profile, now) {
-  return profile && profile.cooldownUntil && new Date(profile.cooldownUntil) > now
+  return profile &&
+    profile.cooldownUntil &&
+    new Date(profile.cooldownUntil) > now
     ? toMs(profile.cooldownUntil)
     : 0;
 }
@@ -103,7 +109,10 @@ function buildInsights(subjects) {
   const sorted = [...subjects].sort((a, b) => b.percent - a.percent); // stable: ties keep selection order
   const strongest = sorted[0];
   const weakest = sorted[sorted.length - 1];
-  let focus = sorted.filter((s) => s.percent < 65).reverse().slice(0, 2); // weakest first, max 2
+  let focus = sorted
+    .filter((s) => s.percent < 65)
+    .reverse()
+    .slice(0, 2); // weakest first, max 2
   if (!focus.length) focus = [weakest];
   const nextStep =
     weakest.percent < 50
@@ -152,16 +161,34 @@ function gradePaper(paper, answers) {
   answers.forEach((a, i) => {
     const qid = a && a.questionId != null ? str(a.questionId) : null;
     const snap = qid ? index.get(qid) : null;
-    if (!snap) return problems.push({ index: i, field: "questionId", message: "Unknown question." });
+    if (!snap)
+      return problems.push({
+        index: i,
+        field: "questionId",
+        message: "Unknown question.",
+      });
     if (given.has(qid))
-      return problems.push({ index: i, field: "questionId", message: "Duplicate question." });
+      return problems.push({
+        index: i,
+        field: "questionId",
+        message: "Duplicate question.",
+      });
     const aid = a.answerId == null ? null : str(a.answerId);
     if (aid !== null && !snap.answerIds.some((x) => str(x) === aid))
-      return problems.push({ index: i, field: "answerId", message: "Answer does not belong to question." });
+      return problems.push({
+        index: i,
+        field: "answerId",
+        message: "Answer does not belong to question.",
+      });
     given.set(qid, aid);
   });
   if (problems.length)
-    throw jerr(422, "VALIDATION_FAILED", "Invalid answers.", problems.slice(0, 20));
+    throw jerr(
+      422,
+      "VALIDATION_FAILED",
+      "Invalid answers.",
+      problems.slice(0, 20),
+    );
 
   const correctIds = [];
   const wrongIds = [];
@@ -186,7 +213,12 @@ function gradePaper(paper, answers) {
       percent: total ? Math.round((correct / total) * 100) : 0,
     };
   });
-  return { subjects, correctIds, wrongIds, answered: correctIds.length + wrongIds.length };
+  return {
+    subjects,
+    correctIds,
+    wrongIds,
+    answered: correctIds.length + wrongIds.length,
+  };
 }
 
 // Largest-remainder allocation of `count` picks across groups of the given sizes.
@@ -248,7 +280,9 @@ function chooseByDifficulty(cand, want) {
 // ─────────────────────────────────────────────────────────────────────────────
 function orderResults(round) {
   return (round.subjectIds || [])
-    .map((id) => (round.results || []).find((r) => str(r.subjectId) === str(id)))
+    .map((id) =>
+      (round.results || []).find((r) => str(r.subjectId) === str(id)),
+    )
     .filter(Boolean);
 }
 
@@ -342,7 +376,8 @@ async function abandonActiveRound(userId) {
 
 // Edge case: a chosen subject was un-flagged/deleted mid-round -> abandon, require re-selection.
 async function reconcileSelection(userId, profile) {
-  if (!profile || profile.selection.length !== CFG.SUBJECTS_PER_ROUND) return profile;
+  if (!profile || profile.selection.length !== CFG.SUBJECTS_PER_ROUND)
+    return profile;
   const ok = await Subject.countDocuments({
     _id: { $in: profile.selection },
     jambEligible: true,
@@ -357,14 +392,23 @@ async function reconcileSelection(userId, profile) {
 }
 
 async function getOrCreateActiveRound(userId, profile) {
-  let round = await JambRound.findOne({ userId: oid(userId), status: "active" });
+  let round = await JambRound.findOne({
+    userId: oid(userId),
+    status: "active",
+  });
   if (round && !sameSet(round.subjectIds, profile.selection)) {
-    await JambRound.updateOne({ _id: round._id, status: "active" }, { $set: { status: "abandoned" } });
+    await JambRound.updateOne(
+      { _id: round._id, status: "active" },
+      { $set: { status: "abandoned" } },
+    );
     round = null;
   }
   if (round) return round;
 
-  const completed = await JambRound.countDocuments({ userId: oid(userId), status: "completed" });
+  const completed = await JambRound.countDocuments({
+    userId: oid(userId),
+    status: "completed",
+  });
   try {
     return await JambRound.create({
       userId: oid(userId),
@@ -375,7 +419,10 @@ async function getOrCreateActiveRound(userId, profile) {
     });
   } catch (e) {
     if (e.code === 11000) {
-      const again = await JambRound.findOne({ userId: oid(userId), status: "active" });
+      const again = await JambRound.findOne({
+        userId: oid(userId),
+        status: "active",
+      });
       if (again) return again;
     }
     throw e;
@@ -386,8 +433,12 @@ async function getOrCreateActiveRound(userId, profile) {
 // Config / summary
 // ─────────────────────────────────────────────────────────────────────────────
 function getConfig() {
-  const compulsory = CFG.USE_MOCK_COUNTS ? CFG.QUESTIONS.mockCompulsory : CFG.QUESTIONS.compulsory;
-  const other = CFG.USE_MOCK_COUNTS ? CFG.QUESTIONS.mockOther : CFG.QUESTIONS.other;
+  const compulsory = CFG.USE_MOCK_COUNTS
+    ? CFG.QUESTIONS.mockCompulsory
+    : CFG.QUESTIONS.compulsory;
+  const other = CFG.USE_MOCK_COUNTS
+    ? CFG.QUESTIONS.mockOther
+    : CFG.QUESTIONS.other;
   return {
     cooldownHours: CFG.COOLDOWN_HOURS,
     subjectsPerRound: CFG.SUBJECTS_PER_ROUND,
@@ -403,10 +454,13 @@ function getConfig() {
 async function buildSummary(userId) {
   const now = new Date();
   const [user, profile0] = await Promise.all([
-    User.findById(userId).select("accountType subscription quizStats.totalCorrectAnswers").lean(),
+    User.findById(userId)
+      .select("accountType subscription quizStats.totalCorrectAnswers")
+      .lean(),
     JambProfile.findOne({ userId: oid(userId) }).lean(),
   ]);
-  const lifetimeCorrect = (user && user.quizStats && user.quizStats.totalCorrectAnswers) || 0;
+  const lifetimeCorrect =
+    (user && user.quizStats && user.quizStats.totalCorrectAnswers) || 0;
   const empty = {
     serverNow: now.toISOString(),
     selection: [],
@@ -436,14 +490,21 @@ async function buildSummary(userId) {
     };
     if (cd) round = pending;
     else {
-      let doc = await JambRound.findOne({ userId: oid(userId), status: "active" }).lean();
+      let doc = await JambRound.findOne({
+        userId: oid(userId),
+        status: "active",
+      }).lean();
       if (doc && !sameSet(doc.subjectIds, selection)) doc = null;
-      if (!doc && isPremiumUser(user, now)) doc = await getOrCreateActiveRound(userId, profileObj);
+      if (!doc && isPremiumUser(user, now))
+        doc = await getOrCreateActiveRound(userId, profileObj);
       round = doc ? shapeActiveRound(doc) : pending;
     }
   }
 
-  const history = await JambRound.find({ userId: oid(userId), status: "completed" })
+  const history = await JambRound.find({
+    userId: oid(userId),
+    status: "completed",
+  })
     .sort({ completedAt: -1 })
     .limit(CFG.HISTORY_IN_SUMMARY)
     .lean();
@@ -470,7 +531,14 @@ async function buildSummary(userId) {
 const ONE_CORRECT = {
   $expr: {
     $eq: [
-      { $size: { $filter: { input: { $ifNull: ["$answers", []] }, cond: "$$this.correct" } } },
+      {
+        $size: {
+          $filter: {
+            input: { $ifNull: ["$answers", []] },
+            cond: "$$this.correct",
+          },
+        },
+      },
       1,
     ],
   },
@@ -502,7 +570,9 @@ async function correctCounts(userId, subjectIds) {
   const out = {};
   subjectIds.forEach((id) => (out[str(id)] = 0));
   const u = await User.findById(userId).select("qBank").lean();
-  const ids = ((u && u.qBank) || []).filter((e) => e.correct).map((e) => e.question);
+  const ids = ((u && u.qBank) || [])
+    .filter((e) => e.correct)
+    .map((e) => e.question);
   if (!ids.length) return out;
   const rows = await Question.aggregate([
     { $match: { _id: { $in: ids }, subject: { $in: subjectIds.map(oid) } } },
@@ -513,8 +583,17 @@ async function correctCounts(userId, subjectIds) {
 }
 
 async function subjectPerformance(userId, subjectIds) {
-  if (!Array.isArray(subjectIds) || !subjectIds.length || subjectIds.length > 20 || !subjectIds.every(isValidId))
-    throw jerr(422, "VALIDATION_FAILED", "subjectIds must be a list of valid ids.");
+  if (
+    !Array.isArray(subjectIds) ||
+    !subjectIds.length ||
+    subjectIds.length > 20 ||
+    !subjectIds.every(isValidId)
+  )
+    throw jerr(
+      422,
+      "VALIDATION_FAILED",
+      "subjectIds must be a list of valid ids.",
+    );
   const ids = [...new Set(subjectIds.map(str))];
   const subjects = await Subject.find({ _id: { $in: ids.map(oid) } })
     .select("name image jambCompulsory")
@@ -544,37 +623,81 @@ async function subjectPerformance(userId, subjectIds) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Selection
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * JAMB subjects = the subjects listed on the "JAMB" Category.
+ * One query for the category, one for its subjects (small list, ~9 docs).
+ * Returns a Map<idString, subjectDoc>.
+ */
+async function getJambSubjects() {
+  const category = await Category.findOne({ name: JAMB_CATEGORY })
+    .collation({ locale: "en", strength: 2 }) // match the schema's case-insensitive collation
+    .select("subjects")
+    .lean();
+
+  if (!category?.subjects?.length) return new Map();
+
+  const subjects = await Subject.find({ _id: { $in: category.subjects } })
+    .select("name jambCompulsory")
+    .lean();
+
+  return new Map(subjects.map((s) => [str(s._id), s]));
+}
+
 async function saveSelection(userId, subjectIds) {
   const bad = (msg, details) => jerr(422, "INVALID_SELECTION", msg, details);
+
+  // 1. Shape validation
   if (!Array.isArray(subjectIds)) throw bad("subjectIds must be a list.");
   const ids = subjectIds.map(str);
-  if (ids.length !== CFG.SUBJECTS_PER_ROUND || new Set(ids).size !== ids.length || !ids.every(isValidId))
+  if (
+    ids.length !== CFG.SUBJECTS_PER_ROUND ||
+    new Set(ids).size !== ids.length ||
+    !ids.every(isValidId)
+  )
     throw bad(`Choose exactly ${CFG.SUBJECTS_PER_ROUND} different subjects.`);
 
-  const subjects = await Subject.find({ _id: { $in: ids.map(oid) } })
-    .select("name jambEligible jambCompulsory")
-    .lean();
-  if (subjects.length !== ids.length || subjects.some((s) => !s.jambEligible))
+  // 2. Eligibility: every chosen subject must be listed in the JAMB category
+  const jambSubjects = await getJambSubjects();
+  if (!jambSubjects.size)
+    throw bad("JAMB subjects have not been configured yet.");
+
+  if (!ids.every((id) => jambSubjects.has(id)))
     throw bad("One or more subjects are not available for JAMB practice.");
 
-  const compulsory = await Subject.find({ jambEligible: true, jambCompulsory: true }).select("_id name").lean();
-  if (!compulsory.length) throw bad("JAMB subjects have not been configured yet.");
-  const missing = compulsory.filter((c) => !ids.includes(str(c._id)));
-  if (missing.length) throw bad(`${missing[0].name} is compulsory.`);
+  // 3. Compulsory subjects must be part of the selection
+  const missing = [...jambSubjects.values()].find(
+    (s) => s.jambCompulsory && !ids.includes(str(s._id)),
+  );
+  if (missing) throw bad(`${missing.name} is compulsory.`);
 
+  // 4. Question bank size (skipped when using mock counts)
   if (!CFG.USE_MOCK_COUNTS) {
-    const small = [];
-    for (const s of subjects) {
-      const n = await Question.countDocuments(poolFilter(s._id));
-      if (n < CFG.MIN_BANK_SIZE_PER_SUBJECT) small.push({ subject: s.name, available: n });
-    }
-    if (small.length) throw bad("Not enough questions yet for one or more subjects.", small);
+    const counts = await Promise.all(
+      ids.map((id) => Question.countDocuments(poolFilter(oid(id)))),
+    );
+    const small = ids.flatMap((id, i) =>
+      counts[i] < CFG.MIN_BANK_SIZE_PER_SUBJECT
+        ? [{ subject: jambSubjects.get(id).name, available: counts[i] }]
+        : [],
+    );
+    if (small.length)
+      throw bad("Not enough questions yet for one or more subjects.", small);
   }
 
-  let profile = await upsertProfile(userId);
-  const active = await JambRound.findOne({ userId: oid(userId), status: "active" });
-  if (active && !sameSet(active.subjectIds, ids)) await abandonActiveRound(userId); // R9: cooldown untouched
-  await JambProfile.updateOne({ _id: profile._id }, { $set: { selection: ids.map(oid) } });
+  // 5. Persist
+  const profile = await upsertProfile(userId);
+  const active = await JambRound.findOne({
+    userId: oid(userId),
+    status: "active",
+  });
+  if (active && !sameSet(active.subjectIds, ids))
+    await abandonActiveRound(userId); // R9: cooldown untouched
+
+  await JambProfile.updateOne(
+    { _id: profile._id },
+    { $set: { selection: ids.map(oid) } },
+  );
   return buildSummary(userId);
 }
 
@@ -587,7 +710,10 @@ async function stratifiedSample(baseFilter, exclude, count) {
     { $match: filter },
     { $group: { _id: "$topic", n: { $sum: 1 } } },
   ]);
-  const alloc = allocate(groups.map((g) => g.n), count);
+  const alloc = allocate(
+    groups.map((g) => g.n),
+    count,
+  );
   const picked = [];
   for (let i = 0; i < groups.length; i++) {
     if (!alloc[i]) continue;
@@ -611,9 +737,15 @@ async function stratifiedSample(baseFilter, exclude, count) {
 
 async function pickQuestions(userId, subject, count) {
   const base = poolFilter(subject._id);
-  const seenDoc = await JambSeen.findOne({ userId: oid(userId), subjectId: subject._id }).lean();
+  const seenDoc = await JambSeen.findOne({
+    userId: oid(userId),
+    subjectId: subject._id,
+  }).lean();
   const seen = (seenDoc && seenDoc.questionIds) || [];
-  const unseenCount = await Question.countDocuments({ ...base, _id: { $nin: seen } });
+  const unseenCount = await Question.countDocuments({
+    ...base,
+    _id: { $nin: seen },
+  });
 
   let picks = [];
   let reset = false;
@@ -623,12 +755,20 @@ async function pickQuestions(userId, subject, count) {
     // Bank exhausted for this user: start a new cycle, take every unseen question and
     // top up with the OLDEST seen ones.
     reset = true;
-    const all = (await Question.find({ ...base, _id: { $nin: seen } }).select("_id").lean()).map((d) => d._id);
+    const all = (
+      await Question.find({ ...base, _id: { $nin: seen } })
+        .select("_id")
+        .lean()
+    ).map((d) => d._id);
     const need = count - all.length;
     let top = [];
     if (need > 0 && seen.length) {
       const valid = new Set(
-        (await Question.find({ ...base, _id: { $in: seen } }).select("_id").lean()).map((d) => str(d._id)),
+        (
+          await Question.find({ ...base, _id: { $in: seen } })
+            .select("_id")
+            .lean()
+        ).map((d) => str(d._id)),
       );
       top = seen.filter((id) => valid.has(str(id))).slice(0, need);
     }
@@ -637,11 +777,16 @@ async function pickQuestions(userId, subject, count) {
 
   const required = CFG.USE_MOCK_COUNTS ? 1 : count;
   if (picks.length < required)
-    throw jerr(422, "INSUFFICIENT_QUESTIONS", `Not enough ${subject.name} questions yet.`, {
-      subject: subject.name,
-      available: picks.length,
-      required,
-    });
+    throw jerr(
+      422,
+      "INSUFFICIENT_QUESTIONS",
+      `Not enough ${subject.name} questions yet.`,
+      {
+        subject: subject.name,
+        available: picks.length,
+        required,
+      },
+    );
 
   const docs = await Question.find({ _id: { $in: picks } }).lean();
   return { docs: shuffle(docs), reset };
@@ -653,13 +798,20 @@ async function markSeen(userId, picked) {
     if (p.reset) {
       await JambSeen.updateOne(
         { userId: oid(userId), subjectId: p.subjectId },
-        { $set: { questionIds: ids, updatedAt: new Date() }, $inc: { cycle: 1 } },
+        {
+          $set: { questionIds: ids, updatedAt: new Date() },
+          $inc: { cycle: 1 },
+        },
         { upsert: true },
       );
     } else {
       await JambSeen.updateOne(
         { userId: oid(userId), subjectId: p.subjectId },
-        { $push: { questionIds: { $each: ids } }, $set: { updatedAt: new Date() }, $setOnInsert: { cycle: 0 } },
+        {
+          $push: { questionIds: { $each: ids } },
+          $set: { updatedAt: new Date() },
+          $setOnInsert: { cycle: 0 },
+        },
         { upsert: true },
       );
     }
@@ -668,7 +820,9 @@ async function markSeen(userId, picked) {
 
 async function presentAttempt(attempt) {
   const a = plain(attempt);
-  const subjects = await Subject.find({ _id: { $in: a.paper.map((p) => p.subjectId) } })
+  const subjects = await Subject.find({
+    _id: { $in: a.paper.map((p) => p.subjectId) },
+  })
     .select("name image")
     .lean();
   const subjMap = new Map(subjects.map((s) => [str(s._id), s]));
@@ -716,8 +870,16 @@ async function presentAttempt(attempt) {
 
 async function issueAttempt(userId, subjectIds) {
   const now = new Date();
-  if (!Array.isArray(subjectIds) || !subjectIds.length || !subjectIds.every(isValidId))
-    throw jerr(422, "VALIDATION_FAILED", "subjectIds must be a non-empty list of ids.");
+  if (
+    !Array.isArray(subjectIds) ||
+    !subjectIds.length ||
+    !subjectIds.every(isValidId)
+  )
+    throw jerr(
+      422,
+      "VALIDATION_FAILED",
+      "subjectIds must be a non-empty list of ids.",
+    );
   const ids = [...new Set(subjectIds.map(str))];
 
   let profile = await JambProfile.findOne({ userId: oid(userId) });
@@ -726,20 +888,41 @@ async function issueAttempt(userId, subjectIds) {
     throw jerr(409, "SELECTION_REQUIRED", "Choose your 4 JAMB subjects first.");
 
   const cd = activeCooldownMs(profile, now);
-  if (cd) throw jerr(409, "COOLDOWN_ACTIVE", "Next round unlocks later.", { cooldownUntil: cd });
+  if (cd)
+    throw jerr(409, "COOLDOWN_ACTIVE", "Next round unlocks later.", {
+      cooldownUntil: cd,
+    });
 
   const round = await getOrCreateActiveRound(userId, profile);
   if (!ids.every((id) => round.subjectIds.map(str).includes(id)))
-    throw jerr(422, "VALIDATION_FAILED", "Subjects are not part of your current round.");
+    throw jerr(
+      422,
+      "VALIDATION_FAILED",
+      "Subjects are not part of your current round.",
+    );
   if (ids.some((id) => round.results.some((r) => str(r.subjectId) === id)))
-    throw jerr(409, "SUBJECT_ALREADY_COMPLETED", "You already completed this subject in this round.");
+    throw jerr(
+      409,
+      "SUBJECT_ALREADY_COMPLETED",
+      "You already completed this subject in this round.",
+    );
 
   // resume or replace an open attempt
-  const open = await JambAttempt.findOne({ userId: oid(userId), status: "issued" });
+  const open = await JambAttempt.findOne({
+    userId: oid(userId),
+    status: "issued",
+  });
   if (open) {
-    if (sameSet(open.subjectIds, ids) && open.expiresAt > now && str(open.roundId) === str(round._id))
+    if (
+      sameSet(open.subjectIds, ids) &&
+      open.expiresAt > now &&
+      str(open.roundId) === str(round._id)
+    )
       return presentAttempt(open);
-    await JambAttempt.updateOne({ _id: open._id, status: "issued" }, { $set: { status: "abandoned" } });
+    await JambAttempt.updateOne(
+      { _id: open._id, status: "issued" },
+      { $set: { status: "abandoned" } },
+    );
   }
 
   const recent = await JambAttempt.countDocuments({
@@ -747,12 +930,17 @@ async function issueAttempt(userId, subjectIds) {
     createdAt: { $gte: new Date(now.getTime() - 3600e3) },
   });
   if (recent >= CFG.ATTEMPT_ISSUES_PER_HOUR)
-    throw jerr(429, "RATE_LIMITED", "Too many attempts. Please try again later.");
+    throw jerr(
+      429,
+      "RATE_LIMITED",
+      "Too many attempts. Please try again later.",
+    );
 
   const subjects = await Subject.find({ _id: { $in: ids.map(oid) } })
     .select("name image jambCompulsory")
     .lean();
-  if (subjects.length !== ids.length) throw jerr(422, "VALIDATION_FAILED", "Unknown subject.");
+  if (subjects.length !== ids.length)
+    throw jerr(422, "VALIDATION_FAILED", "Unknown subject.");
   // requested order, compulsory subject first
   const ordered = ids
     .map((id) => subjects.find((s) => str(s._id) === id))
@@ -760,7 +948,11 @@ async function issueAttempt(userId, subjectIds) {
 
   const picked = [];
   for (const subject of ordered) {
-    const { docs, reset } = await pickQuestions(userId, subject, questionCountFor(subject));
+    const { docs, reset } = await pickQuestions(
+      userId,
+      subject,
+      questionCountFor(subject),
+    );
     picked.push({ subjectId: subject._id, docs, reset });
   }
 
@@ -776,7 +968,10 @@ async function issueAttempt(userId, subjectIds) {
   const total = paper.reduce((n, p) => n + p.questions.length, 0);
   const expiresAt = new Date(
     now.getTime() +
-      (total * (CFG.SECONDS_PER_QUESTION + CFG.PER_QUESTION_UI_OVERHEAD_SECONDS) + CFG.ATTEMPT_GRACE_SECONDS) * 1000,
+      (total *
+        (CFG.SECONDS_PER_QUESTION + CFG.PER_QUESTION_UI_OVERHEAD_SECONDS) +
+        CFG.ATTEMPT_GRACE_SECONDS) *
+        1000,
   );
 
   let attempt;
@@ -792,7 +987,10 @@ async function issueAttempt(userId, subjectIds) {
   } catch (e) {
     if (e.code === 11000) {
       // a parallel request from the same user won the race: hand back its attempt
-      const twin = await JambAttempt.findOne({ userId: oid(userId), status: "issued" });
+      const twin = await JambAttempt.findOne({
+        userId: oid(userId),
+        status: "issued",
+      });
       if (twin) return presentAttempt(twin);
     }
     throw e;
@@ -803,10 +1001,16 @@ async function issueAttempt(userId, subjectIds) {
 
 async function activeAttempt(userId) {
   const now = new Date();
-  const open = await JambAttempt.findOne({ userId: oid(userId), status: "issued" });
+  const open = await JambAttempt.findOne({
+    userId: oid(userId),
+    status: "issued",
+  });
   if (!open) return null;
   if (open.expiresAt <= now) {
-    await JambAttempt.updateOne({ _id: open._id, status: "issued" }, { $set: { status: "expired" } });
+    await JambAttempt.updateOne(
+      { _id: open._id, status: "issued" },
+      { $set: { status: "expired" } },
+    );
     return null;
   }
   return presentAttempt(open);
@@ -814,12 +1018,22 @@ async function activeAttempt(userId) {
 
 async function quitAttempt(userId, attemptId) {
   if (!isValidId(attemptId)) throw jerr(404, "NOT_FOUND", "Attempt not found.");
-  const attempt = await JambAttempt.findOne({ _id: oid(attemptId), userId: oid(userId) });
+  const attempt = await JambAttempt.findOne({
+    _id: oid(attemptId),
+    userId: oid(userId),
+  });
   if (!attempt) throw jerr(404, "NOT_FOUND", "Attempt not found.");
   if (attempt.status === "issued")
-    await JambAttempt.updateOne({ _id: attempt._id, status: "issued" }, { $set: { status: "abandoned" } });
+    await JambAttempt.updateOne(
+      { _id: attempt._id, status: "issued" },
+      { $set: { status: "abandoned" } },
+    );
   else if (["submitting", "submitted"].includes(attempt.status))
-    throw jerr(409, "ATTEMPT_ALREADY_SUBMITTED", "This attempt was already submitted.");
+    throw jerr(
+      409,
+      "ATTEMPT_ALREADY_SUBMITTED",
+      "This attempt was already submitted.",
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -831,7 +1045,11 @@ function rateLimitSubmit(userId, max = 30, windowMs = 3600e3) {
   const list = (submitHits.get(userId) || []).filter((t) => now - t < windowMs);
   if (list.length >= max) {
     submitHits.set(userId, list);
-    throw jerr(429, "RATE_LIMITED", "Too many submissions. Please try again later.");
+    throw jerr(
+      429,
+      "RATE_LIMITED",
+      "Too many submissions. Please try again later.",
+    );
   }
   list.push(now);
   submitHits.set(userId, list);
@@ -852,9 +1070,12 @@ async function finalizeProfile(userId) {
   ]);
   const a = agg[0] || { n: 0, sum: 0, best: 0, last: null };
   const profile = await upsertProfile(userId);
-  if (profile.roundsCompleted === a.n && profile.predictedSum === a.sum) return profile; // already in sync
+  if (profile.roundsCompleted === a.n && profile.predictedSum === a.sum)
+    return profile; // already in sync
 
-  const cooldownUntil = a.last ? new Date(+a.last + CFG.COOLDOWN_HOURS * 3600e3) : null;
+  const cooldownUntil = a.last
+    ? new Date(+a.last + CFG.COOLDOWN_HOURS * 3600e3)
+    : null;
   return JambProfile.findOneAndUpdate(
     { _id: profile._id },
     {
@@ -873,7 +1094,10 @@ async function finalizeProfile(userId) {
 // complete a round that has all its subject results (idempotent)
 async function completeRoundIfDone(roundDoc) {
   let round = roundDoc;
-  if (round.status === "active" && round.results.length >= round.subjectIds.length) {
+  if (
+    round.status === "active" &&
+    round.results.length >= round.subjectIds.length
+  ) {
     const summary = summarize(orderResults(plain(round)));
     const done = await JambRound.findOneAndUpdate(
       { _id: round._id, status: "active" },
@@ -899,7 +1123,9 @@ async function applyCounters(attempt) {
   if (!answered) return;
 
   const u = await User.findById(attempt.userId).select("qBank").lean();
-  const existing = new Map(((u && u.qBank) || []).map((e) => [str(e.question), !!e.correct]));
+  const existing = new Map(
+    ((u && u.qBank) || []).map((e) => [str(e.question), !!e.correct]),
+  );
   const ops = [];
   const fresh = [];
   const record = (id, correct) => {
@@ -915,7 +1141,12 @@ async function applyCounters(attempt) {
   g.correctIds.forEach((id) => record(id, true));
   g.wrongIds.forEach((id) => record(id, false));
   if (fresh.length)
-    ops.push({ updateOne: { filter: { _id: attempt.userId }, update: { $push: { qBank: { $each: fresh } } } } });
+    ops.push({
+      updateOne: {
+        filter: { _id: attempt.userId },
+        update: { $push: { qBank: { $each: fresh } } },
+      },
+    });
   ops.push({
     updateOne: {
       filter: { _id: attempt.userId },
@@ -937,17 +1168,24 @@ async function finishSubmission(attemptDoc) {
 
   let round = await JambRound.findById(attempt.roundId);
   if (!round) {
-    await JambAttempt.updateOne({ _id: attempt._id }, { $set: { status: "abandoned" } });
+    await JambAttempt.updateOne(
+      { _id: attempt._id },
+      { $set: { status: "abandoned" } },
+    );
     throw jerr(410, "ATTEMPT_ABANDONED", "This attempt is no longer valid.");
   }
 
-  const alreadyRecorded = round.results.some((r) => str(r.attemptId) === str(attempt._id));
+  const alreadyRecorded = round.results.some(
+    (r) => str(r.attemptId) === str(attempt._id),
+  );
   if (!alreadyRecorded) {
     const updated = await JambRound.findOneAndUpdate(
       {
         _id: round._id,
         status: "active",
-        "results.subjectId": { $nin: graded.subjects.map((s) => oid(s.subjectId)) },
+        "results.subjectId": {
+          $nin: graded.subjects.map((s) => oid(s.subjectId)),
+        },
       },
       {
         $push: {
@@ -964,10 +1202,21 @@ async function finishSubmission(attemptDoc) {
       { new: true },
     );
     if (!updated) {
-      await JambAttempt.updateOne({ _id: attempt._id, status: "submitting" }, { $set: { status: "abandoned" } });
+      await JambAttempt.updateOne(
+        { _id: attempt._id, status: "submitting" },
+        { $set: { status: "abandoned" } },
+      );
       if (round.status !== "active")
-        throw jerr(410, "ATTEMPT_ABANDONED", "Your round changed while this attempt was open.");
-      throw jerr(409, "SUBJECT_ALREADY_COMPLETED", "You already completed this subject in this round.");
+        throw jerr(
+          410,
+          "ATTEMPT_ABANDONED",
+          "Your round changed while this attempt was open.",
+        );
+      throw jerr(
+        409,
+        "SUBJECT_ALREADY_COMPLETED",
+        "You already completed this subject in this round.",
+      );
     }
     round = updated;
   }
@@ -979,7 +1228,8 @@ async function finishSubmission(attemptDoc) {
     JambProfile.findOne({ userId }).lean(),
     User.findById(userId).select("quizStats.totalCorrectAnswers").lean(),
   ]);
-  const lifetimeCorrect = (user && user.quizStats && user.quizStats.totalCorrectAnswers) || 0;
+  const lifetimeCorrect =
+    (user && user.quizStats && user.quizStats.totalCorrectAnswers) || 0;
   const subjectResults = graded.subjects.map((s) => clientSubject(s));
 
   let response;
@@ -1003,7 +1253,10 @@ async function finishSubmission(attemptDoc) {
       cooldownUntil: 0,
     };
   }
-  await JambAttempt.updateOne({ _id: attempt._id }, { $set: { status: "submitted", response } });
+  await JambAttempt.updateOne(
+    { _id: attempt._id },
+    { $set: { status: "submitted", response } },
+  );
   return response;
 }
 
@@ -1012,25 +1265,42 @@ async function submitAttempt(userId, attemptId, body, idemKey) {
   if (!isValidId(attemptId)) throw jerr(404, "NOT_FOUND", "Attempt not found.");
   rateLimitSubmit(str(userId));
 
-  let attempt = await JambAttempt.findOne({ _id: oid(attemptId), userId: oid(userId) });
+  let attempt = await JambAttempt.findOne({
+    _id: oid(attemptId),
+    userId: oid(userId),
+  });
   if (!attempt) throw jerr(404, "NOT_FOUND", "Attempt not found.");
-  if (attempt.status === "submitted" && attempt.response) return attempt.response; // idempotent replay
-  if (attempt.status === "abandoned") throw jerr(410, "ATTEMPT_ABANDONED", "This attempt was quit or replaced.");
-  if (attempt.status === "expired") throw jerr(410, "ATTEMPT_EXPIRED", "This attempt has expired.");
+  if (attempt.status === "submitted" && attempt.response)
+    return attempt.response; // idempotent replay
+  if (attempt.status === "abandoned")
+    throw jerr(410, "ATTEMPT_ABANDONED", "This attempt was quit or replaced.");
+  if (attempt.status === "expired")
+    throw jerr(410, "ATTEMPT_EXPIRED", "This attempt has expired.");
 
   if (attempt.status === "issued") {
     if (now > attempt.expiresAt) {
-      await JambAttempt.updateOne({ _id: attempt._id, status: "issued" }, { $set: { status: "expired" } });
+      await JambAttempt.updateOne(
+        { _id: attempt._id, status: "issued" },
+        { $set: { status: "expired" } },
+      );
       throw jerr(410, "ATTEMPT_EXPIRED", "This attempt has expired.");
     }
     const profile = await JambProfile.findOne({ userId: oid(userId) }).lean();
     const cd = activeCooldownMs(profile, now);
-    if (cd) throw jerr(409, "COOLDOWN_ACTIVE", "Attempt not counted: rest period is active.", { cooldownUntil: cd });
+    if (cd)
+      throw jerr(
+        409,
+        "COOLDOWN_ACTIVE",
+        "Attempt not counted: rest period is active.",
+        { cooldownUntil: cd },
+      );
 
     const { answers, durationMs } = body || {};
     const result = gradePaper(attempt.paper, answers);
 
-    const subjects = await Subject.find({ _id: { $in: attempt.paper.map((p) => p.subjectId) } })
+    const subjects = await Subject.find({
+      _id: { $in: attempt.paper.map((p) => p.subjectId) },
+    })
       .select("name image")
       .lean();
     const meta = new Map(subjects.map((s) => [str(s._id), s]));
@@ -1042,8 +1312,14 @@ async function submitAttempt(userId, attemptId, body, idemKey) {
 
     const flags = [];
     const dur = Number(durationMs);
-    if (result.answered > 0 && Number.isFinite(dur) && dur / result.answered < 2000) flags.push("too_fast");
-    if (Number.isFinite(dur) && dur > now - attempt.issuedAt + 5000) flags.push("duration_mismatch");
+    if (
+      result.answered > 0 &&
+      Number.isFinite(dur) &&
+      dur / result.answered < 2000
+    )
+      flags.push("too_fast");
+    if (Number.isFinite(dur) && dur > now - attempt.issuedAt + 5000)
+      flags.push("duration_mismatch");
 
     const set = {
       status: "submitting",
@@ -1064,8 +1340,13 @@ async function submitAttempt(userId, attemptId, body, idemKey) {
     );
     if (!won) {
       const cur = await JambAttempt.findById(attempt._id);
-      if (cur && cur.status === "submitted" && cur.response) return cur.response;
-      throw jerr(409, "SUBMIT_IN_PROGRESS", "This attempt is already being submitted.");
+      if (cur && cur.status === "submitted" && cur.response)
+        return cur.response;
+      throw jerr(
+        409,
+        "SUBMIT_IN_PROGRESS",
+        "This attempt is already being submitted.",
+      );
     }
     attempt = won;
   }
@@ -1082,28 +1363,43 @@ async function history(userId, { limit, cursor } = {}) {
   const q = { userId: oid(userId), status: "completed" };
   if (cursor) {
     const [ms, id] = String(cursor).split("|");
-    if (!Number.isFinite(Number(ms)) || !isValidId(id)) throw jerr(422, "VALIDATION_FAILED", "Invalid cursor.");
+    if (!Number.isFinite(Number(ms)) || !isValidId(id))
+      throw jerr(422, "VALIDATION_FAILED", "Invalid cursor.");
     const at = new Date(Number(ms));
-    q.$or = [{ completedAt: { $lt: at } }, { completedAt: at, _id: { $lt: oid(id) } }];
+    q.$or = [
+      { completedAt: { $lt: at } },
+      { completedAt: at, _id: { $lt: oid(id) } },
+    ];
   }
-  const rows = await JambRound.find(q).sort({ completedAt: -1, _id: -1 }).limit(n + 1).lean();
+  const rows = await JambRound.find(q)
+    .sort({ completedAt: -1, _id: -1 })
+    .limit(n + 1)
+    .lean();
   const page = rows.slice(0, n);
   const last = page[page.length - 1];
   return {
     items: page.map(toRoundResult),
-    nextCursor: rows.length > n && last ? `${toMs(last.completedAt)}|${str(last._id)}` : null,
+    nextCursor:
+      rows.length > n && last
+        ? `${toMs(last.completedAt)}|${str(last._id)}`
+        : null,
   };
 }
 
 async function getRound(userId, roundId) {
   if (!isValidId(roundId)) throw jerr(404, "NOT_FOUND", "Round not found.");
-  const round = await JambRound.findOne({ _id: oid(roundId), userId: oid(userId), status: "completed" }).lean();
+  const round = await JambRound.findOne({
+    _id: oid(roundId),
+    userId: oid(userId),
+    status: "completed",
+  }).lean();
   if (!round) throw jerr(404, "NOT_FOUND", "Round not found.");
   return toRoundResult(round);
 }
 
 async function devSkipCooldown(userId) {
-  if (process.env.NODE_ENV === "production") throw jerr(404, "NOT_FOUND", "Not found.");
+  if (process.env.NODE_ENV === "production")
+    throw jerr(404, "NOT_FOUND", "Not found.");
   await JambProfile.updateOne(
     { userId: oid(userId) },
     { $set: { cooldownUntil: null, cooldownNotified: true } },
@@ -1115,7 +1411,10 @@ async function devSkipCooldown(userId) {
 // Admin helpers (flag which subjects JAMB uses)
 // ─────────────────────────────────────────────────────────────────────────────
 async function adminListSubjects() {
-  const subjects = await Subject.find({}).select("name jambEligible jambCompulsory").sort({ name: 1 }).lean();
+  const subjects = await Subject.find({})
+    .select("name jambEligible jambCompulsory")
+    .sort({ name: 1 })
+    .lean();
   const items = [];
   for (const s of subjects)
     items.push({
@@ -1133,25 +1432,43 @@ async function adminUpdateSubject(subjectId, body) {
   const set = {};
   for (const k of ["jambEligible", "jambCompulsory"]) {
     if (body && body[k] !== undefined) {
-      if (typeof body[k] !== "boolean") throw jerr(422, "VALIDATION_FAILED", `${k} must be a boolean.`);
+      if (typeof body[k] !== "boolean")
+        throw jerr(422, "VALIDATION_FAILED", `${k} must be a boolean.`);
       set[k] = body[k];
     }
   }
-  if (!Object.keys(set).length) throw jerr(422, "VALIDATION_FAILED", "Nothing to update.");
+  if (!Object.keys(set).length)
+    throw jerr(422, "VALIDATION_FAILED", "Nothing to update.");
   if (set.jambCompulsory === true) set.jambEligible = true; // a compulsory subject must be selectable
-  const s = await Subject.findByIdAndUpdate(subjectId, { $set: set }, { new: true })
+  const s = await Subject.findByIdAndUpdate(
+    subjectId,
+    { $set: set },
+    { new: true },
+  )
     .select("name jambEligible jambCompulsory")
     .lean();
   if (!s) throw jerr(404, "NOT_FOUND", "Subject not found.");
   dbTotalCache.delete(str(s._id));
-  return { _id: str(s._id), name: s.name, jambEligible: !!s.jambEligible, jambCompulsory: !!s.jambCompulsory };
+  return {
+    _id: str(s._id),
+    name: s.name,
+    jambEligible: !!s.jambEligible,
+    jambCompulsory: !!s.jambCompulsory,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Background sweep — schedule POST /jamb/cron/sweep every ~5 minutes
 // ─────────────────────────────────────────────────────────────────────────────
 async function sweep(now = new Date()) {
-  const out = { recoveredRounds: 0, resumedAttempts: 0, expiredAttempts: 0, resyncedProfiles: 0, notified: 0, orphansRemoved: 0 };
+  const out = {
+    recoveredRounds: 0,
+    resumedAttempts: 0,
+    expiredAttempts: 0,
+    resyncedProfiles: 0,
+    notified: 0,
+    orphansRemoved: 0,
+  };
   const safe = async (label, fn) => {
     try {
       await fn();
@@ -1165,7 +1482,10 @@ async function sweep(now = new Date()) {
     const stuck = await JambRound.find({
       status: "active",
       $expr: {
-        $gte: [{ $size: { $ifNull: ["$results", []] } }, { $size: { $ifNull: ["$subjectIds", []] } }],
+        $gte: [
+          { $size: { $ifNull: ["$results", []] } },
+          { $size: { $ifNull: ["$subjectIds", []] } },
+        ],
       },
     }).limit(100);
     for (const r of stuck) {
@@ -1206,9 +1526,15 @@ async function sweep(now = new Date()) {
       completedAt: { $gte: new Date(now.getTime() - 3600e3) },
     });
     for (const id of userIds) {
-      const before = await JambProfile.findOne({ userId: id }).select("roundsCompleted").lean();
+      const before = await JambProfile.findOne({ userId: id })
+        .select("roundsCompleted")
+        .lean();
       const after = await finalizeProfile(id);
-      if (!before || (after && before.roundsCompleted !== after.roundsCompleted)) out.resyncedProfiles++;
+      if (
+        !before ||
+        (after && before.roundsCompleted !== after.roundsCompleted)
+      )
+        out.resyncedProfiles++;
     }
   });
 
@@ -1227,9 +1553,17 @@ async function sweep(now = new Date()) {
         { $set: { cooldownNotified: true } },
       );
       if (!claim.modifiedCount) continue;
-      const user = await User.findById(p.userId).select("accountType subscription tokens.pushToken").lean();
+      const user = await User.findById(p.userId)
+        .select("accountType subscription tokens.pushToken")
+        .lean();
       const push = user && user.tokens && user.tokens.pushToken;
-      if (!isPremiumUser(user, now) || !push || push.state !== "registered" || !push.token) continue;
+      if (
+        !isPremiumUser(user, now) ||
+        !push ||
+        push.state !== "registered" ||
+        !push.token
+      )
+        continue;
       await expoNotifications([push.token], {
         title: `Round ${(p.roundsCompleted || 0) + 1} is ready 🎯`,
         message: "Your rest period is over. Start your next JAMB round.",
@@ -1241,12 +1575,21 @@ async function sweep(now = new Date()) {
 
   // 6. cascade-clean data of deleted accounts (sampled, so each run is cheap)
   await safe("orphans", async () => {
-    const sample = await JambProfile.aggregate([{ $sample: { size: 100 } }, { $project: { userId: 1 } }]);
+    const sample = await JambProfile.aggregate([
+      { $sample: { size: 100 } },
+      { $project: { userId: 1 } },
+    ]);
     if (!sample.length) return;
     const alive = new Set(
-      (await User.find({ _id: { $in: sample.map((s) => s.userId) } }).select("_id").lean()).map((u) => str(u._id)),
+      (
+        await User.find({ _id: { $in: sample.map((s) => s.userId) } })
+          .select("_id")
+          .lean()
+      ).map((u) => str(u._id)),
     );
-    const gone = sample.map((s) => s.userId).filter((id) => !alive.has(str(id)));
+    const gone = sample
+      .map((s) => s.userId)
+      .filter((id) => !alive.has(str(id)));
     if (!gone.length) return;
     await Promise.all([
       JambProfile.deleteMany({ userId: { $in: gone } }),
