@@ -1573,8 +1573,13 @@ router.get("/fetch", auth, async (req, res) => {
 
   if (school) {
     await reconcileSchool(school);
+    const PREVIEW_LIMIT = 22; // keep in sync with the app
+
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
+
+    const studentCount = school.students.length; // real total, before slicing
+    school.students = school.students.slice(0, PREVIEW_LIMIT);
 
     // Get Counts
     assignmentCount = (school.assignments?.filter(
@@ -1585,7 +1590,13 @@ router.get("/fetch", auth, async (req, res) => {
     quizCount = school.quiz.filter((item) => item.status == "active").length;
     return res.send({
       status: "success",
-      data: { ...school?._doc, classCount, assignmentCount, quizCount },
+      data: {
+        ...school?._doc,
+        classCount,
+        studentCount,
+        assignmentCount,
+        quizCount,
+      },
       isVerified,
     });
   } else {
@@ -6126,6 +6137,94 @@ router.post("/flag", auth, async (req, res) => {
     }
   } catch (err) {
     console.error("flag-student notification error:", err);
+  }
+});
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+router.get("/students", auth, async (req, res) => {
+  try {
+    const userId = String(req.user.userId);
+    const { schoolId } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const q = String(req.query.q || "").trim();
+
+    if (!schoolId || !mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res
+        .status(400)
+        .json({ status: "failed", message: "Valid schoolId is required" });
+    }
+
+    const school = await School.findById(schoolId)
+      .select("students teachers rep")
+      .lean();
+
+    if (!school) {
+      return res
+        .status(404)
+        .json({ status: "failed", message: "School not found" });
+    }
+
+    // Only verified members (or the rep) may browse the list
+    const isMember =
+      String(school.rep) === userId ||
+      school.students.some((s) => String(s.user) === userId && s.verified) ||
+      school.teachers.some((t) => String(t.user) === userId && t.verified);
+
+    if (!isMember) {
+      return res
+        .status(403)
+        .json({ status: "failed", message: "Not authorized" });
+    }
+
+    const verifiedIds = school.students
+      .filter((s) => s.verified)
+      .map((s) => s.user);
+
+    const filter = { _id: { $in: verifiedIds } };
+
+    if (q) {
+      // every word must match first name, last name or username
+      filter.$and = q
+        .split(/\s+/)
+        .slice(0, 4)
+        .map((w) => {
+          const rx = { $regex: escapeRegex(w), $options: "i" };
+          return {
+            $or: [{ firstName: rx }, { lastName: rx }, { username: rx }],
+          };
+        });
+    }
+
+    const [students, total] = await Promise.all([
+      User.find(filter)
+        .select(
+          "firstName lastName username avatar class.level totalPoints schoolPoints streak",
+        )
+        .collation({ locale: "en", strength: 2 }) // case-insensitive sort
+        .sort({ firstName: 1, lastName: 1, _id: 1 })
+        .skip(offset)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
+
+    return res.json({
+      status: "success",
+      data: students,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + students.length < total,
+      },
+    });
+  } catch (error) {
+    console.error("Fetch students error:", error);
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Failed to fetch students" });
   }
 });
 
