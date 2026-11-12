@@ -1,13 +1,6 @@
 const express = require("express");
 const uuid = require("uuid");
-// const nodemailer = require("nodemailer");
-// const mediaUploader = require("../middlewares/mediaUploader");
-// const multer = require("multer");
-// const { getUploadUri } = require("../controllers/helpers");
 const auth = require("../middlewares/authRoutes");
-// const { Category } = require("../models/Category");
-// const { Subject } = require("../models/Subject");
-// const { Topic } = require("../models/Topic");
 const { School } = require("../models/School");
 const { User } = require("../models/User");
 const {
@@ -27,16 +20,31 @@ const nanoid = uuid.v4;
 const selectQuiz =
   "quiz._id quiz.questions quiz.currentSession quiz.currentSubmissions quiz.sessions quiz.subject quiz.teacher";
 
-// const storage = multer.diskStorage({
-//   destination: (req, file, cb) => {
-//     return cb(null, "./uploads/assets/");
-//   },
-//   filename: (req, file, cb) => {
-//     return cb(null, `${file.originalname}`);
-//   },
-// });
+// ─────────────────────────────────────────────────────────────────────────────
+// Student-list helpers (used by /fetch and /students)
+// ─────────────────────────────────────────────────────────────────────────────
+const PREVIEW_LIMIT = 21; // students sent with /fetch — keep in sync with the app
 
-// const uploader = multer({ storage, limits: { fieldSize: 2 * 1024 * 1024 } }); // 2MB
+const normLevel = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+// "sss 1" / "sss1" / "SSS 1" all match each other
+const levelVariants = (s) => {
+  const n = normLevel(s);
+  return [
+    ...new Set([String(s), n, n.replace(/^([a-z]+)(\d+)$/, "$1 $2")]),
+  ].filter(Boolean);
+};
+
+const LEVEL_ORDER = ["jss1", "jss2", "jss3", "sss1", "sss2", "sss3"];
+const classRank = (lvl) => {
+  const i = LEVEL_ORDER.indexOf(normLevel(lvl));
+  return i === -1 ? 99 : i;
+};
+
+const escapeRegexStr = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const router = express.Router();
 
@@ -544,11 +552,6 @@ router.post("/get_quiz", auth, async (req, res) => {
   const userId = req.user.userId;
   const { schoolId, quizId, type } = req.body;
 
-  // if (!quizId)
-  //   return res
-  //     .status(422)
-  //     .send({ status: "failed", message: "Invalid quiz info" });
-
   const userInfo = await User.findById(userId).select("accountType");
   if (!userInfo)
     return res
@@ -585,107 +588,6 @@ router.post("/get_quiz", auth, async (req, res) => {
 
   return res.send({ status: "success", data: quiz });
 });
-
-// router.post("/submit_quiz", auth, async (req, res) => {
-//   const userId = req.user.userId;
-//   const data = req.body;
-//   const { schoolId, type, questions, quizId } = data;
-
-//   const userInfo = await User.findById(userId).select(
-//     "accountType schoolPoints",
-//   );
-//   if (!userInfo)
-//     return res
-//       .status(422)
-//       .send({ status: "failed", message: "User not found" });
-//   if (userInfo.accountType !== "student")
-//     return res
-//       .status(422)
-//       .send({ status: "failed", message: "User not authorized" });
-
-//   const school = await School.findById(schoolId)
-//     .populate([
-//       {
-//         path: "quiz.subject",
-//         model: "Subject",
-//         select: "name",
-//       },
-//     ])
-//     .select(selectQuiz);
-//   if (!school)
-//     return res
-//       .status(422)
-//       .send({ status: "failed", message: "School not found" });
-
-//   // Get stats
-
-//   let point = 0,
-//     total = 0;
-
-//   questions.forEach((quest) => {
-//     quest.questions.forEach((question) => {
-//       const correctAnswer = question?.answers?.find(
-//         (item) => item?.correct == true,
-//       );
-//       if (correctAnswer?._id == question?.answered?._id) {
-//         point += question.point;
-//         total += question.point;
-//       } else {
-//         total += question.point;
-//         point -= 2;
-//         // setStat({ ...stat, point: statPoints });
-//       }
-//     });
-//   });
-
-//   if (type == "school") {
-//     const getQuiz = school.quiz?.find(
-//       (item) => item?._id?.toString() == quizId,
-//     );
-//     const checkUser = getQuiz.currentSubmissions.findIndex(
-//       (item) => item?.toString() == userId,
-//     );
-//     if (checkUser > -1) {
-//       return res.status(422).send({
-//         status: "failed",
-//         message: "You have already this attempted this quiz, No points added",
-//       });
-//     }
-//     getQuiz.currentSubmissions.push(userId);
-//     if (Boolean(getQuiz)) {
-//       const sess = getQuiz.sessions?.find(
-//         (item) => item?._id?.toString() == getQuiz.currentSession?.toString(),
-//       );
-//       if (sess) {
-//         sess.participants.addToSet({
-//           student: userId,
-//           quiz: questions,
-//           score: point,
-//         });
-//         sess.total_score = total;
-//         sess.average_score =
-//           sess.participants.reduce((acc, curr) => acc + curr.score, 0) /
-//           sess.participants.length;
-
-//         // give school points
-//         userInfo.schoolPoints += point;
-
-//         await school.save();
-//         await userInfo.save();
-//       } else {
-//         return res
-//           .status(422)
-//           .send({ status: "failed", message: "Session not found" });
-//       }
-//     } else {
-//       return res
-//         .status(422)
-//         .send({ status: "failed", message: "Quiz not found" });
-//     }
-//   }
-
-//   res.send({ status: "success" });
-// });
 
 router.post("/submit_quiz", auth, async (req, res) => {
   const userId = req.user.userId;
@@ -1503,10 +1405,17 @@ router.get("/announcements", auth, async (req, res) => {
   res.send({ status: "success", data: prevAnnouncements.reverse() });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /fetch
+// Sends the school profile with only the first PREVIEW_LIMIT students.
+// Students in the viewer's own class come first, then other classes fill up.
+// `studentCount` is the real total; `myClassLevel` is the viewer's class.
+// The full, paginated list lives at GET /students.
+// ─────────────────────────────────────────────────────────────────────────────
 router.get("/fetch", auth, async (req, res) => {
   const userId = req.user.userId;
 
-  const userInfo = await User.findById(userId).select("accountType");
+  const userInfo = await User.findById(userId).select("accountType class");
   if (!userInfo)
     return res
       .status(422)
@@ -1569,17 +1478,46 @@ router.get("/fetch", auth, async (req, res) => {
       isVerified = stdData?.verified;
     }
   }
-  let assignmentCount, announcementCount, classCount, quizCount;
+  let assignmentCount,
+    announcementCount,
+    classCount,
+    quizCount,
+    studentCount,
+    myClassLevel;
 
   if (school) {
     await reconcileSchool(school);
-    const PREVIEW_LIMIT = 22; // keep in sync with the app
-
     school.students = school.students.filter((item) => item.verified);
     school.teachers = school.teachers.filter((item) => item.verified);
 
-    const studentCount = school.students.length; // real total, before slicing
-    school.students = school.students.slice(0, PREVIEW_LIMIT);
+    // Real total, before we cut the list down to a preview
+    studentCount = school.students.length;
+    myClassLevel = isStudent ? userInfo?.class?.level || null : null;
+
+    const studentUserId = (s) => String(s.user?._id ?? s.user);
+
+    if (myClassLevel) {
+      // Which of the school's students share my class?
+      const mates = await User.find({
+        _id: { $in: school.students.map(studentUserId) },
+        "class.level": { $in: levelVariants(myClassLevel) },
+      })
+        .select("_id")
+        .collation({ locale: "en", strength: 2 })
+        .lean();
+
+      const mateIds = new Set(mates.map((m) => String(m._id)));
+      const mine = [];
+      const others = [];
+      school.students.forEach((s) =>
+        (mateIds.has(studentUserId(s)) ? mine : others).push(s),
+      );
+
+      // My class first, then fill up with other classes
+      school.students = [...mine, ...others].slice(0, PREVIEW_LIMIT);
+    } else {
+      school.students = school.students.slice(0, PREVIEW_LIMIT);
+    }
 
     // Get Counts
     assignmentCount = (school.assignments?.filter(
@@ -1593,9 +1531,10 @@ router.get("/fetch", auth, async (req, res) => {
       data: {
         ...school?._doc,
         classCount,
-        studentCount,
         assignmentCount,
         quizCount,
+        studentCount,
+        myClassLevel,
       },
       isVerified,
     });
@@ -1604,6 +1543,150 @@ router.get("/fetch", auth, async (req, res) => {
       status: "success",
       data: {},
       isVerified,
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /students
+// Whole-school list of verified students — paginated, searchable and
+// filterable by class.
+//   Query: schoolId, limit (≤50), offset, q, classLevel
+// Also returns the class cards (first page only), the school total and the
+// filters it applied (so the app can tell stale results from fresh ones).
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/students", auth, async (req, res) => {
+  try {
+    const userId = String(req.user.userId);
+    const { schoolId } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const q = String(req.query.q || "").trim();
+    const classLevel = String(req.query.classLevel || "").trim();
+
+    if (!schoolId || !mongoose.Types.ObjectId.isValid(schoolId)) {
+      return res
+        .status(400)
+        .json({ status: "failed", message: "Valid schoolId is required" });
+    }
+
+    const [school, me] = await Promise.all([
+      School.findById(schoolId)
+        .select("students teachers rep classes.level classes.alias")
+        .lean(),
+      User.findById(userId).select("class.level").lean(),
+    ]);
+
+    if (!school) {
+      return res
+        .status(404)
+        .json({ status: "failed", message: "School not found" });
+    }
+
+    // Only verified members (or the rep) may browse the list
+    const isMember =
+      String(school.rep) === userId ||
+      school.students.some((s) => String(s.user) === userId && s.verified) ||
+      school.teachers.some((t) => String(t.user) === userId && t.verified);
+
+    if (!isMember) {
+      return res
+        .status(403)
+        .json({ status: "failed", message: "Not authorized" });
+    }
+
+    const verifiedIds = school.students
+      .filter((s) => s.verified)
+      .map((s) => s.user); // already ObjectIds (lean)
+
+    // ── list filter ────────────────────────────────────────────────────────
+    const filter = { _id: { $in: verifiedIds } };
+
+    if (classLevel) {
+      filter["class.level"] = { $in: levelVariants(classLevel) };
+    }
+
+    if (q) {
+      // every word must match first name, last name or username
+      filter.$and = q
+        .split(/\s+/)
+        .slice(0, 4)
+        .map((w) => {
+          const rx = { $regex: escapeRegexStr(w), $options: "i" };
+          return {
+            $or: [{ firstName: rx }, { lastName: rx }, { username: rx }],
+          };
+        });
+    }
+
+    const [students, total] = await Promise.all([
+      User.find(filter)
+        .select(
+          "firstName lastName username avatar class.level totalPoints schoolPoints streak",
+        )
+        .collation({ locale: "en", strength: 2 })
+        .sort({ firstName: 1, lastName: 1, _id: 1 })
+        .skip(offset)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter).collation({ locale: "en", strength: 2 }),
+    ]);
+
+    // ── class cards (first page only — the app keeps them while paging) ────
+    let classes;
+    if (offset === 0) {
+      const groups = await User.aggregate([
+        { $match: { _id: { $in: verifiedIds } } },
+        { $group: { _id: "$class.level", count: { $sum: 1 } } },
+      ]);
+
+      const aliasByKey = {};
+      (school.classes || []).forEach((c) => {
+        aliasByKey[normLevel(c.level)] = c.alias || null;
+      });
+
+      const merged = new Map();
+      groups.forEach((g) => {
+        if (!g._id) return;
+        const k = normLevel(g._id);
+        const cur = merged.get(k);
+        merged.set(k, {
+          level: cur?.level ?? g._id,
+          count: (cur?.count || 0) + g.count,
+        });
+      });
+
+      const myKey = me?.class?.level ? normLevel(me.class.level) : null;
+
+      classes = [...merged.entries()]
+        .map(([k, v]) => ({
+          level: v.level,
+          alias: aliasByKey[k] || null,
+          count: v.count,
+          isMine: k === myKey,
+        }))
+        .sort((a, b) => classRank(a.level) - classRank(b.level));
+    }
+
+    return res.json({
+      status: "success",
+      data: students,
+      classes, // undefined on later pages (the app keeps the first page's)
+      schoolTotal: verifiedIds.length,
+      myClassLevel: me?.class?.level || null,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + students.length < total,
+      },
+      filters: { q, classLevel }, // echoed so the app can tell stale vs fresh
+    });
+  } catch (error) {
+    console.error("Fetch students error:", error);
+    return res.status(500).json({
+      status: "failed",
+      message: error?.message || "Failed to fetch students",
     });
   }
 });
@@ -5405,30 +5488,6 @@ router.get("/:schoolId/dashboard", auth, async (req, res) => {
  *   limit    {number}  default 25
  *   offset   {number}  default 0
  *   sortBy   {string}  "totalPoints" | "avgPoints" | "studentCount"  default "totalPoints"
- *
- * Response shape:
- * {
- *   success: true,
- *   data: {
- *     leaderboard: SchoolEntry[],
- *     currentUser: { rank, schoolId, schoolName, ... } | null,
- *     pagination: { total, limit, offset, hasMore }
- *   }
- * }
- *
- * SchoolEntry:
- * {
- *   _id          ObjectId   school _id
- *   name         string
- *   state        string
- *   lga          string
- *   type         string
- *   avatar       object | null   (school logo / rep avatar)
- *   totalPoints  number     sum of all verified students' totalPoints
- *   avgPoints    number     mean totalPoints per student
- *   studentCount number     verified students with ≥1 quiz taken
- *   rank         number
- * }
  */
 
 router.get("/leaderboard_schools", auth, async (req, res) => {
@@ -5744,11 +5803,6 @@ function formatSchoolMeta(school, totalStudents, totalTeachers) {
     subscription: school.subscription,
   };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADD THESE TWO ROUTE BLOCKS into your existing routes/school.js
-// Place them anywhere after the existing router.post("/join", ...) block.
-// ─────────────────────────────────────────────────────────────────────────────
 
 // =============================================================================
 // LEAVE SCHOOL
@@ -6137,94 +6191,6 @@ router.post("/flag", auth, async (req, res) => {
     }
   } catch (err) {
     console.error("flag-student notification error:", err);
-  }
-});
-
-const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-router.get("/students", auth, async (req, res) => {
-  try {
-    const userId = String(req.user.userId);
-    const { schoolId } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    const q = String(req.query.q || "").trim();
-
-    if (!schoolId || !mongoose.Types.ObjectId.isValid(schoolId)) {
-      return res
-        .status(400)
-        .json({ status: "failed", message: "Valid schoolId is required" });
-    }
-
-    const school = await School.findById(schoolId)
-      .select("students teachers rep")
-      .lean();
-
-    if (!school) {
-      return res
-        .status(404)
-        .json({ status: "failed", message: "School not found" });
-    }
-
-    // Only verified members (or the rep) may browse the list
-    const isMember =
-      String(school.rep) === userId ||
-      school.students.some((s) => String(s.user) === userId && s.verified) ||
-      school.teachers.some((t) => String(t.user) === userId && t.verified);
-
-    if (!isMember) {
-      return res
-        .status(403)
-        .json({ status: "failed", message: "Not authorized" });
-    }
-
-    const verifiedIds = school.students
-      .filter((s) => s.verified)
-      .map((s) => s.user);
-
-    const filter = { _id: { $in: verifiedIds } };
-
-    if (q) {
-      // every word must match first name, last name or username
-      filter.$and = q
-        .split(/\s+/)
-        .slice(0, 4)
-        .map((w) => {
-          const rx = { $regex: escapeRegex(w), $options: "i" };
-          return {
-            $or: [{ firstName: rx }, { lastName: rx }, { username: rx }],
-          };
-        });
-    }
-
-    const [students, total] = await Promise.all([
-      User.find(filter)
-        .select(
-          "firstName lastName username avatar class.level totalPoints schoolPoints streak",
-        )
-        .collation({ locale: "en", strength: 2 }) // case-insensitive sort
-        .sort({ firstName: 1, lastName: 1, _id: 1 })
-        .skip(offset)
-        .limit(limit)
-        .lean(),
-      User.countDocuments(filter),
-    ]);
-
-    return res.json({
-      status: "success",
-      data: students,
-      pagination: {
-        total,
-        limit,
-        offset,
-        hasMore: offset + students.length < total,
-      },
-    });
-  } catch (error) {
-    console.error("Fetch students error:", error);
-    return res
-      .status(500)
-      .json({ status: "failed", message: "Failed to fetch students" });
   }
 });
 

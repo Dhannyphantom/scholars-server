@@ -771,7 +771,7 @@ userSchema.index({ createdAt: -1 });
 userSchema.index({ "subscription.isActive": 1 });
 userSchema.index({ points: -1 });
 userSchema.index({ streak: -1 });
-userSchema.index({ firstName: 1, lastName: 1 });
+userSchema.index({ firstName: 1, "class.level": 1, lastName: 1 });
 
 const validateReg = (user) => {
   const schema = Joi.object({
