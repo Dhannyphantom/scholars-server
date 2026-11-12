@@ -3576,19 +3576,25 @@ router.get("/leaderboard/:schoolId", auth, async (req, res) => {
 router.get("/:schoolId/classes", auth, async (req, res) => {
   try {
     const { schoolId } = req.params;
-    const userId = req.user.userId;
+    const userId = String(req.user.userId);
 
-    await syncSchoolClassesWithStudents(schoolId);
-
+    // validate BEFORE doing any work (it used to run after the sync)
     if (!mongoose.Types.ObjectId.isValid(schoolId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid school ID",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid school ID" });
+    }
+
+    // a failed sync must never block the list from loading
+    try {
+      await syncSchoolClassesWithStudents(schoolId);
+    } catch (syncErr) {
+      console.error("Class sync failed (continuing):", syncErr.message);
     }
 
     const school = await School.findById(schoolId)
-      .select("classes teachers students")
+      // `rep` MUST be selected, otherwise isRep is always false
+      .select("rep classes teachers students")
       .populate({
         path: "classes.students",
         select: "firstName lastName avatar class username email",
@@ -3599,23 +3605,14 @@ router.get("/:schoolId/classes", auth, async (req, res) => {
       });
 
     if (!school) {
-      return res.status(404).json({
-        success: false,
-        message: "School not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "School not found" });
     }
 
-    // Check if user is authorized (teacher, rep, or student of this school)
-    // const user = await User.findById(userId);
-    const isRep = school.rep?.toString() === userId;
-
-    const isTeacher = school?.teachers?.some(
-      (t) => t.user?.toString() === userId,
-    );
-
-    const isStudent = school?.students?.some(
-      (s) => s.user?.toString() === userId,
-    );
+    const isRep = school.rep && String(school.rep) === userId;
+    const isTeacher = school.teachers?.some((t) => String(t.user) === userId);
+    const isStudent = school.students?.some((s) => String(s.user) === userId);
 
     if (!isRep && !isTeacher && !isStudent) {
       return res.status(403).json({
@@ -3640,7 +3637,6 @@ router.get("/:schoolId/classes", auth, async (req, res) => {
     });
   }
 });
-
 // ==========================================
 // FETCH SINGLE CLASS DETAILS
 // ==========================================

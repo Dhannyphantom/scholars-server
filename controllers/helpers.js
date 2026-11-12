@@ -525,131 +525,121 @@ const getFullName = (user, usernameFallback) => {
  * 2) user.class.level (fallback → first matching class)
  * Also keeps User.class in sync with School.classes
  */
+
+/**
+ * Keeps School.classes[].students and User.class in step with School.students.
+ *
+ * Differences from the old version:
+ *  - works on lean docs and writes with atomic $set / bulkWrite, so two
+ *    overlapping GET /classes calls can't throw a VersionError on school.save()
+ *  - only writes what actually changed (the old one saved every student every time)
+ *  - dedupes teachers by their `user` id (teachers are subdocs, so
+ *    teacherId.toString() was never a real id)
+ */
 const syncSchoolClassesWithStudents = async (schoolId) => {
   if (!mongoose.Types.ObjectId.isValid(schoolId)) {
     throw new Error("Invalid school ID");
   }
 
-  const school = await School.findById(schoolId).populate(
-    "students.user",
-    "class.level class.alias class.id",
-  );
+  const School = mongoose.model("School");
+  const User = mongoose.model("User");
 
-  if (!school) {
-    throw new Error("School not found");
-  }
+  const school = await School.findById(schoolId)
+    .select("classes students teachers")
+    .lean();
+  if (!school) throw new Error("School not found");
 
-  /**
-   * Deduplicate school.students — one entry per unique user ID
-   */
-  const seenStudentIds = new Set();
-  school.students = school.students.filter((entry) => {
-    if (!entry.user?._id) return false;
-    const uid = entry.user._id.toString();
-    if (seenStudentIds.has(uid)) return false;
-    seenStudentIds.add(uid);
-    return true;
-  });
+  // 1. Unique student / teacher entries
+  const uniqueBy = (list) => {
+    const seen = new Set();
+    return (list || []).filter((e) => {
+      const id = e?.user && String(e.user);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  };
+  const students = uniqueBy(school.students);
+  const teachers = uniqueBy(school.teachers);
 
-  /**
-   * Deduplicate school.teachers — unique at the school level
-   */
-  const seenTeacherIds = new Set();
-  school.teachers = school.teachers.filter((teacherId) => {
-    if (!teacherId) return false;
-    const tid = teacherId.toString();
-    if (seenTeacherIds.has(tid)) return false;
-    seenTeacherIds.add(tid);
-    return true;
-  });
-
-  /**
-   * Build maps
-   */
+  // 2. Class lookups
   const classById = new Map();
-  const classesByLevel = new Map();
-
-  school.classes.forEach((cls) => {
-    const id = cls._id.toString();
-    classById.set(id, cls);
-
-    const level = cls.level.toLowerCase();
-    if (!classesByLevel.has(level)) {
-      classesByLevel.set(level, []);
-    }
-    classesByLevel.get(level).push(cls);
+  const classByLevel = new Map(); // first class per level = fallback
+  school.classes.forEach((c, idx) => {
+    classById.set(String(c._id), { c, idx });
+    const lvl = String(c.level).toLowerCase();
+    if (!classByLevel.has(lvl)) classByLevel.set(lvl, { c, idx });
   });
 
-  /**
-   * Clear students from all classes
-   */
-  school.classes.forEach((cls) => {
-    cls.students = [];
-  });
+  // 3. Load the students' class info in ONE query
+  const users = await User.find({ _id: { $in: students.map((s) => s.user) } })
+    .select("class")
+    .lean();
 
-  /**
-   * Assign students
-   */
-  for (const entry of school.students) {
-    const studentUser = entry.user;
-    if (!studentUser?.class?.level) continue;
+  // 4. Bucket students into classes
+  const buckets = school.classes.map(() => []);
+  const userOps = [];
 
-    let targetClass = null;
+  for (const u of users) {
+    const level = u.class?.level;
+    if (!level) continue;
 
-    /**
-     * 1. Primary: class.id
-     */
-    if (studentUser.class.id) {
-      targetClass = classById.get(studentUser.class.id.toString());
+    const target =
+      (u.class.id && classById.get(String(u.class.id))) ||
+      classByLevel.get(String(level).toLowerCase());
+    if (!target) continue;
+
+    buckets[target.idx].push(u._id);
+
+    const inSync =
+      String(u.class.id || "") === String(target.c._id) &&
+      (u.class.alias || "") === (target.c.alias || "");
+    if (!inSync) {
+      userOps.push({
+        updateOne: {
+          filter: { _id: u._id },
+          update: {
+            $set: {
+              "class.level": target.c.level,
+              "class.alias": target.c.alias || "",
+              "class.id": target.c._id,
+              "class.hasChanged": false,
+            },
+          },
+        },
+      });
     }
-
-    /**
-     * 2. Fallback: first class with same level
-     */
-    if (!targetClass) {
-      const level = studentUser.class.level.toLowerCase();
-      const candidates = classesByLevel.get(level);
-      if (candidates?.length) {
-        targetClass = candidates[0];
-      }
-    }
-
-    if (!targetClass) continue;
-
-    /**
-     * Guard: skip if student already in this class (defensive safety net)
-     */
-    const alreadyInClass = targetClass.students.some(
-      (id) => id.toString() === studentUser._id.toString(),
-    );
-    if (alreadyInClass) continue;
-
-    targetClass.students.push(studentUser._id);
-
-    /**
-     * Backfill & sync User.class
-     */
-    studentUser.class = {
-      level: targetClass.level,
-      alias: targetClass.alias,
-      id: targetClass._id,
-      hasChanged: false,
-    };
-
-    await studentUser.save({ validateBeforeSave: false });
   }
 
-  await school.save();
+  // 5. Build one atomic $set for the school
+  const $set = {};
+  school.classes.forEach((c, idx) => {
+    const before = (c.students || []).map(String).sort().join(",");
+    const after = buckets[idx].map(String).sort().join(",");
+    if (before !== after) $set[`classes.${idx}.students`] = buckets[idx];
+  });
+  if (students.length !== (school.students || []).length)
+    $set.students = students;
+  if (teachers.length !== (school.teachers || []).length)
+    $set.teachers = teachers;
+
+  if (Object.keys($set).length) {
+    await School.updateOne({ _id: schoolId }, { $set });
+  }
+  if (userOps.length) {
+    await User.bulkWrite(userOps, { ordered: false });
+  }
 
   return {
     success: true,
-    message: "School classes synced successfully (with fallback)",
     data: {
       totalClasses: school.classes.length,
-      totalStudents: school.students.length,
+      totalStudents: students.length,
     },
   };
 };
+
+module.exports = { syncSchoolClassesWithStudents };
 
 const getGrade = (score) => {
   let grade = "";
