@@ -298,10 +298,22 @@ router.get("/subject_category", auth, async (req, res) => {
 // ============================================================
 // GET /subjects   – paginated
 // ============================================================
+// ============================================================
+// REPLACE the existing `router.get("/subjects", ...)` handler in your
+// instance routes file with this one. Nothing else in that file changes.
+//
+// Changes vs. the old handler:
+//   1. type === "jamb"  -> only subjects with jambEligible: true
+//   2. For "jamb", the default page size is 100 (so the selector never
+//      gets cut off at 20 subjects). `?limit=` still overrides it.
+//   3. jambEligible / jambCompulsory are included in the response.
+// ============================================================
 router.get("/subjects", auth, async (req, res) => {
   const { type } = req.query;
   const userId = req.user.userId;
-  const { page, limit, skip } = getPagination(req.query);
+  const { page, limit, skip } = getPagination(
+    type === "jamb" ? { limit: 100, ...req.query } : req.query,
+  );
 
   try {
     const userInfo = await User.findById(userId)
@@ -317,6 +329,8 @@ router.get("/subjects", auth, async (req, res) => {
     let matchFilter = {};
     if (type === "pro_filter" && userInfo?.accountType === "professional") {
       matchFilter = { _id: { $in: userInfo.subjects } };
+    } else if (type === "jamb") {
+      matchFilter = { jambEligible: true };
     }
 
     const userQBank = (userInfo?.qBank || []).map(
@@ -387,6 +401,8 @@ router.get("/subjects", auth, async (req, res) => {
           _id: 1,
           name: 1,
           image: 1,
+          jambEligible: 1,
+          jambCompulsory: 1,
           numberOfQuestions: 1,
           questionsAnswered: 1,
           questionsRemaining: {
