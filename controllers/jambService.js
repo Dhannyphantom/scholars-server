@@ -14,6 +14,7 @@
 //    array. (`Subject.jambCompulsory` still marks the compulsory subject(s).)
 
 const mongoose = require("mongoose");
+const { randomInt } = require("crypto");
 const CFG = require("./jambConfig");
 const {
   JambProfile,
@@ -56,10 +57,21 @@ const sameSet = (a, b) => {
   return A.size === B.size && [...A].every((x) => B.has(x));
 };
 
+// Money-style rounding so 40% of odd point values (e.g. 3 -> 1.2) never leaks float noise.
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+// A question's point value, falling back to the platform default (5).
+const pointOf = (p) => {
+  const n = Number(p);
+  return Number.isFinite(n) && n > 0 ? n : CFG.DEFAULT_QUESTION_POINT;
+};
+const penaltyOf = (point) => round2(pointOf(point) * CFG.PENALTY_RATE);
+
+// Fisher-Yates with a cryptographic RNG (unbiased, unpredictable).
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randomInt(0, i + 1);
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
@@ -105,6 +117,19 @@ async function getJambCategorySubjectIds() {
   return (category && category.subjects) || [];
 }
 
+// _id of the "JAMB" Category (cached; it never changes in practice). null if it doesn't exist.
+let jambCatCache = { id: null, at: 0 };
+async function getJambCategoryId() {
+  if (jambCatCache.id && Date.now() - jambCatCache.at < 5 * 60 * 1000)
+    return jambCatCache.id;
+  const category = await Category.findOne({ name: JAMB_CATEGORY })
+    .collation({ locale: "en", strength: 2 })
+    .select("_id")
+    .lean();
+  jambCatCache = { id: category ? category._id : null, at: Date.now() };
+  return jambCatCache.id;
+}
+
 /**
  * JAMB subjects = the subjects listed on the "JAMB" Category.
  * One query for the category, one for its subjects (small list, ~9 docs).
@@ -137,6 +162,23 @@ function levelFor(lifetimeCorrect) {
   return { level: lvl, next, progress: next ? Math.min(n / next.min, 1) : 1 };
 }
 
+function sumQuizScore(subjects) {
+  const q = subjects.reduce(
+    (a, x) => {
+      const s = x.quizScore || {};
+      a.earned += Number(s.earned) || 0;
+      a.penalty += Number(s.penalty) || 0;
+      return a;
+    },
+    { earned: 0, penalty: 0 },
+  );
+  return {
+    earned: round2(q.earned),
+    penalty: round2(q.penalty),
+    net: round2(q.earned - q.penalty),
+  };
+}
+
 function buildInsights(subjects) {
   const sorted = [...subjects].sort((a, b) => b.percent - a.percent); // stable: ties keep selection order
   const strongest = sorted[0];
@@ -161,8 +203,15 @@ function buildInsights(subjects) {
   };
 }
 
+// Exact (unrounded) percentage of a subject result. Falls back to the stored integer
+// percent for old rows. Using ratios keeps the /400 prediction accurate however many
+// questions each subject had (English 60, others 40 -> every subject is worth 100).
+const exactPercent = (x) =>
+  x.total ? ((x.correct || 0) / x.total) * 100 : x.percent || 0;
+
 function summarize(subjects) {
-  const avg = subjects.reduce((s, x) => s + x.percent, 0) / subjects.length;
+  const avg =
+    subjects.reduce((s, x) => s + exactPercent(x), 0) / subjects.length;
   const predicted = Math.round((avg / 100) * CFG.TOTAL_SCORE);
   const percent = Math.round(avg);
   return {
@@ -174,6 +223,7 @@ function summarize(subjects) {
     rating: ratingFor(percent),
     totalCorrect: subjects.reduce((s, x) => s + (x.correct || 0), 0),
     totalQuestions: subjects.reduce((s, x) => s + (x.total || 0), 0),
+    quizScore: sumQuizScore(subjects),
     insights: buildInsights(subjects),
   };
 }
@@ -227,13 +277,21 @@ function gradePaper(paper, answers) {
   const subjects = paper.map((p) => {
     let correct = 0;
     let skipped = 0;
+    let earned = 0;
+    let penalty = 0;
     p.questions.forEach((q) => {
       const aid = given.get(str(q.questionId));
-      if (aid == null) skipped++;
-      else if (aid === str(q.correctAnswerId)) {
+      if (aid == null) {
+        skipped++; // skipped is penalised exactly like a wrong answer
+        penalty += penaltyOf(q.point);
+      } else if (aid === str(q.correctAnswerId)) {
         correct++;
+        earned += pointOf(q.point);
         correctIds.push(str(q.questionId));
-      } else wrongIds.push(str(q.questionId));
+      } else {
+        penalty += penaltyOf(q.point);
+        wrongIds.push(str(q.questionId));
+      }
     });
     const total = p.questions.length;
     return {
@@ -243,6 +301,11 @@ function gradePaper(paper, answers) {
       skipped,
       wrong: total - correct - skipped,
       percent: total ? Math.round((correct / total) * 100) : 0,
+      quizScore: {
+        earned: round2(earned),
+        penalty: round2(penalty),
+        net: round2(earned - penalty),
+      },
     };
   });
   return {
@@ -250,6 +313,7 @@ function gradePaper(paper, answers) {
     correctIds,
     wrongIds,
     answered: correctIds.length + wrongIds.length,
+    quizScore: sumQuizScore(subjects),
   };
 }
 
@@ -318,6 +382,12 @@ function orderResults(round) {
     .filter(Boolean);
 }
 
+const clientQuizScore = (q) => ({
+  earned: (q && q.earned) || 0,
+  penalty: (q && q.penalty) || 0,
+  net: (q && q.net) || 0,
+});
+
 const clientSubject = (r) => ({
   _id: str(r.subjectId),
   name: r.name,
@@ -328,6 +398,7 @@ const clientSubject = (r) => ({
   skipped: r.skipped,
   percent: r.percent,
   score: r.percent,
+  quizScore: clientQuizScore(r.quizScore),
 });
 
 function toRoundResult(roundDoc) {
@@ -345,6 +416,7 @@ function toRoundResult(roundDoc) {
     rating: { label: s.rating },
     totalCorrect: s.totalCorrect,
     totalQuestions: s.totalQuestions,
+    quizScore: clientQuizScore(s.quizScore),
     insights: {
       strongest: ins.strongest || null,
       weakest: ins.weakest || null,
@@ -367,6 +439,7 @@ function shapeActiveRound(roundDoc) {
       wrong: r.wrong,
       skipped: r.skipped,
       percent: r.percent,
+      quizScore: clientQuizScore(r.quizScore),
       date: iso(r.completedAt),
     };
   });
@@ -479,7 +552,10 @@ function getConfig() {
     subjectsPerRound: CFG.SUBJECTS_PER_ROUND,
     totalScore: CFG.TOTAL_SCORE,
     questionsPerSubject: { compulsory, other },
+    questionsPerRound: compulsory + other * (CFG.SUBJECTS_PER_ROUND - 1),
     secondsPerQuestion: CFG.SECONDS_PER_QUESTION,
+    penaltyRate: CFG.PENALTY_RATE,
+    defaultQuestionPoint: CFG.DEFAULT_QUESTION_POINT,
     levels: CFG.LEVELS,
     ratingBands: CFG.RATING_BANDS,
     serverNow: new Date().toISOString(),
@@ -505,6 +581,7 @@ async function buildSummary(userId) {
     lifetimeCorrect,
     cooldownUntil: 0,
     round: null,
+    exam: null,
     history: [],
   };
   if (!profile0) return empty;
@@ -515,7 +592,21 @@ async function buildSummary(userId) {
   const cd = activeCooldownMs(profileObj, now);
 
   let round = null;
+  let exam = null;
   if (selection.length === CFG.SUBJECTS_PER_ROUND) {
+    // Paper size per selected subject, straight from the server rules (no client constants).
+    const jamb = await getJambSubjects();
+    const perSubject = {};
+    selection.forEach((id) => {
+      const s = jamb.get(id);
+      if (s) perSubject[id] = questionCountFor(s);
+    });
+    exam = {
+      perSubject,
+      totalQuestions: Object.values(perSubject).reduce((a, b) => a + b, 0),
+      secondsPerQuestion: CFG.SECONDS_PER_QUESTION,
+      penaltyRate: CFG.PENALTY_RATE,
+    };
     const pending = {
       id: "pending",
       number: (profileObj.roundsCompleted || 0) + 1,
@@ -554,6 +645,7 @@ async function buildSummary(userId) {
     lifetimeCorrect,
     cooldownUntil: cd,
     round,
+    exam,
     history: history.map(toRoundResult),
   };
 }
@@ -578,8 +670,11 @@ const ONE_CORRECT = {
     ],
   },
 };
-const poolFilter = (subjectId) => ({
+// Only questions tagged with the "JAMB" category (Question.categories contains its _id).
+// No JAMB category => matches nothing.
+const poolFilter = (subjectId, jambCatId) => ({
   subject: subjectId,
+  categories: jambCatId ? jambCatId : { $in: [] },
   active: { $ne: false },
   jambEligible: { $ne: false },
   isTheory: { $ne: true },
@@ -587,12 +682,13 @@ const poolFilter = (subjectId) => ({
 });
 
 const dbTotalCache = new Map(); // subjectId -> { n, at }
-async function dbTotal(subjectId) {
+async function dbTotal(subjectId, jambCatId) {
   const key = str(subjectId);
   const hit = dbTotalCache.get(key);
   if (hit && Date.now() - hit.at < CFG.DB_TOTAL_CACHE_MS) return hit.n;
   const n = await Question.countDocuments({
     subject: oid(subjectId),
+    categories: jambCatId ? jambCatId : { $in: [] },
     active: { $ne: false },
     jambEligible: { $ne: false },
     isTheory: { $ne: true },
@@ -601,7 +697,7 @@ async function dbTotal(subjectId) {
   return n;
 }
 
-async function correctCounts(userId, subjectIds) {
+async function correctCounts(userId, subjectIds, jambCatId) {
   const out = {};
   subjectIds.forEach((id) => (out[str(id)] = 0));
   const u = await User.findById(userId).select("qBank").lean();
@@ -610,7 +706,13 @@ async function correctCounts(userId, subjectIds) {
     .map((e) => e.question);
   if (!ids.length) return out;
   const rows = await Question.aggregate([
-    { $match: { _id: { $in: ids }, subject: { $in: subjectIds.map(oid) } } },
+    {
+      $match: {
+        _id: { $in: ids },
+        subject: { $in: subjectIds.map(oid) },
+        categories: jambCatId ? jambCatId : { $in: [] },
+      },
+    },
     { $group: { _id: "$subject", n: { $sum: 1 } } },
   ]);
   rows.forEach((r) => (out[str(r._id)] = r.n));
@@ -634,13 +736,14 @@ async function subjectPerformance(userId, subjectIds) {
     .select("name image jambCompulsory")
     .lean();
   const bySubject = new Map(subjects.map((s) => [str(s._id), s]));
-  const correct = await correctCounts(userId, ids);
+  const jambCatId = await getJambCategoryId();
+  const correct = await correctCounts(userId, ids, jambCatId);
 
   const items = [];
   for (const id of ids) {
     const s = bySubject.get(id);
     if (!s) continue;
-    const total = await dbTotal(id);
+    const total = await dbTotal(id, jambCatId);
     const c = correct[id] || 0;
     items.push({
       _id: id,
@@ -687,11 +790,16 @@ async function saveSelection(userId, subjectIds) {
 
   // 4. Question bank size (skipped when using mock counts)
   if (!CFG.USE_MOCK_COUNTS) {
+    const jambCatId = await getJambCategoryId();
     const counts = await Promise.all(
-      ids.map((id) => Question.countDocuments(poolFilter(oid(id)))),
+      ids.map((id) => Question.countDocuments(poolFilter(oid(id), jambCatId))),
     );
     const small = ids.flatMap((id, i) =>
-      counts[i] < CFG.MIN_BANK_SIZE_PER_SUBJECT
+      counts[i] <
+      Math.max(
+        CFG.MIN_BANK_SIZE_PER_SUBJECT,
+        questionCountFor(jambSubjects.get(id)),
+      )
         ? [{ subject: jambSubjects.get(id).name, available: counts[i] }]
         : [],
     );
@@ -718,75 +826,66 @@ async function saveSelection(userId, subjectIds) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Issuing attempts
 // ─────────────────────────────────────────────────────────────────────────────
-async function stratifiedSample(baseFilter, exclude, count) {
-  const filter = { ...baseFilter, _id: { $nin: exclude } };
-  const groups = await Question.aggregate([
-    { $match: filter },
-    { $group: { _id: "$topic", n: { $sum: 1 } } },
-  ]);
-  const alloc = allocate(
-    groups.map((g) => g.n),
-    count,
-  );
-  const picked = [];
-  for (let i = 0; i < groups.length; i++) {
-    if (!alloc[i]) continue;
-    const cand = await Question.aggregate([
-      { $match: { ...filter, topic: groups[i]._id } },
-      { $sample: { size: Math.min(groups[i].n, alloc[i] * 3) } },
-      { $project: { difficulty: 1 } },
-    ]);
-    picked.push(...chooseByDifficulty(cand, alloc[i]));
+// Lower-cased, punctuation/whitespace-insensitive key, so the same question uploaded twice
+// (different _id, same wording) is treated as ONE question.
+const textKey = (t) =>
+  String(t || "")
+    .toLowerCase()
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+// Walk `list` (already in random order) and keep the first question of each distinct
+// wording, skipping anything in `blocked` (wordings the user has already seen).
+function takeDistinct(list, blocked, limit = Infinity) {
+  const used = new Set();
+  const out = [];
+  for (const q of list) {
+    if (out.length >= limit) break;
+    const k = textKey(q.question);
+    if (blocked.has(k) || used.has(k)) continue;
+    used.add(k);
+    out.push(q);
   }
-  if (picked.length < count) {
-    const rest = await Question.aggregate([
-      { $match: { ...baseFilter, _id: { $nin: [...exclude, ...picked] } } },
-      { $sample: { size: count - picked.length } },
-      { $project: { _id: 1 } },
-    ]);
-    picked.push(...rest.map((r) => r._id));
-  }
-  return picked;
+  return out;
 }
 
-async function pickQuestions(userId, subject, count) {
-  const base = poolFilter(subject._id);
+/**
+ * True-random, no-repeat selection from the JAMB-only pool of a subject.
+ *  1. pool    = every active, MCQ, JAMB-category question of the subject
+ *  2. unseen  = pool minus what this user has already been given (by id AND by wording)
+ *  3. unseen is shuffled with a crypto RNG and the first `count` are taken, so nothing
+ *     repeats inside a paper or across rounds until the user has used up the pool.
+ *  4. only when fewer than `count` unseen remain does a new cycle start: every remaining
+ *     unseen question is taken and the rest is drawn at random (not "oldest first") from
+ *     the already-seen ones.
+ */
+async function pickQuestions(userId, subject, count, jambCatId) {
+  const pool = await Question.find(poolFilter(subject._id, jambCatId))
+    .select("_id question")
+    .lean();
+
   const seenDoc = await JambSeen.findOne({
     userId: oid(userId),
     subjectId: subject._id,
   }).lean();
-  const seen = (seenDoc && seenDoc.questionIds) || [];
-  const unseenCount = await Question.countDocuments({
-    ...base,
-    _id: { $nin: seen },
-  });
+  const seenIds = new Set(((seenDoc && seenDoc.questionIds) || []).map(str));
 
-  let picks = [];
+  const seenPool = pool.filter((q) => seenIds.has(str(q._id)));
+  const unseenPool = pool.filter((q) => !seenIds.has(str(q._id)));
+  const seenTexts = new Set(seenPool.map((q) => textKey(q.question)));
+
+  const fresh = takeDistinct(shuffle(unseenPool), seenTexts);
+
+  let picks;
   let reset = false;
-  if (unseenCount >= count) {
-    picks = await stratifiedSample(base, seen, count);
+  if (fresh.length >= count) {
+    picks = fresh.slice(0, count);
   } else {
-    // Bank exhausted for this user: start a new cycle, take every unseen question and
-    // top up with the OLDEST seen ones.
-    reset = true;
-    const all = (
-      await Question.find({ ...base, _id: { $nin: seen } })
-        .select("_id")
-        .lean()
-    ).map((d) => d._id);
-    const need = count - all.length;
-    let top = [];
-    if (need > 0 && seen.length) {
-      const valid = new Set(
-        (
-          await Question.find({ ...base, _id: { $in: seen } })
-            .select("_id")
-            .lean()
-        ).map((d) => str(d._id)),
-      );
-      top = seen.filter((id) => valid.has(str(id))).slice(0, need);
-    }
-    picks = [...all, ...top];
+    reset = true; // pool exhausted for this user: start a new cycle
+    const taken = new Set(fresh.map((q) => textKey(q.question)));
+    const topUp = takeDistinct(shuffle(seenPool), taken, count - fresh.length);
+    picks = [...fresh, ...topUp];
   }
 
   const required = CFG.USE_MOCK_COUNTS ? 1 : count;
@@ -802,7 +901,9 @@ async function pickQuestions(userId, subject, count) {
       },
     );
 
-  const docs = await Question.find({ _id: { $in: picks } }).lean();
+  const docs = await Question.find({
+    _id: { $in: picks.map((q) => q._id) },
+  }).lean();
   return { docs: shuffle(docs), reset };
 }
 
@@ -872,7 +973,7 @@ async function presentAttempt(attempt) {
             answers,
             explanation: q.explanation || null,
             explanationLatex: q.explanationLatex || null,
-            point: sn.point != null ? sn.point : 1,
+            point: pointOf(sn.point),
             timer: CFG.SECONDS_PER_QUESTION,
           };
         })
@@ -960,12 +1061,14 @@ async function issueAttempt(userId, subjectIds) {
     .map((id) => subjects.find((s) => str(s._id) === id))
     .sort((a, b) => Number(!!b.jambCompulsory) - Number(!!a.jambCompulsory));
 
+  const jambCatId = await getJambCategoryId();
   const picked = [];
   for (const subject of ordered) {
     const { docs, reset } = await pickQuestions(
       userId,
       subject,
       questionCountFor(subject),
+      jambCatId,
     );
     picked.push({ subjectId: subject._id, docs, reset });
   }
@@ -976,7 +1079,7 @@ async function issueAttempt(userId, subjectIds) {
       questionId: q._id,
       correctAnswerId: q.answers.find((a) => a.correct)._id,
       answerIds: shuffle(q.answers).map((a) => a._id),
-      point: q.point,
+      point: pointOf(q.point),
     })),
   }));
   const total = paper.reduce((n, p) => n + p.questions.length, 0);
@@ -1134,7 +1237,10 @@ async function applyCounters(attempt) {
 
   const g = attempt.graded;
   const answered = g.correctIds.length + g.wrongIds.length;
-  if (!answered) return;
+  // Net quiz score (earned - 40% penalties, skipped included). May be negative.
+  // totalPoints only, never `points`.
+  const netPoints = round2(g.quizScore && g.quizScore.net);
+  if (!answered && !netPoints) return;
 
   const u = await User.findById(attempt.userId).select("qBank").lean();
   const existing = new Map(
@@ -1168,6 +1274,7 @@ async function applyCounters(attempt) {
         $inc: {
           "quizStats.totalCorrectAnswers": g.correctIds.length,
           "quizStats.totalQuestionsAnswered": answered,
+          ...(netPoints ? { totalPoints: netPoints } : {}),
         },
       },
     },
@@ -1240,11 +1347,15 @@ async function finishSubmission(attemptDoc) {
 
   const [profile, user] = await Promise.all([
     JambProfile.findOne({ userId }).lean(),
-    User.findById(userId).select("quizStats.totalCorrectAnswers").lean(),
+    User.findById(userId)
+      .select("quizStats.totalCorrectAnswers totalPoints")
+      .lean(),
   ]);
   const lifetimeCorrect =
     (user && user.quizStats && user.quizStats.totalCorrectAnswers) || 0;
+  const totalPoints = (user && user.totalPoints) || 0;
   const subjectResults = graded.subjects.map((s) => clientSubject(s));
+  const quizScore = clientQuizScore(graded.quizScore);
 
   let response;
   if (round.status === "completed") {
@@ -1255,6 +1366,8 @@ async function finishSubmission(attemptDoc) {
       subjectResults,
       roundResult: toRoundResult(round),
       lifetimeCorrect,
+      quizScore,
+      totalPoints,
       availableAt: cd,
       cooldownUntil: cd,
     };
@@ -1264,6 +1377,8 @@ async function finishSubmission(attemptDoc) {
       remaining: round.subjectIds.length - round.results.length,
       subjectResults,
       lifetimeCorrect,
+      quizScore,
+      totalPoints,
       cooldownUntil: 0,
     };
   }
@@ -1343,6 +1458,7 @@ async function submitAttempt(userId, attemptId, body, idemKey) {
         subjects: gradedSubjects,
         correctIds: result.correctIds,
         wrongIds: result.wrongIds,
+        quizScore: result.quizScore,
       },
     };
     if (Number.isFinite(dur)) set.durationMs = dur;
@@ -1427,9 +1543,10 @@ async function devSkipCooldown(userId) {
 //   * jambCompulsory -> flag on the Subject document
 // ─────────────────────────────────────────────────────────────────────────────
 async function adminListSubjects() {
-  const [subjects, jambIds] = await Promise.all([
+  const [subjects, jambIds, jambCatId] = await Promise.all([
     Subject.find({}).select("name jambCompulsory").sort({ name: 1 }).lean(),
     getJambCategorySubjectIds(),
+    getJambCategoryId(),
   ]);
   const eligible = new Set(jambIds.map(str));
 
@@ -1440,7 +1557,7 @@ async function adminListSubjects() {
       name: s.name,
       jambEligible: eligible.has(str(s._id)),
       jambCompulsory: !!s.jambCompulsory,
-      bankSize: await Question.countDocuments(poolFilter(s._id)),
+      bankSize: await Question.countDocuments(poolFilter(s._id, jambCatId)),
     });
   return { items };
 }
@@ -1672,5 +1789,8 @@ module.exports = {
     shapeActiveRound,
     questionCountFor,
     isPremiumUser,
+    pickQuestions,
+    textKey,
+    takeDistinct,
   },
 };

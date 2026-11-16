@@ -10,19 +10,32 @@ const num = (value, fallback) =>
 
 module.exports = {
   SUBJECTS_PER_ROUND: 4,
-  TOTAL_SCORE: 400,
+  TOTAL_SCORE: 400, // JAMB score is always out of 400 (4 subjects x 100)
   PER_SUBJECT_SCORE: 100,
   COOLDOWN_HOURS: num(process.env.JAMB_COOLDOWN_HOURS, 24), // 0.01 for staging tests
   RANGE_MARGIN: 12, // likely range = predicted ± 12, clamped 0..400
-  SECONDS_PER_QUESTION: 20,
+  SECONDS_PER_QUESTION: 40,
   ATTEMPT_GRACE_SECONDS: 120,
   PER_QUESTION_UI_OVERHEAD_SECONDS: 5,
   USE_MOCK_COUNTS: process.env.JAMB_MOCK_COUNTS === "true", // true => English 5 / others 2
-  QUESTIONS: { compulsory: 100, other: 50, mockCompulsory: 5, mockOther: 2 },
+  // English (compulsory) 60 + 3 other subjects x 40 = 180 questions per round.
+  // The /400 JAMB score is NOT derived from these counts: each subject is converted
+  // to a percentage first, so any mix of counts scales to the same /400.
+  QUESTIONS: { compulsory: 60, other: 40, mockCompulsory: 5, mockOther: 2 },
+  // A subject's bank must hold at least max(this, the paper size for that subject).
   MIN_BANK_SIZE_PER_SUBJECT: 60, // not enforced in mock mode
   ATTEMPT_ISSUES_PER_HOUR: 10,
   DB_TOTAL_CACHE_MS: 10 * 60 * 1000,
   HISTORY_IN_SUMMARY: 50,
+
+  // ── Quiz score (separate from the /400 JAMB prediction) ───────────────────
+  // correct   -> + question.point
+  // incorrect -> - question.point * PENALTY_RATE
+  // skipped   -> - question.point * PENALTY_RATE (same as incorrect)
+  // The net sum is $inc'd into User.totalPoints (may be negative). Never User.points.
+  DEFAULT_QUESTION_POINT: 5, // used when a question has no point value
+  PENALTY_RATE: 0.4,
+
   RATING_BANDS: [
     { min: 80, label: "Excellent" },
     { min: 65, label: "Very Good" },

@@ -33,6 +33,13 @@ const SubjectResultSchema = new Schema(
     wrong: Number,
     skipped: Number,
     percent: Number, // integer 0..100
+    // Quiz score for this subject (separate from the /400 prediction).
+    // earned = sum of point of correct answers; penalty = sum of 40% of point of wrong answers.
+    quizScore: {
+      earned: { type: Number, default: 0 },
+      penalty: { type: Number, default: 0 },
+      net: { type: Number, default: 0 }, // earned - penalty (can be negative)
+    },
     completedAt: Date,
   },
   { _id: false },
@@ -64,6 +71,11 @@ const JambRoundSchema = new Schema(
       rating: String,
       totalCorrect: Number,
       totalQuestions: Number,
+      quizScore: {
+        earned: Number,
+        penalty: Number,
+        net: Number,
+      },
       insights: {
         strongest: { type: InsightPairSchema, default: undefined },
         weakest: { type: InsightPairSchema, default: undefined },
@@ -137,7 +149,10 @@ JambAttemptSchema.index(
 JambAttemptSchema.index({ userId: 1, createdAt: -1 });
 JambAttemptSchema.index({ status: 1, submittedAt: 1 });
 // TTL: purge old attempts 30 days after they expire
-JambAttemptSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
+JambAttemptSchema.index(
+  { expiresAt: 1 },
+  { expireAfterSeconds: 60 * 60 * 24 * 30 },
+);
 
 // ─── JambSeen — de-duplication of questions across rounds ────────────────────
 const JambSeenSchema = new Schema({
