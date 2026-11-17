@@ -1,6 +1,5 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const crypto = require("crypto");
 const router = express.Router();
 const auth = require("../middlewares/authRoutes");
 const { User } = require("../models/User");
@@ -73,6 +72,11 @@ const getPrizeType = (comp, rank) => {
   return prize.type === "cash" ? "cash" : "points";
 };
 
+/**
+ * Points prizes are SUBSCRIPTION POINTS (user.subscriptionPoints) — they can be
+ * spent on renewing a subscription but are never added to user.points
+ * (the withdrawable balance).
+ */
 const describePrize = (prize) => {
   const amount = Number(prize?.reward || 0).toLocaleString();
   if (prize?.type === "cash") {
@@ -81,46 +85,30 @@ const describePrize = (prize) => {
       (prize.currency ? `${prize.currency} ` : "");
     return `${symbol}${amount}`;
   }
-  return `${amount} GT`;
+  return `${amount} subscription points`;
 };
 
 /**
- * Only used for old accounts that never got a `rewards` sub-document
- * (`rewards.code` is required on the User schema, so we must not create the
- * sub-document without one). New accounts already get a referral code at
- * registration.
- */
-const generateRewardCode = async () => {
-  for (let i = 0; i < 5; i++) {
-    const code = crypto.randomBytes(4).toString("hex").slice(0, 8);
-    const clash = await User.exists({ "rewards.code": code });
-    if (!clash) return code;
-  }
-  return crypto.randomBytes(6).toString("hex").slice(0, 8);
-};
-
-/**
- * Credit a POINTS prize exactly once.
+ * Credit a POINTS prize exactly once, into user.subscriptionPoints.
  *
  * The WalletTransaction (unique reference per competition + place) acts as the
  * idempotency lock: findOneAndUpdate({upsert, new:false}) returns null only for
  * the call that actually inserted it. If a transaction already exists the prize
  * was credited before, so nothing is incremented — safe to retry any time.
  *
- * The points increment and the entry in the user's `rewards.history` (their
- * in-app record of the award) are written in ONE atomic update, so a winner can
- * never be credited without the record, or get the record twice.
- * If that update fails after the lock is taken, the transaction is rolled back.
+ * user.points (withdrawable) is NEVER touched here; totalPoints (activity) is.
+ * If the balance update fails after the lock is taken, the transaction is
+ * rolled back so a retry can credit it.
  */
 const creditPointsPrize = async (comp, entry, prize, placeKey) => {
   const reference = `COMP-${comp._id}-${placeKey}`;
   const reward = Number(prize.reward);
 
   const current = await User.findById(entry.user)
-    .select("points rewards.code")
+    .select("subscriptionPoints")
     .lean();
   if (!current) throw new Error("Winner account not found");
-  const balanceBefore = current.points || 0;
+  const balanceBefore = current.subscriptionPoints || 0;
 
   const existing = await WalletTransaction.findOneAndUpdate(
     { reference },
@@ -134,12 +122,13 @@ const creditPointsPrize = async (comp, entry, prize, placeKey) => {
         balanceAfter: balanceBefore + reward,
         reference,
         userId: entry.user,
-        description: `${prize.title || `${placeKey} place`} prize — ${comp.title} (${comp.month}/${comp.year})`,
+        description: `${prize.title || `${placeKey} place`} prize (subscription points) — ${comp.title} (${comp.month}/${comp.year})`,
         metadata: {
           competitionId: comp._id.toString(),
           place: entry.rank,
           month: comp.month,
           year: comp.year,
+          pointsType: "subscription",
         },
         status: "completed",
       },
@@ -149,32 +138,14 @@ const creditPointsPrize = async (comp, entry, prize, placeKey) => {
 
   if (existing) return; // already credited earlier — never pay twice
 
-  // status "rewarded" (not "pending") on purpose: pending entries can be
-  // claimed through PUT /users/rewards, and this one is already paid out.
-  const historyEntry = {
-    title: `${ORDINALS[entry.rank - 1]} place — ${comp.title}`,
-    point: reward,
-    status: "rewarded",
-  };
-
-  const update = current.rewards?.code
-    ? {
-        $inc: { points: reward, totalPoints: reward },
-        $push: { "rewards.history": historyEntry },
-      }
-    : {
-        $inc: { points: reward, totalPoints: reward },
-        $set: {
-          rewards: {
-            code: await generateRewardCode(),
-            point: 0,
-            history: [historyEntry],
-          },
-        },
-      };
-
   try {
-    await User.updateOne({ _id: entry.user }, update);
+    // subscriptionPoints = spendable on renewals only (not withdrawable).
+    // totalPoints = lifetime activity points (also not withdrawable).
+    // user.points (withdrawable balance) is deliberately NOT touched.
+    await User.updateOne(
+      { _id: entry.user },
+      { $inc: { subscriptionPoints: reward, totalPoints: reward } },
+    );
   } catch (err) {
     await WalletTransaction.deleteOne({ reference }).catch(() => {});
     throw err;
@@ -195,7 +166,7 @@ const buildWinnerCopy = (comp, rank, prize, prizeType) => {
   if (prizeType === "points") {
     return {
       title,
-      message: `${describePrize(prize)} has been credited to your account for ${comp.title}. Congratulations!`,
+      message: `${describePrize(prize)} have been added to your account for ${comp.title}. Use them to renew your subscription. Congratulations!`,
     };
   }
   if (prizeType === "cash") {
@@ -212,7 +183,7 @@ const buildWinnerCopy = (comp, rank, prize, prizeType) => {
 
 /**
  * Settle ONE winner (mutates `entry`):
- *   1. points prize not yet credited → credit it + log it in rewards.history
+ *   1. points prize not yet credited → credit it to subscriptionPoints
  *      (cash is never auto-credited)
  *   2. not yet notified (and, for points, credit succeeded) → push notification
  * Every step is idempotent, so this is safe to call again for retries.
@@ -336,6 +307,8 @@ const notifyResultsOut = async (comp, submitted, winnerIds) => {
  * canPublishResults is computed HERE (server clock) so the client never has to
  * compare against the phone's clock — a skewed device clock used to make the
  * app think the tournament was still live.
+ *
+ * NOTE: participant `duration` is stored in MILLISECONDS (as sent by the client).
  */
 const formatCompetition = (comp, userId, isManager = false) => {
   const now = new Date();
@@ -356,6 +329,15 @@ const formatCompetition = (comp, userId, isManager = false) => {
   const canPublishResults =
     isEnded && !comp.resultsPublished && comp.status !== "draft";
 
+  // Score lookup so winners always carry a score, even if the stored
+  // finalRankings entry has none.
+  const scoreByUser = new Map(
+    (comp.participants ?? []).map((p) => [
+      (p.user?._id || p.user)?.toString(),
+      p.score,
+    ]),
+  );
+
   return {
     _id: comp._id,
     title: comp.title,
@@ -375,6 +357,10 @@ const formatCompetition = (comp, userId, isManager = false) => {
     finalRankings: canSeeResults
       ? (comp.finalRankings ?? []).map((e) => ({
           ...e,
+          score:
+            e.score ??
+            scoreByUser.get((e.user?._id || e.user)?.toString()) ??
+            0,
           prizeType: getPrizeType(comp, e.rank),
           prizeAwarded: !!e.prizeAwarded,
           notified: !!e.notified,
@@ -799,9 +785,9 @@ router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
 // POST /competition/manage/:id/publish-results — release results to participants
 //
 // Publishing also settles prizes for the top 3 who actually submitted:
-//   - "points" prizes are credited to the winner (WalletTransaction lock + atomic
-//     $inc, idempotent), logged in the winner's rewards.history, and the winner
-//     gets a push notification.
+//   - "points" prizes are credited to the winner's SUBSCRIPTION POINTS
+//     (WalletTransaction lock + atomic $inc, idempotent) — never to user.points —
+//     and the winner gets a push notification.
 //   - "cash" prizes are NEVER auto-credited — prizeAwarded stays false and the
 //     winner is told to expect a manual payout.
 // Everyone else who submitted gets one shared "results are out" push.
@@ -928,7 +914,7 @@ router.post(
         status: "success",
         message: summary.needsRetry
           ? "Some awards still couldn't be processed — check server logs"
-          : "Points credited and winners notified",
+          : "Subscription points credited and winners notified",
         data: summary,
       });
     } catch (err) {

@@ -2373,19 +2373,49 @@ router.get("/transactions", auth, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DROP-IN REPLACEMENT for `router.post("/renew-subscription", ...)` in users.js
+// (replace the whole existing route; nothing else in that file changes)
+//
+// Body: { value, days, payWith }
+//   payWith: "points" (default) | "subscriptionPoints" | "both"
+//     points             → spend GT points only (user.points)
+//     subscriptionPoints → spend subscription points only
+//     both               → subscription points first, GT points cover the rest
+//
+// Balances are deducted with one atomic, conditional update so two quick
+// requests can never overspend.
+// ─────────────────────────────────────────────────────────────────────────────
 router.post("/renew-subscription", auth, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { value, days } = req.body;
+    const { value, days, payWith = "points" } = req.body;
 
-    if (!days || days <= 0) {
+    const cost = Number(value);
+    const daysToAdd = Number(days);
+
+    if (!Number.isFinite(daysToAdd) || daysToAdd <= 0) {
       return res.status(400).send({
         status: "failed",
         message: "Invalid subscription duration",
       });
     }
+    if (!Number.isFinite(cost) || cost <= 0) {
+      return res.status(400).send({
+        status: "failed",
+        message: "Invalid subscription cost",
+      });
+    }
+    if (!["points", "subscriptionPoints", "both"].includes(payWith)) {
+      return res.status(400).send({
+        status: "failed",
+        message: "Invalid payment source",
+      });
+    }
 
-    const user = await User.findById(userId).select("points subscription");
+    const user = await User.findById(userId).select(
+      "points subscriptionPoints subscription",
+    );
 
     if (!user) {
       return res.status(404).send({
@@ -2394,69 +2424,123 @@ router.post("/renew-subscription", auth, async (req, res) => {
       });
     }
 
-    if (user.points < value) {
+    const availablePoints = user.points || 0;
+    const availableSubPoints = user.subscriptionPoints || 0;
+
+    // ── Work out how the cost is split ────────────────────────────────────
+    let pointsSpend = 0;
+    let subPointsSpend = 0;
+
+    if (payWith === "points") {
+      pointsSpend = cost;
+    } else if (payWith === "subscriptionPoints") {
+      subPointsSpend = cost;
+    } else {
+      subPointsSpend = Math.min(availableSubPoints, cost);
+      pointsSpend = cost - subPointsSpend;
+    }
+
+    if (pointsSpend > availablePoints || subPointsSpend > availableSubPoints) {
       return res.status(422).send({
         status: "failed",
-        message: "Not enough Guru Tokens",
+        message:
+          payWith === "points"
+            ? "Not enough Guru Tokens"
+            : payWith === "subscriptionPoints"
+              ? "Not enough subscription points"
+              : "Not enough points (Guru Tokens + subscription points)",
       });
     }
 
+    // ── New expiry ────────────────────────────────────────────────────────
     const today = new Date();
-    const millisToAdd = days * 24 * 60 * 60 * 1000;
+    const millisToAdd = daysToAdd * 24 * 60 * 60 * 1000;
 
-    let startDate;
-
-    if (user.subscription?.expiry && today < user.subscription.expiry) {
-      startDate = new Date(user.subscription.expiry);
-    } else {
-      startDate = today;
-      user.subscription.current = today;
-    }
+    const startDate =
+      user.subscription?.expiry && today < user.subscription.expiry
+        ? new Date(user.subscription.expiry)
+        : today;
 
     const newExpiry = new Date(startDate.getTime() + millisToAdd);
 
-    const balanceBefore = user.points;
-    user.subscription.expiry = newExpiry;
-    user.subscription.current = today;
-    user.subscription.isActive = true;
-    user.points -= value;
+    // ── Atomic deduction + subscription update ────────────────────────────
+    // (conditions only added for the balances actually being spent, because a
+    //  missing field never satisfies $gte)
+    const filter = { _id: userId };
+    const inc = {};
+    if (pointsSpend > 0) {
+      filter.points = { $gte: pointsSpend };
+      inc.points = -pointsSpend;
+    }
+    if (subPointsSpend > 0) {
+      filter.subscriptionPoints = { $gte: subPointsSpend };
+      inc.subscriptionPoints = -subPointsSpend;
+    }
 
-    // Record as points transaction (doesn't affect wallet balance)
-    const reference = `SUB_RENEW_${Date.now()}_${userId}`;
-
-    const transaction = new WalletTransaction({
-      accountType: "student",
-      transactionType: "points", // New type - doesn't affect wallet balance
-      category: "subscription",
-      amount: 0, // No money involved
-      balanceBefore: 0, // Wallet balance unchanged
-      balanceAfter: 0, // Wallet balance unchanged
-      reference,
-      userId,
-      description: `Subscription renewal - ${days} days`,
-      metadata: {
-        pointsSpent: value,
-        pointsBalanceBefore: balanceBefore,
-        pointsBalanceAfter: user.points,
-        days,
-        newExpiry,
+    const updated = await User.findOneAndUpdate(
+      filter,
+      {
+        $inc: inc,
+        $set: {
+          "subscription.current": today,
+          "subscription.expiry": newExpiry,
+          "subscription.isActive": true,
+        },
       },
-      status: "completed",
-    });
+      { new: true },
+    ).select("points subscriptionPoints subscription");
 
-    await transaction.save();
-    await user.save();
+    if (!updated) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Your balance changed. Please check your points and try again",
+      });
+    }
+
+    // ── Ledger entry (never fails the renewal) ────────────────────────────
+    try {
+      const reference = `SUB_RENEW_${Date.now()}_${userId}`;
+
+      await new WalletTransaction({
+        accountType: "student",
+        transactionType: "points", // doesn't affect wallet (cash) balance
+        category: "subscription",
+        amount: 0,
+        balanceBefore: 0,
+        balanceAfter: 0,
+        reference,
+        userId,
+        description: `Subscription renewal - ${daysToAdd} days`,
+        metadata: {
+          pointsSpent: cost, // total cost (kept for the existing history UI)
+          fromPoints: pointsSpend,
+          fromSubscriptionPoints: subPointsSpend,
+          payWith,
+          pointsBalanceBefore: availablePoints,
+          pointsBalanceAfter: updated.points || 0,
+          subscriptionPointsBalanceBefore: availableSubPoints,
+          subscriptionPointsBalanceAfter: updated.subscriptionPoints || 0,
+          days: daysToAdd,
+          newExpiry,
+        },
+        status: "completed",
+      }).save();
+    } catch (txErr) {
+      console.error("renew-subscription ledger error:", txErr);
+    }
 
     res.send({
       status: "success",
       message: "Subscription renewed successfully",
       data: {
-        current: user.subscription.current,
-        expiry: user.subscription.expiry,
-        isActive: user.subscription.isActive,
-        pointsSpent: value,
-        pointsRemaining: user.points,
-        daysAdded: days,
+        current: updated.subscription.current,
+        expiry: updated.subscription.expiry,
+        isActive: updated.subscription.isActive,
+        pointsSpent: pointsSpend,
+        subscriptionPointsSpent: subPointsSpend,
+        pointsRemaining: updated.points || 0,
+        subscriptionPointsRemaining: updated.subscriptionPoints || 0,
+        daysAdded: daysToAdd,
       },
     });
   } catch (err) {

@@ -621,6 +621,11 @@ const userSchema = new schema({
     // min: 0,
     default: 0,
   },
+  subscriptionPoints: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   streak: {
     type: Number,
     min: 0,
