@@ -13,8 +13,19 @@ const {
 } = require("./subscriptionService");
 const { advancePayout, needsWork, ACTIVE } = require("./payoutService");
 
-const naira = (n) =>
-  `₦${Number(n).toLocaleString("en-NG", { maximumFractionDigits: 2 })}`;
+// manual grouping: never depends on the runtime's ICU / locale data
+const naira = (n) => {
+  const [int, dec] = Number(n || 0)
+    .toFixed(2)
+    .split(".");
+  return `₦${int.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${
+    dec === "00" ? "" : "." + dec
+  }`;
+};
+const rows = (list) =>
+  list.filter(
+    (r) => r.value !== undefined && r.value !== null && r.value !== "",
+  );
 const fmtDate = (d) =>
   d
     ? new Date(d).toLocaleDateString("en-NG", {
@@ -63,6 +74,41 @@ function intentView(i) {
     tone: "warn",
     statusLabel: "",
     description: "",
+    // human-readable facts + every identifier we hold for this payment
+    details: rows([
+      { label: "Plan", value: label },
+      { label: "Amount", value: naira(i.amount) },
+      {
+        label: "Amount paid",
+        value: i.paidAmount != null ? naira(i.paidAmount) : undefined,
+      },
+      { label: "Days", value: i.days },
+      {
+        label: "Account",
+        value: i.accountType === "school" ? "School" : "Student",
+      },
+      {
+        label: "Started",
+        value: i.initiatedAt
+          ? new Date(i.initiatedAt).toISOString()
+          : undefined,
+      },
+      {
+        label: "Paid at",
+        value: i.paidAt ? new Date(i.paidAt).toISOString() : undefined,
+      },
+      {
+        label: "Valid until",
+        value: i.plannedExpiry
+          ? new Date(i.plannedExpiry).toISOString()
+          : undefined,
+      },
+    ]),
+    ids: rows([
+      { label: "Payment reference", value: i.txRef },
+      { label: "Flutterwave transaction ID", value: i.flwTransactionId },
+      { label: "Flutterwave ref", value: i.flwRef },
+    ]),
   };
   switch (i.status) {
     case "paid":
@@ -152,6 +198,27 @@ function payoutView(p) {
     tone: "warn",
     statusLabel: "",
     description: "",
+    details: rows([
+      { label: "Amount", value: naira(p.amount) },
+      { label: "Points used", value: p.pointsConverted },
+      { label: "Account name", value: p.accountName },
+      { label: "Account number", value: p.accountNumber },
+      { label: "Network", value: p.network },
+      { label: "Phone number", value: p.phoneNumber },
+      { label: "Bundle", value: p.bundleName },
+      {
+        label: "Points",
+        value: p.pointsRefunded
+          ? "Refunded"
+          : p.pointsDeducted
+            ? "Held"
+            : undefined,
+      },
+    ]),
+    ids: rows([
+      { label: "Transaction reference", value: p.reference },
+      { label: "Flutterwave ID", value: p.flutterwaveId },
+    ]),
   };
 
   if (p.status === "completed") {
@@ -227,7 +294,9 @@ async function listPending(userId) {
 
   const byDate = (a, b) => new Date(b.createdAt) - new Date(a.createdAt);
   return {
-    items: [...intents.map(intentView), ...payouts.map(payoutView)].sort(byDate),
+    items: [...intents.map(intentView), ...payouts.map(payoutView)].sort(
+      byDate,
+    ),
     recent: [...recentIntents.map(intentView), ...recentPayouts.map(payoutView)]
       .sort(byDate)
       .slice(0, 15),
@@ -250,7 +319,10 @@ async function reconcileUser(userId) {
           // untouched intents: 6h. Ones the user actually started: 48h.
           $or: [
             { createdAt: { $gte: new Date(now - 6 * HOUR) } },
-            { initiatedAt: { $ne: null }, createdAt: { $gte: new Date(now - 48 * HOUR) } },
+            {
+              initiatedAt: { $ne: null },
+              createdAt: { $gte: new Date(now - 48 * HOUR) },
+            },
           ],
         },
         dueFilter(5000),
@@ -268,7 +340,8 @@ async function reconcileUser(userId) {
     ...intents
       .filter(
         (i) =>
-          now - new Date(i.lastCheckedAt || 0) > (THROTTLE_MS[i.status] || 8000),
+          now - new Date(i.lastCheckedAt || 0) >
+          (THROTTLE_MS[i.status] || 8000),
       )
       .map(async (i) => {
         const out = await settleIntent(i);
@@ -332,7 +405,11 @@ async function retryOne(userId, entity, id) {
   const after = await advancePayout(payout);
   const d = payoutView(after);
   if (after.status === "completed") {
-    return { resolved: true, outcome: "completed", message: `${d.title} was successful.` };
+    return {
+      resolved: true,
+      outcome: "completed",
+      message: `${d.title} was successful.`,
+    };
   }
   if (after.status === "failed") {
     return { resolved: true, outcome: "failed", message: d.description };
@@ -340,16 +417,21 @@ async function retryOne(userId, entity, id) {
   return {
     resolved: false,
     outcome: "pending",
-    message: "Still being processed by the provider. We'll keep checking and update you.",
+    message:
+      "Still being processed by the provider. We'll keep checking and update you.",
   };
 }
 
 async function dismissOne(userId, entity, id) {
-  if (entity !== "subscription") return { ok: false, message: "Only unpaid payments can be dismissed" };
+  if (entity !== "subscription")
+    return { ok: false, message: "Only unpaid payments can be dismissed" };
   const ok = await dismissIntent(userId, id);
   return ok
     ? { ok: true, message: "Dismissed" }
-    : { ok: false, message: "This payment can't be dismissed (it may already be paid)" };
+    : {
+        ok: false,
+        message: "This payment can't be dismissed (it may already be paid)",
+      };
 }
 
 // ───────────────────────── background sweep (all users) ─────────────────────────
