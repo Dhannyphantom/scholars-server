@@ -1,30 +1,86 @@
 // ==========================================
-// FLUTTERWAVE SERVICE (services/flutterwaveService.js)
+// FLUTTERWAVE SERVICE (controllers/flutterwaveService.js)
 // ==========================================
+// Every money-moving call returns an `outcome` so callers can tell apart:
+//   accepted - provider took the request
+//   rejected - provider definitely refused it (safe to refund)
+//   unknown  - timeout / network / 5xx / duplicate reference: it MAY have
+//              landed, so NEVER refund or re-charge blindly -> query by reference
+// Every status query returns `state`:
+//   successful | failed | pending | not_found | unknown
 const axios = require("axios");
 
-// Add to services/flutterwaveService.js or create utils/phoneValidation.js
+const TIMEOUT_MS = 25000;
+
+const DUP_REF_RE =
+  /(reference.*(exist|used|duplicate))|((exist|used|duplicate).*reference)/i;
+const NOT_FOUND_RE = /(not\s+found|no\s+transaction|does\s+not\s+exist)/i;
+
+const msgOf = (error, fallback) => error?.response?.data?.message || fallback;
+
+/** True when we cannot know whether the request reached Flutterwave. */
+const isAmbiguous = (error) => {
+  if (!error?.response) return true; // timeout, DNS, connection reset...
+  const s = error.response.status;
+  return s >= 500 || s === 408 || s === 429;
+};
+
+/** Flutterwave status words -> successful | failed | pending */
+const normalizeStatus = (value) => {
+  const v = String(value ?? "").toLowerCase();
+  if (!v) return "pending";
+  if (/(fail|revers|declin|error|unsuccess|cancel)/.test(v)) return "failed";
+  if (/(success|complet|deliver)/.test(v)) return "successful";
+  return "pending";
+};
 
 class FlutterwaveService {
   constructor() {
     this.baseUrl = "https://api.flutterwave.com/v3";
-    this.secretKey = process.env.FLW_SECRET_KEY;
   }
 
-  // Verify account number
+  get headers() {
+    return {
+      Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+      "Content-Type": "application/json",
+      accept: "application/json",
+    };
+  }
+
+  _get(path, params) {
+    return axios.get(`${this.baseUrl}${path}`, {
+      params,
+      headers: this.headers,
+      timeout: TIMEOUT_MS,
+    });
+  }
+
+  _post(path, body) {
+    return axios.post(`${this.baseUrl}${path}`, body, {
+      headers: this.headers,
+      timeout: TIMEOUT_MS,
+    });
+  }
+
+  _classifySubmitError(error, fallback) {
+    const message = msgOf(error, fallback);
+    if (isAmbiguous(error)) {
+      return { success: false, outcome: "unknown", error: message };
+    }
+    if (DUP_REF_RE.test(message)) {
+      // Same reference already exists at Flutterwave => an earlier attempt landed.
+      return { success: false, outcome: "unknown", duplicate: true, error: message };
+    }
+    return { success: false, outcome: "rejected", error: message };
+  }
+
+  // ───────────────────────── accounts / banks ─────────────────────────
   async verifyAccount(accountNumber, accountBank) {
     try {
-      const response = await axios.post(
-        `${this.baseUrl}/accounts/resolve`,
-        { account_number: accountNumber, account_bank: accountBank },
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-            "Content-Type": "application/json",
-          },
-        },
-      );
-
+      const response = await this._post("/accounts/resolve", {
+        account_number: accountNumber,
+        account_bank: accountBank,
+      });
       return {
         success: response.data.status === "success",
         accountName: response.data.data?.account_name,
@@ -33,132 +89,93 @@ class FlutterwaveService {
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.message || "Account verification failed",
+        error: msgOf(error, "Account verification failed"),
       };
     }
   }
 
-  // Initiate bank transfer
+  async getBanks() {
+    try {
+      const response = await this._get("/banks/NG");
+      return { success: true, banks: response.data.data };
+    } catch (error) {
+      return { success: false, error: "Failed to fetch banks" };
+    }
+  }
+
+  // ───────────────────────── transfers ─────────────────────────
   async initiateTransfer(data) {
     try {
-      const response = await axios.post(
-        `${this.baseUrl}/transfers`,
-        {
-          account_bank: data.accountBank,
-          account_number: data.accountNumber,
-          amount: data.amount,
-          narration: data.narration || "Guru EduTech Payout",
-          currency: "NGN",
-          reference: data.reference,
-          callback_url: data.callbackUrl,
-          debit_currency: "NGN",
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-            "Content-Type": "application/json",
-          },
-        },
-      );
+      const response = await this._post("/transfers", {
+        account_bank: data.accountBank,
+        account_number: data.accountNumber,
+        amount: data.amount,
+        narration: data.narration || "Guru EduTech Payout",
+        currency: "NGN",
+        reference: data.reference,
+        callback_url: data.callbackUrl,
+        debit_currency: "NGN",
+      });
 
+      if (response.data.status !== "success") {
+        return {
+          success: false,
+          outcome: "rejected",
+          error: response.data.message || "Transfer failed",
+        };
+      }
+      const d = response.data.data;
       return {
-        success: response.data.status === "success",
-        data: response.data.data,
-        reference: response.data.data?.reference,
-        flutterwaveId: response.data.data?.id,
+        success: true,
+        outcome: "accepted",
+        data: d,
+        reference: d?.reference,
+        flutterwaveId: d?.id != null ? String(d.id) : undefined,
+        // transfers settle asynchronously: only the webhook / status query
+        // may call them successful.
+        providerStatus: normalizeStatus(d?.status) === "failed" ? "failed" : "pending",
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.message || "Transfer failed",
-      };
+      return this._classifySubmitError(error, "Transfer failed");
     }
   }
 
-  // Send airtime
-  // Update in services/flutterwaveService.js
-
-  // Send airtime - CORRECTED VERSION
-  // async sendAirtime(data) {
-  //   try {
-  //     // Map network names to Flutterwave biller codes
-  //     const networkMap = {
-  //       MTN: "BIL099", // MTN Nigeria
-  //       GLO: "BIL098", // Glo Nigeria
-  //       AIRTEL: "BIL100", // Airtel Nigeria
-  //       "9MOBILE": "BIL102", // 9mobile Nigeria
-  //       ETISALAT: "BIL102", // Alternative name for 9mobile
-  //     };
-
-  //     const billerCode = networkMap[data.network.toUpperCase()];
-
-  //     if (!billerCode) {
-  //       return {
-  //         success: false,
-  //         error: `Unsupported network: ${data.network}. Supported networks: MTN, GLO, AIRTEL, 9MOBILE`,
-  //       };
-  //     }
-
-  //     const response = await axios.post(
-  //       `${this.baseUrl}/bills`,
-  //       {
-  //         country: "NG",
-  //         customer: data.phoneNumber,
-  //         amount: data.amount,
-  //         type: "AIRTIME", // Changed from network name
-  //         reference: data.reference,
-  //         biller_code: billerCode, // Add biller code
-  //       },
-  //       {
-  //         headers: {
-  //           Authorization: `Bearer ${this.secretKey}`,
-  //           "Content-Type": "application/json",
-  //         },
-  //       }
-  //     );
-
-  //     return {
-  //       success: response.data.status === "success",
-  //       data: response.data.data,
-  //       reference: response.data.data?.reference,
-  //       flutterwaveId: response.data.data?.flw_ref,
-  //     };
-  //   } catch (error) {
-  //     console.error("Airtime error:", error.response?.data);
-  //     return {
-  //       success: false,
-  //       error: error.response?.data?.message || "Airtime purchase failed",
-  //     };
-  //   }
-  // }
-  async sendAirtime(data) {
+  async getTransferStatus(reference) {
     try {
-      // Map network names to Flutterwave biller codes
-      const networkMap = {
-        MTN: "BIL099",
-        GLO: "BIL098",
-        AIRTEL: "BIL100",
-        "9MOBILE": "BIL102",
-        ETISALAT: "BIL102",
-      };
-
-      const billerCode = networkMap[data.network.toUpperCase()];
-
-      if (!billerCode) {
-        return {
-          success: false,
-          error: `Unsupported network: ${data.network}. Supported networks: MTN, GLO, AIRTEL, 9MOBILE`,
-        };
+      // Try without a filter, then the explicit statuses, in case the API
+      // applies a default status filter.
+      for (const status of [undefined, "failed", "successful"]) {
+        const params = { reference };
+        if (status) params.status = status;
+        const r = await this._get("/transfers", params);
+        const hit = (r.data?.data || []).find((t) => t.reference === reference);
+        if (hit) {
+          return {
+            state: normalizeStatus(hit.status),
+            data: hit,
+            message: hit.complete_message,
+          };
+        }
       }
+      return { state: "not_found" };
+    } catch (error) {
+      return { state: "unknown", error: msgOf(error, error.message) };
+    }
+  }
 
-      // Airtime uses a generic item code "AT" + last 3 digits of biller code
-      const itemCode = `AT${billerCode.slice(-3)}`;
+  async getTransferFee(amount) {
+    const response = await this._get("/transfers/fee", {
+      amount,
+      currency: "NGN",
+    });
+    return response.data.data.fee;
+  }
 
-      // Use the new endpoint format
-      const url = `${this.baseUrl}/billers/${billerCode}/items/${itemCode}/payment`;
-
-      const response = await axios.post(
-        url,
+  // ───────────────────────── airtime / data ─────────────────────────
+  async _payBill(billerCode, itemCode, data, fallback) {
+    try {
+      const response = await this._post(
+        `/billers/${billerCode}/items/${itemCode}/payment`,
         {
           country: "NG",
           customer_id: data.phoneNumber,
@@ -166,55 +183,85 @@ class FlutterwaveService {
           reference: data.reference,
           callback_url: `${process.env.BASE_URL}/payouts/webhooks/flutterwave`,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-            "Content-Type": "application/json",
-            accept: "application/json",
-          },
-        },
       );
 
+      if (response.data.status !== "success") {
+        return {
+          success: false,
+          outcome: "rejected",
+          error: response.data.message || fallback,
+        };
+      }
+      const d = response.data.data;
       return {
-        success: response.data.status === "success",
-        data: response.data.data,
-        reference: response.data.data?.reference || data.reference,
-        flutterwaveId:
-          response.data.data?.transaction_reference ||
-          response.data.data?.flw_ref,
+        success: true,
+        outcome: "accepted",
+        data: d,
+        reference: d?.reference || data.reference,
+        flutterwaveId: d?.transaction_reference || d?.flw_ref,
+        // No explicit status => keep the old behaviour (treat as delivered).
+        providerStatus: d?.status ? normalizeStatus(d.status) : "successful",
       };
     } catch (error) {
-      console.error("Airtime error:", error.response?.data);
-      return {
-        success: false,
-        error: error.response?.data?.message || "Airtime purchase failed",
-      };
+      return this._classifySubmitError(error, fallback);
     }
   }
 
-  // Add to services/flutterwaveService.js
+  async sendAirtime(data) {
+    const networkMap = {
+      MTN: "BIL099",
+      GLO: "BIL098",
+      AIRTEL: "BIL100",
+      "9MOBILE": "BIL102",
+      ETISALAT: "BIL102",
+    };
+    const billerCode = networkMap[String(data.network).toUpperCase()];
+    if (!billerCode) {
+      return {
+        success: false,
+        outcome: "rejected",
+        error: `Unsupported network: ${data.network}. Supported networks: MTN, GLO, AIRTEL, 9MOBILE`,
+      };
+    }
+    const itemCode = `AT${billerCode.slice(-3)}`;
+    return this._payBill(billerCode, itemCode, data, "Airtime purchase failed");
+  }
 
-  // Get data bundles for a specific network
-  // Replace the getDataBundles method in services/flutterwaveService.js
+  async sendDataBundle(data) {
+    return this._payBill(
+      data.billerCode,
+      data.itemCode,
+      data,
+      "Data purchase failed",
+    );
+  }
 
-  // Replace getDataBundles in services/flutterwaveService.js
+  async getBillStatus(reference) {
+    try {
+      const r = await this._get(`/bills/${encodeURIComponent(reference)}`, {
+        verbose: 1,
+      });
+      const d = r.data?.data;
+      if (!d) return { state: "not_found" };
+      return { state: normalizeStatus(d.status), data: d, message: d.status };
+    } catch (error) {
+      const message = msgOf(error, error.message);
+      if (error?.response?.status === 404 || NOT_FOUND_RE.test(message)) {
+        return { state: "not_found" };
+      }
+      return { state: "unknown", error: message };
+    }
+  }
 
   async getDataBundles(network) {
     try {
-      // Correct biller codes from actual API
       const networkBillerMap = {
         MTN: "BIL108",
-        // MTN: "BIL104",
         GLO: "BIL109",
-        // GLO: "BIL105",
         AIRTEL: "BIL110",
-        // AIRTEL: "BIL106",
         "9MOBILE": "BIL111",
-        // "9MOBILE": "BIL107",
       };
-
-      const billerCode = networkBillerMap[network.toUpperCase()];
-
+      const billerCode = networkBillerMap[String(network).toUpperCase()];
       if (!billerCode) {
         return {
           success: false,
@@ -222,199 +269,101 @@ class FlutterwaveService {
         };
       }
 
-      // Get items for this biller
-      const response = await axios.get(
-        `${this.baseUrl}/billers/${billerCode}/items`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-          },
-        },
-      );
-
+      const response = await this._get(`/billers/${billerCode}/items`);
       if (!response.data.data || response.data.data.length === 0) {
-        return {
-          success: false,
-          error: `No data bundles found for ${network}`,
-        };
+        return { success: false, error: `No data bundles found for ${network}` };
       }
 
-      // Remove duplicates based on item_code
       const uniqueBundles = [];
-      const seenItemCodes = new Set();
-
+      const seen = new Set();
       response.data.data.forEach((item) => {
-        if (!seenItemCodes.has(item.item_code)) {
-          seenItemCodes.add(item.item_code);
-          uniqueBundles.push({
-            id: item.id,
-            billerCode: item.biller_code,
-            itemCode: item.item_code,
-            name: item.biller_name, // e.g., "MTN 1.5 GB"
-            amount: parseFloat(item.amount),
-            points: `${parseFloat(item.amount) * 10} GT`,
-            value: parseFloat(item.amount) * 10,
-            validity: item.validity_period || "N/A",
-            description: `${item.biller_name} - Valid for ${
-              item.validity_period || "N/A"
-            } day(s)`,
-          });
-        }
+        if (seen.has(item.item_code)) return;
+        seen.add(item.item_code);
+        uniqueBundles.push({
+          id: item.id,
+          billerCode: item.biller_code,
+          itemCode: item.item_code,
+          name: item.biller_name,
+          amount: parseFloat(item.amount),
+          points: `${parseFloat(item.amount) * 10} GT`,
+          value: parseFloat(item.amount) * 10,
+          validity: item.validity_period || "N/A",
+          description: `${item.biller_name} - Valid for ${
+            item.validity_period || "N/A"
+          } day(s)`,
+        });
       });
-
-      // Sort by amount
       uniqueBundles.sort((a, b) => a.amount - b.amount);
-
-      return {
-        success: true,
-        bundles: uniqueBundles,
-      };
+      return { success: true, bundles: uniqueBundles };
     } catch (error) {
-      console.error(
-        "Get bundles error:",
-        error.response?.data || error.message,
-      );
+      console.error("Get bundles error:", error.response?.data || error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Failed to fetch data bundles",
+        error: msgOf(error, "Failed to fetch data bundles"),
       };
     }
   }
 
-  // Purchase data bundle - UPDATED
-  // Update sendDataBundle in services/flutterwaveService.js
+  // ───────────────────────── collections (subscriptions) ─────────────────────────
+  _verifyResult(response) {
+    const ok = response.data?.status === "success" && !!response.data?.data;
+    return {
+      ok,
+      success: ok, // backwards compatible
+      notFound: !ok,
+      data: response.data?.data,
+      error: response.data?.message,
+    };
+  }
 
-  async sendDataBundle(data) {
-    try {
-      // Use the new endpoint format
-      const url = `${this.baseUrl}/billers/${data.billerCode}/items/${data.itemCode}/payment`;
-
-      const response = await axios.post(
-        url,
-        {
-          country: "NG",
-          customer_id: data.phoneNumber, // Note: customer_id not customer
-          amount: data.amount,
-          reference: data.reference,
-          callback_url: `${process.env.BASE_URL}/payouts/webhooks/flutterwave`,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-            "Content-Type": "application/json",
-            accept: "application/json",
-          },
-        },
-      );
-
-      return {
-        success: response.data.status === "success",
-        data: response.data.data,
-        reference: response.data.data?.reference || data.reference,
-        flutterwaveId:
-          response.data.data?.transaction_reference ||
-          response.data.data?.flw_ref,
-      };
-    } catch (error) {
-      console.error("Data bundle error:", error.response?.data);
-      return {
-        success: false,
-        error: error.response?.data?.message || "Data purchase failed",
-        details: error.response?.data,
-      };
+  _verifyError(error, fallback) {
+    const message = msgOf(error, fallback);
+    if (isAmbiguous(error)) {
+      return { ok: false, success: false, networkError: true, error: message };
     }
-  }
-
-  // Get banks
-  async getBanks() {
-    try {
-      const response = await axios.get(`${this.baseUrl}/banks/NG`, {
-        headers: { Authorization: `Bearer ${this.secretKey}` },
-      });
-
-      return {
-        success: true,
-        banks: response.data.data,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: "Failed to fetch banks",
-      };
+    if (error.response?.status === 404 || NOT_FOUND_RE.test(message)) {
+      return { ok: false, success: false, notFound: true, error: message };
     }
+    // 4xx we don't understand: not a network problem, but not proof of "no payment" either
+    return { ok: false, success: false, networkError: true, error: message };
   }
 
-  async getTransferFee(amount) {
-    const response = await axios.get(`${this.baseUrl}/transfers/fee`, {
-      params: {
-        amount,
-        currency: "NGN",
-      },
-      headers: {
-        Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
-      },
-    });
-
-    return response.data.data.fee;
-  }
-
-  // Verify transaction
+  /** By Flutterwave numeric transaction id (from the redirect). */
   async verifyTransaction(transactionId) {
     try {
-      const response = await axios.get(
-        `${this.baseUrl}/transactions/${transactionId}/verify`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.secretKey}`,
-            "Content-Type": "application/json",
-          },
-        },
-      );
-
-      return {
-        success: response.data.status === "success",
-        data: response.data.data,
-      };
+      const r = await this._get(`/transactions/${transactionId}/verify`);
+      return this._verifyResult(r);
     } catch (error) {
       console.error("Transaction verification error:", error.response?.data);
-      return {
-        success: false,
-        error: error.response?.data?.message || "Verification failed",
-      };
+      return this._verifyError(error, "Verification failed");
+    }
+  }
+
+  /** By OUR tx_ref - works even if the app never received the redirect. */
+  async verifyByReference(txRef) {
+    try {
+      const r = await this._get("/transactions/verify_by_reference", {
+        tx_ref: txRef,
+      });
+      return this._verifyResult(r);
+    } catch (error) {
+      return this._verifyError(error, "Verification failed");
     }
   }
 
   async findTransactionByFlwRef(flwRef) {
     try {
-      // Flutterwave supports filtering transactions by flw_ref
-      const response = await axios.get(`${this.baseUrl}/transactions`, {
-        params: {
-          flw_ref: flwRef,
-        },
-        headers: {
-          Authorization: `Bearer ${this.secretKey}`,
-        },
-      });
-
+      const response = await this._get("/transactions", { flw_ref: flwRef });
       const transactions = response.data?.data;
-
       if (!transactions || transactions.length === 0) {
-        return {
-          success: false,
-          error: "No transaction found for this reference",
-        };
+        return { success: false, error: "No transaction found for this reference" };
       }
-
-      // flw_ref should be unique, take the first result
-      return {
-        success: true,
-        data: transactions[0],
-      };
+      return { success: true, data: transactions[0] };
     } catch (error) {
       console.error("findTransactionByFlwRef error:", error.response?.data);
       return {
         success: false,
-        error: error.response?.data?.message || "Failed to find transaction",
+        error: msgOf(error, "Failed to find transaction"),
       };
     }
   }

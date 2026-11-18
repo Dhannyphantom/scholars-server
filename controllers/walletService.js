@@ -54,141 +54,110 @@ class WalletService {
     };
   }
 
-  // Credit wallet (add money)
-  async credit(accountType, amount, category, reference, metadata = {}) {
+  // Shared, idempotent ledger write.
+  //  - `reference` is unique: the same reference is NEVER applied twice
+  //  - balance moves with an atomic $inc (no read-modify-write races)
+  //  - a previously FAILED row is re-claimed instead of blocking retries forever
+  async _apply(type, accountType, amount, category, reference, metadata = {}) {
+    const value = parseFloat(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error("Amount must be a positive number");
+    }
+
+    let tx;
     try {
-      // Check for duplicate transaction
-      const existingTx = await WalletTransaction.findOne({ reference });
-      if (existingTx) {
-        console.log(`Transaction ${reference} already exists`);
-        return {
-          success: true,
-          transaction: existingTx,
-          newBalance: existingTx.balanceAfter,
-        };
-      }
-
-      // Get wallet with retry logic for race conditions
-      let wallet = await WalletAccount.findOne({ accountType });
-
-      if (!wallet) {
-        throw new Error(`Wallet ${accountType} not found`);
-      }
-
-      const balanceBefore = wallet.balance;
-      const balanceAfter = balanceBefore + parseFloat(amount);
-
-      // Create transaction record first
-      const transaction = new WalletTransaction({
+      tx = await WalletTransaction.create({
         accountType,
-        transactionType: "credit",
+        transactionType: type,
         category,
-        amount: parseFloat(amount),
-        balanceBefore,
-        balanceAfter,
+        amount: value,
+        balanceBefore: 0,
+        balanceAfter: 0,
         reference,
         flutterwaveReference: metadata.flutterwaveReference,
         userId: metadata.userId,
-        schoolId: metadata.schoolId,
-        description: metadata.description || `Credit: ${category}`,
+        schoolId: metadata.schoolId || undefined,
+        description: metadata.description || `${type}: ${category}`,
         metadata,
-        status: "completed",
+        status: "pending",
       });
-
-      await transaction.save();
-
-      // Update wallet balance
-      wallet.balance = balanceAfter;
-      wallet.totalCredits += parseFloat(amount);
-      await wallet.save();
-
-      return {
-        success: true,
-        transaction,
-        newBalance: balanceAfter,
-      };
     } catch (error) {
-      // If transaction was created but wallet update failed, mark as failed
-      if (error.code !== 11000) {
-        // Not a duplicate key error
-        await WalletTransaction.findOneAndUpdate(
-          { reference },
-          { status: "failed", metadata: { ...metadata, error: error.message } },
-        );
+      if (error.code !== 11000) throw error;
+      const existing = await WalletTransaction.findOne({ reference });
+      if (!existing) throw error;
+      if (existing.status === "completed") {
+        return {
+          success: true,
+          transaction: existing,
+          newBalance: existing.balanceAfter,
+          duplicate: true,
+        };
       }
-      throw error;
+      if (existing.status === "pending") {
+        // Another worker is on it (or died mid-way; reconcile() will show it).
+        return { success: true, transaction: existing, duplicate: true, inFlight: true };
+      }
+      // failed -> claim it and try again
+      tx = await WalletTransaction.findOneAndUpdate(
+        { _id: existing._id, status: "failed" },
+        { $set: { status: "pending" } },
+        { new: true },
+      );
+      if (!tx) {
+        const again = await WalletTransaction.findOne({ reference });
+        return { success: true, transaction: again, duplicate: true, inFlight: true };
+      }
     }
+
+    const inc =
+      type === "credit"
+        ? { balance: value, totalCredits: value }
+        : { balance: -value, totalDebits: value };
+    const filter =
+      type === "debit"
+        ? { accountType, balance: { $gte: value } }
+        : { accountType };
+
+    const wallet = await WalletAccount.findOneAndUpdate(
+      filter,
+      { $inc: inc },
+      { new: true },
+    );
+
+    if (!wallet) {
+      const exists = await WalletAccount.exists({ accountType });
+      tx.status = "failed";
+      tx.metadata = {
+        ...(tx.metadata || {}),
+        error: exists
+          ? `Insufficient balance in ${accountType} wallet`
+          : `Wallet ${accountType} not found`,
+      };
+      tx.markModified("metadata");
+      await tx.save();
+      throw new Error(
+        exists
+          ? `Insufficient balance in ${accountType} wallet`
+          : `Wallet ${accountType} not found`,
+      );
+    }
+
+    tx.balanceAfter = wallet.balance;
+    tx.balanceBefore = type === "credit" ? wallet.balance - value : wallet.balance + value;
+    tx.status = "completed";
+    await tx.save();
+
+    return { success: true, transaction: tx, newBalance: wallet.balance };
+  }
+
+  // Credit wallet (add money)
+  async credit(accountType, amount, category, reference, metadata = {}) {
+    return this._apply("credit", accountType, amount, category, reference, metadata);
   }
 
   // Debit wallet (remove money)
   async debit(accountType, amount, category, reference, metadata = {}) {
-    try {
-      // Check for duplicate transaction
-      const existingTx = await WalletTransaction.findOne({ reference });
-      if (existingTx) {
-        console.log(`Transaction ${reference} already exists`);
-        return {
-          success: true,
-          transaction: existingTx,
-          newBalance: existingTx.balanceAfter,
-        };
-      }
-
-      // Get wallet
-      let wallet = await WalletAccount.findOne({ accountType });
-
-      if (!wallet) {
-        throw new Error(`Wallet ${accountType} not found`);
-      }
-
-      const balanceBefore = wallet.balance;
-      const amountToDebit = parseFloat(amount);
-
-      if (balanceBefore < amountToDebit) {
-        throw new Error(`Insufficient balance in ${accountType} wallet`);
-      }
-
-      const balanceAfter = balanceBefore - amountToDebit;
-
-      // Create transaction record first
-      const transaction = new WalletTransaction({
-        accountType,
-        transactionType: "debit",
-        category,
-        amount: amountToDebit,
-        balanceBefore,
-        balanceAfter,
-        reference,
-        flutterwaveReference: metadata.flutterwaveReference,
-        userId: metadata.userId,
-        description: metadata.description || `Debit: ${category}`,
-        metadata,
-        status: "completed",
-      });
-
-      await transaction.save();
-
-      // Update wallet balance
-      wallet.balance = balanceAfter;
-      wallet.totalDebits += amountToDebit;
-      await wallet.save();
-
-      return {
-        success: true,
-        transaction,
-        newBalance: balanceAfter,
-      };
-    } catch (error) {
-      // If transaction was created but wallet update failed, mark as failed
-      if (error.code !== 11000) {
-        // Not a duplicate key error
-        await WalletTransaction.findOneAndUpdate(
-          { reference },
-          { status: "failed", metadata: { ...metadata, error: error.message } },
-        );
-      }
-      throw error;
-    }
+    return this._apply("debit", accountType, amount, category, reference, metadata);
   }
 
   // Transfer funds between wallets
@@ -319,11 +288,13 @@ class WalletService {
 
   // Get transaction history
   async getTransactions(accountType, options = {}) {
-    const { limit = 50, skip = 0, startDate, endDate, status } = options;
+    const { limit = 50, skip = 0, startDate, endDate, status, userId, category } = options;
 
     const query = { accountType };
 
     if (status) query.status = status;
+    if (userId) query.userId = userId;
+    if (category) query.category = category;
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);

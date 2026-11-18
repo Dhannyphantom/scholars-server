@@ -47,8 +47,15 @@ const jambRoutes = require("./routes/jamb");
 
 // ── Admin dashboard integration ──────────────────────────────────────────────
 const adminPanel = require("./routes/adminPanel");
-const { suspensionGuard, trackActivity, auditCompetition, startGuard } = require("./middlewares/guard");
-const { startNotificationWorker } = require("./controllers/notificationService");
+const {
+  suspensionGuard,
+  trackActivity,
+  auditCompetition,
+  startGuard,
+} = require("./middlewares/guard");
+const {
+  startNotificationWorker,
+} = require("./controllers/notificationService");
 
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -85,6 +92,7 @@ startGuard();
 startNotificationWorker();
 socs(io);
 app.set("io", io);
+require("./jobs/reconcileJob").start();
 // chat(http, app);
 
 app.get("/", (req, res) => {
