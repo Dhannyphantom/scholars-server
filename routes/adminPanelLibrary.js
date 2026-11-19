@@ -11,6 +11,7 @@ const { managerOnly } = require("../middlewares/staffAuth");
 const { record } = require("../controllers/auditService");
 const { isId, oid, esc, ok, fail, paging } = require("../controllers/adminHelpers");
 const { buildQuestionFields, toMarkup } = require("../controllers/richText"); // NEW
+const { buildFilter, OID_RE } = require("../controllers/questionFilter"); // NEW: exhaustive question filters
 
 const proScope = (req) => (req.isManager ? null : (req.me.subjects || []).map(String));
 const inScope = (req, subjectId) => req.isManager || proScope(req).includes(String(subjectId));
@@ -56,6 +57,9 @@ const qDto = (q) => {
   return {
     id: q._id, question: q.question, answers: (q.answers || []).map((a) => ({ id: a._id, name: a.name, correct: !!a.correct })), explanation: q.explanation || "",
     point: q.point, timer: q.timer, subject: q.subject, topic: q.topic, categories: q.categories || [], isTheory: !!q.isTheory, isLatex: !!q.isLatex, user: q.user,
+    created: q._id && q._id.getTimestamp ? q._id.getTimestamp() : undefined,
+    difficulty: q.difficulty, active: q.active !== false, jambEligible: q.jambEligible !== false,
+    hasImage: !!(q.image && q.image.uri), edited: (q.edits || []).length,
     content: c || undefined,
     source: c ? { question: toMarkup(c.stem), answers: (c.options || []).map((o) => ({ name: toMarkup(o.body), correct: !!o.correct })), explanation: toMarkup(c.explanation) } : undefined,
   };
@@ -63,15 +67,35 @@ const qDto = (q) => {
 
 router.get("/questions", async (req, res) => {
   const { page, limit, skip } = paging(req.query, 20);
-  const scope = proScope(req);
-  const f = {};
-  if (req.query.subject && isId(req.query.subject)) f.subject = req.query.subject;
-  if (scope) f.subject = req.query.subject && scope.includes(req.query.subject) ? req.query.subject : { $in: scope };
-  if (req.query.topic && isId(req.query.topic)) f.topic = req.query.topic;
-  if (req.query.category && isId(req.query.category)) f.categories = req.query.category;
-  if (req.query.q) f.question = new RegExp(esc(req.query.q), "i");
-  const [rows, total] = await Promise.all([Question.find(f).sort({ _id: -1 }).skip(skip).limit(limit).lean(), Question.countDocuments(f)]);
-  ok(res, rows.map(qDto), { total, page, pages: Math.ceil(total / limit) });
+  const F = buildFilter(req.query, proScope(req));
+  let rows;
+  if (F.needsCount) {
+    rows = await Question.aggregate([{ $match: F.filter }, { $addFields: { _oc: { $size: { $ifNull: ["$answers", []] } } } }, { $sort: F.sort }, { $skip: skip }, { $limit: limit }]);
+  } else {
+    let cur = Question.find(F.filter).sort(F.sort).skip(skip).limit(limit);
+    if (F.alpha) cur = cur.collation({ locale: "en", strength: 2 });
+    rows = await cur.lean();
+  }
+  const total = await Question.countDocuments(F.filter);
+  ok(res, rows.map(qDto), { total, page, pages: Math.ceil(total / limit), sort: F.sortKey, criteria: F.criteria });
+});
+
+// Values the filter panel needs (ranges, creators/editors, date span). Must stay ABOVE /questions/:id.
+router.get("/questions/facets", async (req, res) => {
+  const { filter } = buildFilter({}, proScope(req));
+  const [[agg], creatorIds, editorIds] = await Promise.all([
+    Question.aggregate([{ $match: filter }, { $group: { _id: null, pMin: { $min: "$point" }, pMax: { $max: "$point" }, tMin: { $min: "$timer" }, tMax: { $max: "$timer" }, first: { $min: "$_id" }, last: { $max: "$_id" } } }]),
+    Question.distinct("user", filter),
+    Question.distinct("edits", filter),
+  ]);
+  const people = await User.find({ _id: { $in: [...new Set([...creatorIds, ...editorIds].map(String))] } }).select("name username").lean();
+  const pick = (idsArr) => idsArr.map((i) => { const u = people.find((x) => String(x._id) === String(i)); return { id: String(i), name: u ? u.name || u.username || String(i) : "Unknown user" }; });
+  ok(res, {
+    points: agg ? { min: agg.pMin, max: agg.pMax } : null,
+    timers: agg ? { min: agg.tMin, max: agg.tMax } : null,
+    dates: agg ? { from: agg.first.getTimestamp(), to: agg.last.getTimestamp() } : null,
+    creators: pick(creatorIds), editors: pick(editorIds),
+  });
 });
 
 router.get("/questions/:id", async (req, res) => {
@@ -239,8 +263,28 @@ router.post("/questions/bulk", async (req, res) => {
   docs.forEach((d) => byTopic.set(String(d.topic), [...(byTopic.get(String(d.topic)) || []), d._id]));
   await Promise.all([...byTopic].map(([t, qs]) => Topic.updateOne({ _id: t }, { $addToSet: { questions: { $each: qs } } })));
   await User.updateOne({ _id: req.me._id }, { $inc: { totalPoints: docs.length * 10 } });
+
+  // Keep the structure in step with the batch context: a topic must list every category its questions use
+  // (the student app filters topics by category), and we report subjects that are not under a chosen category.
+  const catsOfTopic = new Map(), catsOfSubject = new Map();
+  list.forEach((q) => {
+    const cs = ids(q.categories).map(String);
+    catsOfTopic.set(String(q.topic), new Set([...(catsOfTopic.get(String(q.topic)) || []), ...cs]));
+    catsOfSubject.set(String(q.subject), new Set([...(catsOfSubject.get(String(q.subject)) || []), ...cs]));
+  });
+  await Promise.all([...catsOfTopic].map(([t, cs]) => Topic.updateOne({ _id: t }, { $addToSet: { categories: { $each: [...cs] } } })));
+  const [catDocs, subDocs] = await Promise.all([
+    Category.find({ _id: { $in: [...new Set([...catsOfSubject.values()].flatMap((s) => [...s]))] } }).select("name subjects").lean(),
+    Subject.find({ _id: { $in: [...catsOfSubject.keys()] } }).select("name").lean(),
+  ]);
+  const warnings = [];
+  catsOfSubject.forEach((cs, sid) => cs.forEach((cid) => {
+    const c = catDocs.find((x) => String(x._id) === cid);
+    if (c && !(c.subjects || []).some((x) => String(x) === sid)) warnings.push(`${subDocs.find((s) => String(s._id) === sid)?.name || "subject"} is not listed under category “${c.name}”, so students in that category won't see these questions yet`);
+  }));
+
   record(req, { action: "Uploaded questions", target: `${docs.length} question${docs.length > 1 ? "s" : ""}`, cat: "library", meta: { kind: "question_upload", count: docs.length } });
-  ok(res, { created: docs.length });
+  ok(res, { created: docs.length, warnings });
 });
 
 router.put("/questions/:id", async (req, res) => {
@@ -318,6 +362,108 @@ router.post("/questions/bulk-set", async (req, res) => {
   const qids = rows.map((r) => r._id);
   await Question.updateMany({ _id: { $in: qids } }, { $set: set, $addToSet: { edits: req.me._id } });
   record(req, { action: "Bulk-updated questions", target: `${qids.length} question(s)`, detail: Object.entries(set).map(([k, v]) => `${k}=${v}`).join(", "), cat: "library", meta: { kind: "question_edit", count: qids.length } });
+  ok(res, { updated: qids.length });
+});
+
+// ── Manage EVERYTHING that matches a filter (or an explicit selection), not just the visible page ──
+// Body: { filter: {…same criteria as GET /questions…} }  or  { ids: [...] }, plus expectedCount for writes.
+const MAX_MANAGE = 50000;
+const chunks = (a, n = 2000) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+
+async function manageTarget(req) {
+  const scope = proScope(req);
+  const b = req.body || {};
+  if (Array.isArray(b.ids) && b.ids.length) {
+    const { filter } = buildFilter({}, scope);
+    return { filter: { $and: [{ _id: { $in: ids(b.ids).map((x) => new mongoose.Types.ObjectId(String(x))) } }, filter] }, hasCriteria: true };
+  }
+  const r = buildFilter(b.filter || {}, scope);
+  return { filter: r.filter, hasCriteria: r.hasCriteria };
+}
+// resolves the ids to act on, or answers the request with an error and returns null
+async function manageIds(req, res) {
+  const t = await manageTarget(req);
+  if (!t.hasCriteria) { fail(res, 400, "Apply at least one filter (or select questions) first"); return null; }
+  const rows = await Question.find(t.filter).select("_id").limit(MAX_MANAGE + 1).lean();
+  if (rows.length > MAX_MANAGE) { fail(res, 422, `More than ${MAX_MANAGE} questions match. Narrow the filter first.`); return null; }
+  if (!rows.length) { fail(res, 404, "No questions match"); return null; }
+  const exp = req.body.expectedCount;
+  if (Number.isInteger(exp) && exp !== rows.length) { fail(res, 409, `The matching set changed (${rows.length} question(s) now). Review and confirm again.`); return null; }
+  return rows.map((r) => r._id);
+}
+
+router.post("/questions/by-filter/preview", async (req, res) => {
+  const t = await manageTarget(req);
+  const [count, bySubject] = await Promise.all([
+    Question.countDocuments(t.filter),
+    Question.aggregate([{ $match: t.filter }, { $group: { _id: "$subject", n: { $sum: 1 } } }, { $sort: { n: -1 } }, { $limit: 8 }, { $lookup: { from: "subjects", localField: "_id", foreignField: "_id", as: "s" } }, { $project: { n: 1, name: { $arrayElemAt: ["$s.name", 0] } } }]),
+  ]);
+  ok(res, { count, hasCriteria: t.hasCriteria, tooMany: count > MAX_MANAGE, bySubject: bySubject.map((r) => ({ name: r.name || "Unknown subject", n: r.n })) });
+});
+
+router.post("/questions/by-filter/delete", async (req, res) => {
+  const qids = await manageIds(req, res);
+  if (!qids) return;
+  for (const c of chunks(qids)) {
+    await Question.deleteMany({ _id: { $in: c } });
+    await Topic.updateMany({ questions: { $in: c } }, { $pull: { questions: { $in: c } } });
+  }
+  record(req, { action: "Deleted questions (by filter)", target: `${qids.length} question(s)`, cat: "library", meta: { kind: "question_edit", count: qids.length } });
+  ok(res, { deleted: qids.length });
+});
+
+router.post("/questions/by-filter/update", async (req, res) => {
+  const b = req.body || {}, s = b.set || {};
+  const set = {}, unset = {};
+  if (s.point !== undefined && s.point !== "") { const n = Number(s.point); if (!(n > 0)) return fail(res, 422, "Points must be greater than 0"); set.point = n; }
+  if (s.timer !== undefined && s.timer !== "") { const n = Number(s.timer); if (!(n >= 5)) return fail(res, 422, "Seconds must be at least 5"); set.timer = n; }
+  ["isTheory", "active", "jambEligible"].forEach((k) => { if (typeof s[k] === "boolean") set[k] = s[k]; });
+  if (s.difficulty === "") unset.difficulty = "";
+  else if (["easy", "medium", "hard"].includes(s.difficulty)) set.difficulty = s.difficulty;
+
+  const catIds = ids(b.categories?.ids), catMode = b.categories?.mode;
+  if (catMode && !["add", "remove", "replace"].includes(catMode)) return fail(res, 422, "Invalid category action");
+  if (catMode && !catIds.length) return fail(res, 422, "Pick at least one category");
+
+  let moveTo = null;
+  if (b.move?.topic) {
+    const t = isId(b.move.topic) && (await Topic.findById(b.move.topic));
+    if (!t) return fail(res, 404, "Target topic not found");
+    const sub = await Subject.findOne({ topics: t._id }).select("_id");
+    if (!sub || !inScope(req, sub._id)) return fail(res, 403, "Outside your assigned subjects");
+    moveTo = { topic: t._id, subject: sub._id };
+  }
+  if (!Object.keys(set).length && !Object.keys(unset).length && !catMode && !moveTo) return fail(res, 400, "Choose at least one change");
+
+  const qids = await manageIds(req, res);
+  if (!qids) return;
+  const catOids = catIds.map((x) => new mongoose.Types.ObjectId(String(x)));
+
+  for (const c of chunks(qids)) {
+    const q = { _id: { $in: c } };
+    const $set = { ...set, ...(moveTo || {}) };
+    const $addToSet = { edits: req.me._id };
+    if (catMode === "replace") $set.categories = catOids;
+    if (catMode === "add") $addToSet.categories = { $each: catOids };
+    await Question.updateMany(q, { ...(Object.keys($set).length && { $set }), ...(Object.keys(unset).length && { $unset: unset }), $addToSet });
+    if (catMode === "remove") {
+      // never leave a question without a category: if removal would empty it, it is left unchanged
+      await Question.updateMany(q, [{ $set: {
+        categories: { $let: { vars: { rest: { $filter: { input: "$categories", as: "c", cond: { $not: [{ $in: ["$$c", catOids] }] } } } }, in: { $cond: [{ $gt: [{ $size: "$$rest" }, 0] }, "$$rest", "$categories"] } } },
+        edits: { $setUnion: [{ $ifNull: ["$edits", []] }, [req.me._id]] },
+      } }]);
+    }
+    if (moveTo) {
+      await Topic.updateMany({ questions: { $in: c } }, { $pull: { questions: { $in: c } } });
+      await Topic.updateOne({ _id: moveTo.topic }, { $addToSet: { questions: { $each: c } } });
+    }
+  }
+  if (catMode === "add" || catMode === "replace") {
+    const topics = await Question.distinct("topic", { _id: { $in: qids } }); // topics must list the categories their questions use
+    await Topic.updateMany({ _id: { $in: topics } }, { $addToSet: { categories: { $each: catOids } } });
+  }
+  const what = [...Object.keys(set), ...Object.keys(unset), catMode && `categories:${catMode}`, moveTo && "move"].filter(Boolean).join(", ");
+  record(req, { action: "Bulk-updated questions (by filter)", target: `${qids.length} question(s)`, detail: what, cat: "library", meta: { kind: "question_edit", count: qids.length } });
   ok(res, { updated: qids.length });
 });
 
