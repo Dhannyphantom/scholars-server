@@ -651,6 +651,11 @@ router.get("/my_questions", auth, async (req, res) => {
                 point: 1,
                 timer: 1,
                 isTheory: 1,
+                questionLatex: 1, // NEW
+                isLatex: 1, // NEW
+                explanation: 1, // NEW
+                explanationLatex: 1, // NEW
+                content: 1, // NEW
                 image: 1,
                 topic: { $arrayElemAt: ["$topicData", 0] },
                 subject: { $arrayElemAt: ["$subjectData", 0] },
@@ -684,6 +689,11 @@ router.get("/my_questions", auth, async (req, res) => {
               _id: "$_id",
               question: "$question",
               answers: "$answers",
+              questionLatex: "$questionLatex", // NEW
+              isLatex: "$isLatex", // NEW
+              explanation: "$explanation", // NEW
+              explanationLatex: "$explanationLatex", // NEW
+              content: "$content", // NEW
               point: "$point",
               timer: "$timer",
               isTheory: "$isTheory",
@@ -1044,6 +1054,7 @@ router.put("/question", auth, async (req, res) => {
           categories: data?.categories?.map((item) => item._id),
           isTheory: data?.isTheory,
         },
+        $unset: { content: "" },
         $addToSet: {
           edits: userId,
         },
@@ -1241,6 +1252,7 @@ router.post("/premium_quiz", auth, async (req, res) => {
                 explanationLatex: "$$q.explanationLatex",
                 questionLatex: "$$q.questionLatex",
                 isLatex: "$$q.isLatex",
+                content: "$$q.content",
               },
             },
           },
@@ -2174,6 +2186,7 @@ router.post("/freemium_quiz", auth, async (req, res) => {
           timer: 1,
           image: 1,
           isTheory: 1,
+          content: 1,
           hasAnswered: 1,
           subject: {
             _id: "$subjectData._id",

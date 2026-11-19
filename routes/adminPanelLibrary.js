@@ -10,6 +10,7 @@ const { User } = require("../models/User");
 const { managerOnly } = require("../middlewares/staffAuth");
 const { record } = require("../controllers/auditService");
 const { isId, oid, esc, ok, fail, paging } = require("../controllers/adminHelpers");
+const { buildQuestionFields, toMarkup } = require("../controllers/richText"); // NEW
 
 const proScope = (req) => (req.isManager ? null : (req.me.subjects || []).map(String));
 const inScope = (req, subjectId) => req.isManager || proScope(req).includes(String(subjectId));
@@ -47,7 +48,18 @@ router.get("/meta", async (req, res) => {
   });
 });
 
-const qDto = (q) => ({ id: q._id, question: q.question, answers: (q.answers || []).map((a) => ({ id: a._id, name: a.name, correct: !!a.correct })), explanation: q.explanation || "", point: q.point, timer: q.timer, subject: q.subject, topic: q.topic, categories: q.categories || [], isTheory: !!q.isTheory, isLatex: !!q.isLatex, user: q.user });
+// `question`/`answers`/`explanation` stay the plain-text mirror (old clients, search).
+// NEW: `content` (stored rich version) and `source` (the same thing as editable authoring markup —
+// an edit form should show/edit `source` when present and PUT it back with `markup: true`).
+const qDto = (q) => {
+  const c = q.content && q.content.version === 2 ? q.content : null;
+  return {
+    id: q._id, question: q.question, answers: (q.answers || []).map((a) => ({ id: a._id, name: a.name, correct: !!a.correct })), explanation: q.explanation || "",
+    point: q.point, timer: q.timer, subject: q.subject, topic: q.topic, categories: q.categories || [], isTheory: !!q.isTheory, isLatex: !!q.isLatex, user: q.user,
+    content: c || undefined,
+    source: c ? { question: toMarkup(c.stem), answers: (c.options || []).map((o) => ({ name: toMarkup(o.body), correct: !!o.correct })), explanation: toMarkup(c.explanation) } : undefined,
+  };
+};
 
 router.get("/questions", async (req, res) => {
   const { page, limit, skip } = paging(req.query, 20);
@@ -187,10 +199,26 @@ const validQ = (b, isTheory) => {
   return null;
 };
 
+// NEW — classify question/answers/explanation (authoring markup) into the stored fields.
+//  returns { f: { question, answers, explanation?, content } } or { error }.
+//  `existing` (the stored content) is passed ONLY for old plain-text editors, so an unchanged field
+//  keeps its formatting; the new editor (body.markup === true) is authoritative and passes nothing.
+const build = (b, existing) => {
+  const src = cleanAnswers(b.answers);
+  const f = buildQuestionFields({ question: b.question, answers: src, explanation: b.explanation }, existing);
+  if (!f.question.trim()) return { error: "Question text is required" };
+  if (!b.isTheory && f.answers.filter((a) => a.correct).length !== 1) return { error: "Mark exactly one correct answer (maximum 6 options)" };
+  f.answers = f.answers.map((a, i) => ({ ...a, ...(src[i]?.latex && { latex: src[i].latex, isLatex: !!src[i].isLatex }) })); // keep old AI-latex passthrough
+  return { f };
+};
+const appendCopy = (stem) =>
+  stem.format === "latex" ? { format: "text", value: `$${stem.value}$ (copy)`, hasMath: true } : { ...stem, value: `${stem.value} (copy)` };
+
 router.post("/questions/bulk", async (req, res) => {
   const list = Array.isArray(req.body.questions) ? req.body.questions : [];
   if (!list.length) return fail(res, 422, "No questions provided");
   if (list.length > 500) return fail(res, 422, "Maximum 500 questions per upload");
+  const built = [];
   for (const [i, q] of list.entries()) {
     const err = validQ(q, q.isTheory);
     if (err) return fail(res, 422, `Question ${i + 1}: ${err}`);
@@ -198,9 +226,13 @@ router.post("/questions/bulk", async (req, res) => {
     if (!inScope(req, q.subject)) return fail(res, 403, `Question ${i + 1}: outside your assigned subjects`);
     if (!ids(q.categories).length) return fail(res, 422, `Question ${i + 1}: pick at least one category`);
     if (!(await Subject.exists({ _id: q.subject, topics: q.topic }))) return fail(res, 422, `Question ${i + 1}: topic doesn't belong to that subject`);
+    const r = build(q);
+    if (r.error) return fail(res, 422, `Question ${i + 1}: ${r.error}`);
+    built.push(r.f);
   }
-  const docs = await Question.insertMany(list.map((q) => ({
-    question: String(q.question).trim(), answers: cleanAnswers(q.answers), explanation: q.explanation || undefined, point: Number(q.point) || 5, timer: Number(q.timer) || 40,
+  const docs = await Question.insertMany(list.map((q, i) => ({
+    question: built[i].question, answers: built[i].answers, explanation: built[i].explanation, content: built[i].content,
+    point: Number(q.point) || 5, timer: Number(q.timer) || 40,
     subject: q.subject, topic: q.topic, categories: ids(q.categories), isTheory: !!q.isTheory, user: req.me._id, image: { type: "null" },
   })));
   const byTopic = new Map();
@@ -221,8 +253,10 @@ router.put("/questions/:id", async (req, res) => {
   const subject = isId(b.subject) ? b.subject : q.subject;
   if (!inScope(req, subject)) return fail(res, 403, "Outside your assigned subjects");
   if (isId(b.topic) && !(await Subject.exists({ _id: subject, topics: b.topic }))) return fail(res, 422, "Topic doesn't belong to that subject");
+  const r = build(b, b.markup === true ? undefined : q.toObject().content);
+  if (r.error) return fail(res, 422, r.error);
   const oldTopic = String(q.topic);
-  Object.assign(q, { question: String(b.question).trim(), answers: cleanAnswers(b.answers), explanation: b.explanation || undefined, point: Number(b.point) || q.point, timer: Number(b.timer) || q.timer, subject, topic: isId(b.topic) ? b.topic : q.topic, isTheory: !!b.isTheory });
+  Object.assign(q, { question: r.f.question, answers: r.f.answers, explanation: r.f.explanation, content: r.f.content, point: Number(b.point) || q.point, timer: Number(b.timer) || q.timer, subject, topic: isId(b.topic) ? b.topic : q.topic, isTheory: !!b.isTheory });
   if (ids(b.categories).length) q.categories = ids(b.categories);
   q.edits = [...new Set([...(q.edits || []).map(String), String(req.me._id)])];
   await q.save();
@@ -239,7 +273,10 @@ router.post("/questions/:id/duplicate", async (req, res) => {
   if (!q) return fail(res, 404, "Question not found");
   if (!inScope(req, q.subject)) return fail(res, 403, "Outside your assigned subjects");
   const { _id, edits, __v, ...rest } = q;
-  const d = await Question.create({ ...rest, user: req.me._id, question: `${q.question} (copy)` });
+  const d = await Question.create({
+    ...rest, user: req.me._id, question: `${q.question} (copy)`,
+    ...(q.content?.stem && { content: { ...q.content, stem: appendCopy(q.content.stem) } }), // keep content in step with the plain mirror
+  });
   await Topic.updateOne({ _id: q.topic }, { $addToSet: { questions: d._id } });
   record(req, { action: "Duplicated question", target: q.question.slice(0, 60), cat: "library", meta: { kind: "question_upload", count: 1 } });
   ok(res, { id: d._id });

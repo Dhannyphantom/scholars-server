@@ -54,6 +54,38 @@ const mediaSchema = {
   },
 };
 
+// Put these two schemas above QuestionSchema ...
+const richTextSchema = new schema(
+  {
+    // text  -> plain text (may contain $...$ if hasMath)
+    // html  -> sanitised html: strong, em, u, s, sup, sub, br only
+    // latex -> one raw LaTeX expression, no delimiters
+    format: { type: String, enum: ["text", "html", "latex"], default: "text" },
+    value: { type: String, default: "" },
+    hasMath: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
+const contentSchema = new schema(
+  {
+    version: { type: Number, default: 2 },
+    stem: richTextSchema,
+    options: [
+      new schema(
+        {
+          key: { type: String, enum: ["A", "B", "C", "D", "E", "F"] },
+          body: richTextSchema,
+          correct: { type: Boolean, default: false },
+        },
+        { _id: false },
+      ),
+    ],
+    explanation: richTextSchema,
+  },
+  { _id: false },
+);
+
 const QuestionSchema = new schema({
   question: {
     type: String,
@@ -85,6 +117,8 @@ const QuestionSchema = new schema({
     type: String,
     trim: true,
   },
+
+  content: contentSchema,
 
   point: {
     type: Number,
