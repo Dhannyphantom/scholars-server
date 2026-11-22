@@ -47,12 +47,17 @@ const jambRoutes = require("./routes/jamb");
 
 // ── Admin dashboard integration ──────────────────────────────────────────────
 const adminPanel = require("./routes/adminPanel");
+const adminPanelGate = require("./routes/adminPanelGate");
 const {
   suspensionGuard,
   trackActivity,
   auditCompetition,
   startGuard,
 } = require("./middlewares/guard");
+const {
+  trackFeatureUsage,
+  trackSocketEvent,
+} = require("./middlewares/featureUsage");
 const {
   startNotificationWorker,
 } = require("./controllers/notificationService");
@@ -65,7 +70,11 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Blocks suspended users/schools on the mobile API + records request-driven activity
 app.use(suspensionGuard);
 app.use(trackActivity);
+// Feature / endpoint usage counters (shown in Admin → Analytics → Features)
+app.use(trackFeatureUsage);
 
+// Gate router first: professional-accessible support desk + feature analytics
+app.use("/admin-panel", adminPanelGate);
 app.use("/admin-panel", adminPanel);
 
 app.use("/users", users);
@@ -91,6 +100,13 @@ db();
 startGuard();
 startNotificationWorker();
 socs(io);
+// Count meaningful socket events (multiplayer quiz, support chat) as feature usage
+io.on("connection", (socket) => {
+  socket.on("register_user", (id) => {
+    socket.data.userId = id;
+  });
+  socket.onAny((event) => trackSocketEvent(event, socket.data.userId));
+});
 app.set("io", io);
 require("./jobs/reconcileJob").start();
 // chat(http, app);
