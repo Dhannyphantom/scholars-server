@@ -12,6 +12,10 @@
 //    the rest period.
 //  * JAMB eligibility = the subject is listed in the "JAMB" Category's `subjects`
 //    array. (`Subject.jambCompulsory` still marks the compulsory subject(s).)
+//  * Questions now live in `Question.content` (stem / options / explanation).
+//    The legacy `question` / `answers[].name` fields may be absent, so wording
+//    is always read through `stemOf()` and papers are sent to the app with
+//    `content.options` re-ordered to match the attempt's shuffled `answers`.
 
 const mongoose = require("mongoose");
 const { randomInt } = require("crypto");
@@ -826,6 +830,13 @@ async function saveSelection(userId, subjectIds) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Issuing attempts
 // ─────────────────────────────────────────────────────────────────────────────
+// The question wording, wherever it lives: the new `content.stem.value`, or the legacy
+// `question` string for any document that has not been migrated.
+const stemOf = (q) =>
+  (q && q.content && q.content.stem && q.content.stem.value) ||
+  (q && q.question) ||
+  "";
+
 // Lower-cased, punctuation/whitespace-insensitive key, so the same question uploaded twice
 // (different _id, same wording) is treated as ONE question.
 const textKey = (t) =>
@@ -842,7 +853,7 @@ function takeDistinct(list, blocked, limit = Infinity) {
   const out = [];
   for (const q of list) {
     if (out.length >= limit) break;
-    const k = textKey(q.question);
+    const k = textKey(stemOf(q));
     if (blocked.has(k) || used.has(k)) continue;
     used.add(k);
     out.push(q);
@@ -862,7 +873,7 @@ function takeDistinct(list, blocked, limit = Infinity) {
  */
 async function pickQuestions(userId, subject, count, jambCatId) {
   const pool = await Question.find(poolFilter(subject._id, jambCatId))
-    .select("_id question")
+    .select("_id question content.stem")
     .lean();
 
   const seenDoc = await JambSeen.findOne({
@@ -873,7 +884,7 @@ async function pickQuestions(userId, subject, count, jambCatId) {
 
   const seenPool = pool.filter((q) => seenIds.has(str(q._id)));
   const unseenPool = pool.filter((q) => !seenIds.has(str(q._id)));
-  const seenTexts = new Set(seenPool.map((q) => textKey(q.question)));
+  const seenTexts = new Set(seenPool.map((q) => textKey(stemOf(q))));
 
   const fresh = takeDistinct(shuffle(unseenPool), seenTexts);
 
@@ -883,7 +894,7 @@ async function pickQuestions(userId, subject, count, jambCatId) {
     picks = fresh.slice(0, count);
   } else {
     reset = true; // pool exhausted for this user: start a new cycle
-    const taken = new Set(fresh.map((q) => textKey(q.question)));
+    const taken = new Set(fresh.map((q) => textKey(stemOf(q))));
     const topUp = takeDistinct(shuffle(seenPool), taken, count - fresh.length);
     picks = [...fresh, ...topUp];
   }
@@ -933,6 +944,8 @@ async function markSeen(userId, picked) {
   }
 }
 
+const OPTION_KEYS = ["A", "B", "C", "D", "E", "F"];
+
 async function presentAttempt(attempt) {
   const a = plain(attempt);
   const subjects = await Subject.find({
@@ -953,26 +966,50 @@ async function presentAttempt(attempt) {
         .map((sn) => {
           const q = qMap.get(str(sn.questionId));
           if (!q) return null;
-          const byId = new Map((q.answers || []).map((x) => [str(x._id), x]));
-          const answers = sn.answerIds
-            .map((id) => byId.get(str(id)))
-            .filter(Boolean)
-            .map((x) => ({
-              _id: x._id,
-              name: x.name,
-              latex: x.latex || null,
-              isLatex: !!x.isLatex,
-              correct: str(x._id) === str(sn.correctAnswerId),
-            }));
+
+          const idxById = new Map(
+            (q.answers || []).map((x, i) => [str(x._id), i]),
+          );
+          const opts = (q.content && q.content.options) || [];
+
+          // The attempt's shuffled order, applied to BOTH `answers` and `content.options`.
+          // The app pairs answers[i] <-> content.options[i] by position, so they must
+          // line up exactly or option text lands under the wrong answer id.
+          const order = sn.answerIds
+            .map((id) => idxById.get(str(id)))
+            .filter((i) => i !== undefined);
+
+          const answers = order.map((i) => {
+            const body = opts[i] && opts[i].body;
+            return {
+              _id: q.answers[i]._id,
+              // plain fallback for any screen that still reads answers[].name
+              name: (body && body.value) || q.answers[i].name || "",
+              correct: str(q.answers[i]._id) === str(sn.correctAnswerId),
+            };
+          });
+
+          const content = q.content
+            ? {
+                version: q.content.version || 2,
+                stem: q.content.stem,
+                options: order.map((i, pos) => ({
+                  key: OPTION_KEYS[pos],
+                  body: opts[i] && opts[i].body,
+                  correct: str(q.answers[i]._id) === str(sn.correctAnswerId),
+                })),
+                explanation: q.content.explanation,
+              }
+            : undefined;
+
           return {
             _id: q._id,
-            question: q.question,
-            isLatex: !!q.isLatex,
-            questionLatex: q.questionLatex || null,
+            // legacy fields: only meaningful for questions that have no `content`
+            question: q.question || stemOf(q),
+            content,
             image: q.image && q.image.uri ? q.image : null,
             answers,
             explanation: q.explanation || null,
-            explanationLatex: q.explanationLatex || null,
             point: pointOf(sn.point),
             timer: CFG.SECONDS_PER_QUESTION,
           };
@@ -1792,5 +1829,6 @@ module.exports = {
     pickQuestions,
     textKey,
     takeDistinct,
+    stemOf,
   },
 };
