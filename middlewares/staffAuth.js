@@ -21,7 +21,8 @@ const staffAuth = async (req, res, next) => {
     res.status(401).json({ success: false, message: "Invalid token provided!" });
   }
 };
+// Managers always pass. Professionals pass only when proGuard already verified a matching permission.
 const managerOnly = (req, res, next) =>
-  req.isManager ? next() : res.status(403).json({ success: false, message: "Manager access required" });
+  req.isManager || req.proAllowed ? next() : res.status(403).json({ success: false, message: "Manager access required" });
 
 module.exports = { staffAuth, managerOnly };

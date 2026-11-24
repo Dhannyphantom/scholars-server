@@ -48,6 +48,7 @@ const jambRoutes = require("./routes/jamb");
 // ── Admin dashboard integration ──────────────────────────────────────────────
 const adminPanel = require("./routes/adminPanel");
 const adminPanelGate = require("./routes/adminPanelGate");
+const { competitionShim } = require("./middlewares/proGuard");
 const {
   suspensionGuard,
   trackActivity,
@@ -73,7 +74,7 @@ app.use(trackActivity);
 // Feature / endpoint usage counters (shown in Admin → Analytics → Features)
 app.use(trackFeatureUsage);
 
-// Gate router first: professional-accessible support desk + feature analytics
+// Gate router first: permission guard, professional support desk, permission management
 app.use("/admin-panel", adminPanelGate);
 app.use("/admin-panel", adminPanel);
 
@@ -87,6 +88,8 @@ app.use("/support", support);
 app.use("/analytics", analyticsRoutes);
 app.use("/transactions", transactionsRoutes);
 app.use("/cron", cronRoutes);
+// Lets permitted professionals use the dashboard's competition tools (checks Access control permissions)
+app.use("/competition", competitionShim);
 app.use("/competition/manage", auditCompetition); // audit trail for competition management
 app.use("/competition", competitionRoutes);
 app.use("/admin", adminRoutes);
