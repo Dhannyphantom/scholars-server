@@ -89,7 +89,7 @@ const contentSchema = new schema(
 const QuestionSchema = new schema({
   question: {
     type: String,
-    required: true,
+    required: false,
     trim: true,
   },
 
