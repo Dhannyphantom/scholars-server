@@ -369,6 +369,9 @@ const formatCompetition = (comp, userId, isManager = false) => {
     awardSummary:
       isManager && comp.resultsPublished ? buildAwardSummary(comp) : undefined,
     resultsPublished: comp.resultsPublished,
+    // Visibility is an admin concern — never leaked to participants.
+    hiddenFromUsers: isManager ? !!comp.hiddenFromUsers : undefined,
+    hiddenAt: isManager ? (comp.hiddenAt ?? null) : undefined,
     isLive,
     isUpcoming,
     isEnded,
@@ -391,7 +394,11 @@ router.get("/active", auth, async (req, res) => {
     const now = new Date();
     const userId = req.user.userId;
 
+    // Hidden competitions are never delivered to regular users.
+    const visible = { hiddenFromUsers: { $ne: true } };
+
     let comp = await OnlineQuizCompetition.findOne({
+      ...visible,
       status: "active",
       endTime: { $gte: now },
     })
@@ -400,6 +407,7 @@ router.get("/active", auth, async (req, res) => {
 
     if (!comp) {
       comp = await OnlineQuizCompetition.findOne({
+        ...visible,
         status: "active",
         endTime: { $lt: now },
         resultsPublished: false,
@@ -409,7 +417,10 @@ router.get("/active", auth, async (req, res) => {
     }
 
     if (!comp) {
-      comp = await OnlineQuizCompetition.findOne({ status: "finished" })
+      comp = await OnlineQuizCompetition.findOne({
+        ...visible,
+        status: "finished",
+      })
         .sort({ endTime: -1 })
         .lean();
     }
@@ -423,7 +434,7 @@ router.get("/active", auth, async (req, res) => {
     const lastWinners =
       doc.status === "finished" && doc.finalRankings?.length
         ? doc.finalRankings
-        : await OnlineQuizCompetition.findOne({ status: "finished" })
+        : await OnlineQuizCompetition.findOne({ ...visible, status: "finished" })
             .sort({ endTime: -1 })
             .populate(
               "finalRankings.user",
@@ -782,6 +793,48 @@ router.post("/manage/:id/publish", auth, requireManager, async (req, res) => {
   }
 });
 
+// POST /competition/manage/:id/visibility — hide / show a finished competition
+// body: { hidden: boolean }
+// Hiding is only allowed once the competition is over. A hidden competition is
+// filtered out of every user-facing endpoint (/active, /:id, /:id/leaderboard),
+// so the mobile app needs no changes. Un-hiding is always allowed.
+router.post("/manage/:id/visibility", auth, requireManager, async (req, res) => {
+  try {
+    const hidden = req.body?.hidden === true || req.body?.hidden === "true";
+    const comp = await OnlineQuizCompetition.findById(req.params.id);
+    if (!comp)
+      return res
+        .status(404)
+        .send({ status: "failed", message: "Competition not found" });
+
+    const over =
+      comp.status === "finished" ||
+      (comp.status === "active" && new Date() >= new Date(comp.endTime));
+    if (hidden && !over) {
+      return res.status(422).send({
+        status: "failed",
+        message: "Only a competition that is over can be hidden from users",
+      });
+    }
+
+    comp.hiddenFromUsers = hidden;
+    comp.hiddenAt = hidden ? new Date() : null;
+    comp.updatedAt = new Date();
+    await comp.save();
+
+    return res.send({
+      status: "success",
+      message: hidden ? "Competition hidden from users" : "Competition visible to users",
+      data: { _id: comp._id, hiddenFromUsers: comp.hiddenFromUsers, hiddenAt: comp.hiddenAt },
+    });
+  } catch (err) {
+    console.error("manage visibility error:", err);
+    return res
+      .status(500)
+      .send({ status: "failed", message: "Failed to update visibility" });
+  }
+});
+
 // POST /competition/manage/:id/publish-results — release results to participants
 //
 // Publishing also settles prizes for the top 3 who actually submitted:
@@ -939,7 +992,7 @@ router.get("/:id", auth, async (req, res) => {
     const comp = await populateCompetition(
       OnlineQuizCompetition.findById(req.params.id),
     );
-    if (!comp)
+    if (!comp || (!isManager && comp.hiddenFromUsers))
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });
@@ -991,7 +1044,7 @@ router.get("/:id/leaderboard", auth, async (req, res) => {
       )
       .lean();
 
-    if (!comp)
+    if (!comp || (!isManager && comp.hiddenFromUsers))
       return res
         .status(404)
         .send({ status: "failed", message: "Competition not found" });

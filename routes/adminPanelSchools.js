@@ -57,7 +57,7 @@ router.get("/classes", (req, res) => {
   const lv = req.query.level ? { "classes.level": req.query.level } : {};
   const qm = req.query.q ? { $or: [{ name: new RegExp(esc(req.query.q), "i") }, { "classes.alias": new RegExp(esc(req.query.q), "i") }] } : {};
   return listAgg(req, res, { path: "classes", pre: [{ $match: { ...lv, ...qm } }], project: { id: "$classes._id", level: "$classes.level", alias: "$classes.alias", teachers: { $size: "$classes.teachers" }, students: { $size: "$classes.students" } },
-    post: [{ $sort: { school: 1, level: 1 } }], mapRow: async (rows) => rows.map((r) => ({ ...r, school: cap(r.school) })) });
+    post: [{ $sort: { school: 1, schoolId: 1, level: 1 } }], mapRow: async (rows) => rows.map((r) => ({ ...r, school: cap(r.school) })) });
 });
 
 router.get("/quizzes", (req, res) => {

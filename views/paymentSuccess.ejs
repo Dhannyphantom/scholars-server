@@ -3,54 +3,73 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Transaction Successful</title>
+    <title>Payment successful – Guru EduTech</title>
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
     <style>
+      :root {
+        --paper:#fff8e7; --ink:#1e2a4a; --sub:#5a6685; --line:#e8dfc6; --line2:#d6caa6;
+        --board:#17463a; --chalk-s:#bfd9ce; --green:#22a559; --green-lip:#167a40; --green-s:#dff5e6;
+        --yellow:#ffc736; --yellow-lip:#d99f00; --yellow-s:#fff3c4; --yellow-ink:#6b5200;
+        --coral:#ff6b57; --purple:#8b5cf6; --blue:#3b82f6;
+      }
+      * { box-sizing:border-box; margin:0; padding:0; }
       body {
-        font-family: "Arial", sans-serif;
-        background: linear-gradient(to right, #6a11cb, #2575fc);
-        color: #ffffff;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        margin: 0;
+        min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px 16px;
+        font-family:"Nunito","Trebuchet MS",Verdana,sans-serif; color:var(--ink); background:var(--paper);
+        background-image:radial-gradient(#1e2a4a14 1.5px, transparent 1.5px); background-size:22px 22px;
+        overflow-x:hidden;
       }
-      .container {
-        background-color: rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
-        padding: 30px;
-        text-align: center;
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-      }
-      h1 {
-        font-size: 2.5em;
-        margin-bottom: 20px;
-      }
-      p {
-        font-size: 1.2em;
-        margin: 10px 0;
-      }
-      .highlight {
-        color: #ffd700;
-        font-weight: bold;
-      }
-      .points {
-        background-color: #ffffff;
-        color: #6a11cb;
-        padding: 10px;
-        border-radius: 5px;
-        display: inline-block;
-        margin-top: 20px;
-      }
+      .card { position:relative; width:100%; max-width:440px; background:#fff; border:2px solid var(--line);
+        border-bottom:7px solid var(--line2); border-radius:28px; overflow:hidden; text-align:center;
+        animation:pop .6s cubic-bezier(.22,1,.36,1) both; }
+      .bar { display:flex; height:9px; } .bar i { flex:1; } .bar i:nth-child(1){background:var(--green)} .bar i:nth-child(2){background:var(--yellow)}
+      .bar i:nth-child(3){background:var(--coral)} .bar i:nth-child(4){background:var(--purple)} .bar i:nth-child(5){background:var(--blue)}
+      .hero { background:var(--board); padding:34px 24px 28px; }
+      .badge { width:84px; height:84px; margin:0 auto; background:var(--green); border-bottom:7px solid var(--green-lip);
+        border-radius:26px; display:grid; place-items:center; font-size:42px; color:#fff; transform:rotate(-6deg);
+        animation:bounce 1.6s ease-in-out .5s infinite; }
+      .kicker { margin-top:18px; font:800 12px "Baloo 2",sans-serif; letter-spacing:2.4px; text-transform:uppercase; color:var(--chalk-s); }
+      h1 { margin-top:6px; font:800 clamp(28px,7vw,34px)/1.1 "Baloo 2","Nunito",sans-serif; color:#fff8e7; letter-spacing:-.4px; }
+      .body { padding:26px 24px 28px; }
+      .row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; margin-bottom:10px;
+        background:#fffbf0; border:2px solid var(--line); border-radius:16px; text-align:left; }
+      .row span { font-weight:700; color:var(--sub); font-size:14px; }
+      .row b { font:800 18px "Baloo 2",sans-serif; color:var(--ink); word-break:break-word; text-align:right; }
+      .row.amt b { color:var(--green-lip); font-size:22px; }
+      .reward { margin-top:16px; background:var(--yellow-s); border:2px dashed var(--yellow-lip); border-radius:18px; padding:16px; }
+      .reward small { display:block; font:800 11px "Baloo 2",sans-serif; letter-spacing:2px; text-transform:uppercase; color:var(--yellow-ink); }
+      .reward strong { display:block; margin-top:4px; font:800 22px "Baloo 2",sans-serif; color:var(--ink); }
+      .cta { margin-top:20px; display:inline-block; background:var(--ink); color:#fff8e7; border-bottom:5px solid #0b1226;
+        border-radius:16px; padding:13px 22px; font:800 16px "Baloo 2",sans-serif; }
+      .hint { margin-top:10px; font-size:13px; color:var(--sub); }
+      .conf { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+      .conf i { position:absolute; top:-14px; width:9px; height:14px; border-radius:3px; opacity:0; animation:fall 3.2s ease-in forwards; }
+      @keyframes pop { from { opacity:0; transform:translateY(24px) scale(.96); } to { opacity:1; transform:none; } }
+      @keyframes bounce { 0%,100% { transform:rotate(-6deg) translateY(0); } 50% { transform:rotate(4deg) translateY(-6px); } }
+      @keyframes fall { 0% { opacity:1; transform:translateY(0) rotate(0); } 100% { opacity:0; transform:translateY(520px) rotate(540deg); } }
+      @media (prefers-reduced-motion:reduce) { .badge, .conf i, .card { animation:none; } .conf { display:none; } }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h1>Transaction Successful!</h1>
-      <p>User Name: <span class="highlight"><%= userName %></span></p>
-      <p>Amount Paid: <span class="highlight">₦<%= amountPaid %></span></p>
-      <p class="points"><%= valueAdded %></p>
-      <p>Please click Finish session above</p>
-    </div>
+    <main class="card" role="status">
+      <div class="conf" aria-hidden="true">
+        <% for (let i = 0; i < 22; i++) { const cols = ['#22a559','#ffc736','#ff6b57','#8b5cf6','#3b82f6']; %>
+          <i style="left:<%= (i * 4.5 + 2) %>%;background:<%= cols[i % 5] %>;animation-delay:<%= ((i * 137) % 900) / 1000 %>s"></i>
+        <% } %>
+      </div>
+      <div class="bar"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="hero">
+        <div class="badge">✓</div>
+        <div class="kicker">Payment confirmed</div>
+        <h1>You did it! 🎉</h1>
+      </div>
+      <div class="body">
+        <div class="row"><span>Player</span><b><%= userName %></b></div>
+        <div class="row amt"><span>Amount paid</span><b>₦<%= amountPaid %></b></div>
+        <div class="reward"><small>Unlocked</small><strong>🏆 <%= valueAdded %></strong></div>
+        <div class="cta">Tap “Finish session” above</div>
+        <p class="hint">Then head back to the app and keep that streak alive.</p>
+      </div>
+    </main>
   </body>
 </html>

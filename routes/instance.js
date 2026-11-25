@@ -309,7 +309,10 @@ router.get("/subject_category", auth, async (req, res) => {
 //   3. jambEligible / jambCompulsory are included in the response.
 // ============================================================
 router.get("/subjects", auth, async (req, res) => {
-  const { type } = req.query;
+  // Normalise so "JAMB", "jamb " etc. all behave the same
+  const type = String(req.query.type || "")
+    .trim()
+    .toLowerCase();
   const userId = req.user.userId;
   const { page, limit, skip } = getPagination(
     type === "jamb" ? { limit: 100, ...req.query } : req.query,
@@ -330,7 +333,8 @@ router.get("/subjects", auth, async (req, res) => {
     if (type === "pro_filter" && userInfo?.accountType === "professional") {
       matchFilter = { _id: { $in: userInfo.subjects } };
     } else if (type === "jamb") {
-      matchFilter = { jambEligible: true };
+      // Tolerate values stored as true / "true" / 1
+      matchFilter = { jambEligible: { $in: [true, "true", 1] } };
     }
 
     const userQBank = (userInfo?.qBank || []).map(
@@ -666,8 +670,14 @@ router.get("/my_questions", auth, async (req, res) => {
           as: "questionDetails",
         },
       },
+      // FIX: qBank entries can point to questions that no longer exist,
+      // which leaves `questionDetails` as []. $replaceRoot on a missing
+      // value crashes the whole aggregation (error 40228). $unwind drops
+      // documents whose array is empty, so orphaned entries are skipped,
+      // and then we promote the single matched question to the root.
+      { $unwind: "$questionDetails" },
       {
-        $replaceRoot: { newRoot: { $arrayElemAt: ["$questionDetails", 0] } },
+        $replaceRoot: { newRoot: "$questionDetails" },
       },
       // Add random field for shuffling
       {
@@ -1040,6 +1050,14 @@ router.put("/question", auth, async (req, res) => {
       },
     );
     await Question.deleteOne({ _id: data?._id });
+
+    // FIX: also remove the deleted question from every user's qBank so it
+    // doesn't leave orphaned references behind (these caused the
+    // /my_questions aggregation crash).
+    await User.updateMany(
+      { "qBank.question": data?._id },
+      { $pull: { qBank: { question: data?._id } } },
+    );
   } else {
     await Question.updateOne(
       { _id: data?._id },

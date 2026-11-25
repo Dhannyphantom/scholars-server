@@ -93,6 +93,13 @@ const competitionSchema = new schema({
   },
   resultsPublished: { type: Boolean, default: false },
 
+  // Admin-controlled visibility. When true (only allowed once the competition is
+  // over) the competition is NOT fetched or delivered to regular users — the
+  // mobile app needs no change because the API simply stops returning it.
+  // Managers always still see it (flagged) in the admin panel.
+  hiddenFromUsers: { type: Boolean, default: false },
+  hiddenAt: { type: Date, default: null },
+
   participants: [
     {
       user: { type: mongoose.Types.ObjectId, ref: "User", required: true },
@@ -137,6 +144,7 @@ const competitionSchema = new schema({
 
 competitionSchema.index({ month: 1, year: 1 }, { unique: true });
 competitionSchema.index({ status: 1 });
+competitionSchema.index({ hiddenFromUsers: 1, status: 1, endTime: -1 });
 competitionSchema.index({ startTime: 1, endTime: 1 });
 competitionSchema.index({ "participants.user": 1 });
 competitionSchema.index({ createdAt: -1 });
