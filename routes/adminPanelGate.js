@@ -39,6 +39,9 @@ router.put("/support/tickets/:id/assign", staffAuth, async (req, res) => {
 });
 router.use("/support", staffAuth, require("./adminPanelSupport"));
 
+// ── app settings (AppInfo document, managers only) ───────────────────────────
+router.use("/app-config", staffAuth, mgr, require("./adminPanelAppConfig"));
+
 router.get("/analytics/features", staffAuth, managerOnly, async (req, res) => ok(res, await report(req.query.days)));
 
 // ── my permissions (any staff) ───────────────────────────────────────────────
