@@ -296,9 +296,13 @@ router.get("/users/export", async (req, res) => {
 });
 
 router.get("/users/search", async (req, res) => {
-  const rx = new RegExp(esc(String(req.query.q || "").trim()), "i");
+  const qs = String(req.query.q || "").trim();
+  const rx = new RegExp(esc(qs), "i");
   const roles = String(req.query.roles || "student,teacher").split(",");
-  const rows = await User.find({ accountType: { $in: roles }, $or: [{ firstName: rx }, { lastName: rx }, { username: rx }] }).limit(15).select("firstName lastName username accountType school class").populate("school", "name").lean();
+  const or = [{ firstName: rx }, { lastName: rx }, { username: rx }, { email: rx }, { contact: rx }];
+  const parts = qs.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) or.push({ $and: parts.map((t) => ({ $or: [{ firstName: new RegExp(esc(t), "i") }, { lastName: new RegExp(esc(t), "i") }] })) });
+  const rows = await User.find({ accountType: { $in: roles }, $or: or }).limit(15).select("firstName lastName username accountType school class").populate("school", "name").lean();
   ok(res, rows.map((u) => ({ id: u._id, name: nameOf(u), username: u.username, role: roleLabel(u.accountType), school: u.school?.name || null, level: u.class?.level || null })));
 });
 

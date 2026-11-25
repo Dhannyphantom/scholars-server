@@ -6,6 +6,8 @@ const { School } = require("../models/School");
 const { ScheduledNotification } = require("../models/AdminMisc");
 const { sendMail } = require("./mailer");
 const { esc, cap } = require("./adminHelpers");
+const { sanitizeEmailHtml } = require("./richMail");
+const { cleanupExpiredUploads } = require("./notifyUploads");
 
 const SELECT = "firstName lastName username email expoPushToken subscription";
 const premiumQ = () => ({ "subscription.isActive": true, "subscription.expiry": { $gt: new Date() } });
@@ -41,6 +43,15 @@ const personalise = (str = "", u) =>
     .replace(/<%=\s*user\.firstName\s*%>|\{\{\s*firstName\s*\}\}/g, cap(u.firstName) || cap(u.username) || "there")
     .replace(/<%=\s*user\.lastName\s*%>|\{\{\s*lastName\s*\}\}/g, cap(u.lastName))
     .replace(/<%=\s*user\.username\s*%>|\{\{\s*username\s*\}\}/g, u.username || "");
+
+// Same placeholders, but values are HTML-escaped (for the email body)
+const personaliseHtml = (html, u) => {
+  const h = (v) => String(v || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(html)
+    .replace(/\{\{\s*firstName\s*\}\}/g, h(cap(u.firstName) || cap(u.username) || "there"))
+    .replace(/\{\{\s*lastName\s*\}\}/g, h(cap(u.lastName)))
+    .replace(/\{\{\s*username\s*\}\}/g, h(u.username));
+};
 
 async function sendPush(users, p) {
   const expo = new Expo({ accessToken: process.env.EXPO_ACCESS_TOKEN, useFcmV1: true });
@@ -80,7 +91,7 @@ async function sendEmails(users, p) {
       try {
         const html = await ejs.renderFile(path.join(__dirname, "../views/admin_mail.ejs"), {
           variant, appName: "Guru EduTech", supportEmail: process.env.MAIL_FROM, year: new Date().getFullYear(),
-          heading: personalise(p.heading, u), message: personalise(p.message, u), ctaLabel: p.ctaLabel || "", ctaUrl: p.ctaUrl || "",
+          heading: personalise(p.heading, u), message: personaliseHtml(sanitizeEmailHtml(p.message), u), ctaLabel: p.ctaLabel || "", ctaUrl: p.ctaUrl || "",
         });
         (await sendMail({ to: u.email, subject: personalise(p.subject, u), html })) ? sent++ : failed++;
       } catch { failed++; }
@@ -103,12 +114,21 @@ async function processNotification(id) {
   }
 }
 
-const startNotificationWorker = () =>
-  setInterval(async () => {
+const startNotificationWorker = () => {
+  startUploadCleanup();
+  return setInterval(async () => {
     try {
       const due = await ScheduledNotification.find({ status: "pending", runAt: { $lte: new Date() } }).select("_id").limit(10).lean();
       for (const d of due) await processNotification(d._id);
     } catch (e) { console.error("[notify worker]", e.message); }
   }, 30 * 1000).unref();
+};
 
-module.exports = { audienceFilter, audienceLabel, processNotification, startNotificationWorker };
+// Remove expired notify images (S3 + DB): once at boot, then hourly
+const startUploadCleanup = () => {
+  const run = () => cleanupExpiredUploads().catch((e) => console.error("[notify cleanup]", e.message));
+  setTimeout(run, 20 * 1000).unref();
+  setInterval(run, 60 * 60 * 1000).unref();
+};
+
+module.exports = { audienceFilter, audienceLabel, processNotification, startNotificationWorker, startUploadCleanup };

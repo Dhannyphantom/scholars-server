@@ -1,14 +1,36 @@
 // /admin-panel/notify (manager only — gate applied by parent)
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const { sanitizeEmailHtml, stripHtml, imageUrls } = require("../controllers/richMail");
+const { saveUpload, extendForUrls } = require("../controllers/notifyUploads");
 const { ScheduledNotification } = require("../models/AdminMisc");
 const { audienceFilter, audienceLabel, processNotification } = require("../controllers/notificationService");
 const { User } = require("../models/User");
 const { record } = require("../controllers/auditService");
 const { nameOf, isId, ok, fail } = require("../controllers/adminHelpers");
 
+// Image upload (S3, auto-deleted after `days`)
+router.post("/upload", (req, res) => {
+  upload.single("image")(req, res, async (err) => {
+    if (err) return fail(res, 400, err.code === "LIMIT_FILE_SIZE" ? "Image must be 5MB or smaller" : err.message);
+    if (!req.file) return fail(res, 400, "Choose an image to upload");
+    try {
+      const d = await saveUpload({ buffer: req.file.buffer, mime: req.file.mimetype, days: req.body?.days, by: req.me._id });
+      ok(res, { url: d.url, expiresAt: d.expiresAt });
+    } catch (e) { fail(res, 400, e.message); }
+  });
+});
+
 router.post("/send", async (req, res) => {
   const { channel, audience, payload, scheduleAt } = req.body || {};
+  if (channel === "email" && payload) {
+    payload.message = sanitizeEmailHtml(payload.message);
+    if (!stripHtml(payload.message) && !imageUrls(payload.message).length) return fail(res, 400, "Write a message first");
+    payload.subject = String(payload.subject || "").slice(0, 200);
+    payload.heading = String(payload.heading || "").slice(0, 200);
+  }
   if (!["push", "email"].includes(channel)) return fail(res, 400, "Invalid channel");
   if (!audience?.type) return fail(res, 400, "Choose an audience");
   if (channel === "push" && (!payload?.title || !payload?.message)) return fail(res, 400, "Title and message are required");
@@ -19,6 +41,7 @@ router.post("/send", async (req, res) => {
   const later = runAt.getTime() > Date.now() + 30 * 1000;
   const job = await ScheduledNotification.create({ channel, audience: { ...audience, label: audienceLabel(audience) }, payload, runAt, by: req.me._id, byName: nameOf(req.me) });
   record(req, { action: later ? `Scheduled ${channel}` : `Sent ${channel}`, target: audienceLabel(audience), detail: payload.title || payload.subject, cat: "notify" });
+  extendForUrls([payload.image, ...imageUrls(payload.message)], runAt).catch(() => {});
   if (!later) processNotification(job._id).catch((e) => console.error("[notify]", e.message));
   ok(res, { id: job._id, scheduled: later });
 });

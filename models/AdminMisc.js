@@ -81,4 +81,15 @@ const ScheduledNotification = mongoose.model(
   }),
 );
 
-module.exports = { AdminFlag, ActivityEvent, UserActivity, TicketNote, AdminProfile, ProTokenLog, ScheduledNotification };
+const NotifyUpload = mongoose.model(
+  "NotifyUpload",
+  new Schema({
+    key: String,
+    url: { type: String, index: true },
+    expiresAt: { type: Date, index: true },
+    by: { type: oid, ref: "User" },
+    createdAt: { type: Date, default: Date.now },
+  }),
+);
+
+module.exports = { NotifyUpload, AdminFlag, ActivityEvent, UserActivity, TicketNote, AdminProfile, ProTokenLog, ScheduledNotification };
