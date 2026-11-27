@@ -279,23 +279,22 @@ router.get("/dashboard/stats", adminAuth, async (req, res) => {
 });
 
 router.get("/app_version", async (req, res) => {
-  const appData = await AppInfo.findOne({ ID: "APP" });
+  try {
+    const appData = await AppInfo.findOne({ ID: "APP" }).lean();
+    const v = appData?.VERSION || {};
 
-  const {
-    latestVersion,
-    minimumSupportedVersion,
-    otaEnabled,
-    updateMessage,
-    forceMessage,
-  } = appData.VERSION;
-
-  return res.json({
-    latestVersion,
-    minimumSupportedVersion,
-    otaEnabled,
-    updateMessage,
-    forceMessage,
-  });
+    // Safe defaults: a missing doc/field must never crash the startup check
+    // (a hung response used to block every later update check on the phone).
+    return res.json({
+      latestVersion: v.latestVersion || "1.0.0",
+      minimumSupportedVersion: v.minimumSupportedVersion || "1.0.0",
+      otaEnabled: v.otaEnabled ?? true,
+      updateMessage: v.updateMessage || "",
+      forceMessage: v.forceMessage || "",
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 router.put("/q_update", async (req, res) => {

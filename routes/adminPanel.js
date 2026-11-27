@@ -20,7 +20,8 @@ const { OnlineQuizCompetition } = require("../models/OnlineQuizCompetition");
 const WalletTransaction = require("../models/WalletTransaction");
 const PayoutRequest = require("../models/PayoutRequest");
 const walletService = require("../controllers/walletService");
-const { AdminFlag, ActivityEvent, UserActivity, AdminProfile, ProTokenLog } = require("../models/AdminMisc");
+const { AdminFlag, ActivityEvent, UserActivity, AdminProfile, ProTokenLog, BulkBatch } = require("../models/AdminMisc");
+const { parseDays, planChange, txMessage } = require("../controllers/subscriptionAdjust");
 const { staffAuth, managerOnly } = require("../middlewares/staffAuth");
 const { markSuspended } = require("../middlewares/guard");
 const { record } = require("../controllers/auditService");
@@ -347,17 +348,62 @@ const notifyUserPush = (u, title, message) => u?.expoPushToken && expoNotificati
 
 router.post("/users/:id/subscription-days", async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
-  const days = parseInt(req.body.days);
-  if (!days || days < 1 || days > 3650) return fail(res, 400, "Enter a number of days between 1 and 3650");
+  const days = parseDays(req.body.days);
+  if (!days) return fail(res, 400, "Enter a number of days between 1 and 3650");
+  const action = req.body.action === "deduct" ? "deduct" : "add";
   const now = new Date();
-  const start = u.subscription?.expiry && now < u.subscription.expiry ? new Date(u.subscription.expiry) : now;
-  u.subscription.expiry = new Date(start.getTime() + days * 864e5);
-  u.subscription.current = now;
-  u.subscription.isActive = true;
-  u.tx_history.push({ type: "subscription", date: now, message: `+${days} days (granted by staff)`, amount: 0 });
+  const plan = planChange(u.subscription, action, days, now);
+  if (plan.skip) return fail(res, 400, `${nameOf(u)} is already on Freemium, so there is nothing to deduct`);
+  u.subscription.expiry = plan.expiry;
+  u.subscription.isActive = plan.isActive;
+  if (plan.current) u.subscription.current = plan.current;
+  u.tx_history.push({ type: "subscription", date: now, message: txMessage(action, days, plan.toFreemium), amount: 0 });
   await u.save();
-  record(req, { action: "Granted subscription days", target: `@${u.username}`, detail: `+${days} days${req.body.reason ? ` — ${req.body.reason}` : ""}`, cat: "user" });
-  ok(res, { expiry: u.subscription.expiry });
+  record(req, { action: action === "deduct" ? "Deducted subscription days" : "Granted subscription days", target: `@${u.username}`,
+    detail: `${action === "deduct" ? "-" : "+"}${days} days${plan.toFreemium ? " (now Freemium)" : ""}${req.body.reason ? ` — ${req.body.reason}` : ""}`, cat: "user" });
+  ok(res, { expiry: u.subscription.expiry, plan: plan.isActive ? "Premium" : "Freemium" });
+});
+
+// Gift / deduct days for every user matching the list filters (manager only). dryRun => counts only.
+const BULK_MAX = 20000;
+const pickFilters = (b = {}) => Object.fromEntries(["q", "role", "plan", "status"].map((k) => [k, typeof b[k] === "string" ? b[k] : ""]));
+router.post("/users/bulk-subscription", async (req, res) => {
+  const filters = pickFilters(req.body?.filters);
+  const f = await userFilter(filters);
+  const now = new Date();
+  if (req.body?.dryRun) {
+    const live = { "subscription.isActive": true, "subscription.expiry": { $gt: now } };
+    const [matched, active] = await Promise.all([User.countDocuments(f), User.countDocuments({ $and: [f, live] })]);
+    return ok(res, { matched, active, inactive: matched - active, max: BULK_MAX });
+  }
+  const days = parseDays(req.body?.days);
+  if (!days) return fail(res, 400, "Enter a number of days between 1 and 3650");
+  const action = req.body?.action === "deduct" ? "deduct" : "add";
+  const total = await User.countDocuments(f);
+  if (!total) return fail(res, 400, "No users match these filters");
+  if (total > BULK_MAX) return fail(res, 400, `${total.toLocaleString()} users match. Narrow the filters to ${BULK_MAX.toLocaleString()} or fewer.`);
+  const rows = await User.find(f).select("subscription").lean();
+  const ops = [], planned = [];
+  let toFreemium = 0, skipped = 0;
+  for (const u of rows) {
+    const p = planChange(u.subscription, action, days, now);
+    if (p.skip) { skipped++; continue; }
+    if (p.toFreemium) toFreemium++;
+    const $set = { "subscription.expiry": p.expiry, "subscription.isActive": p.isActive };
+    if (p.current) $set["subscription.current"] = p.current;
+    planned.push(u._id);
+    // expiry guard: if the user paid / was changed meanwhile, leave them alone
+    ops.push({ updateOne: { filter: { _id: u._id, "subscription.expiry": u.subscription?.expiry ?? null }, update: { $set, $push: { tx_history: { type: "subscription", date: now, message: txMessage(action, days, p.toFreemium), amount: 0 } } } } });
+  }
+  let applied = 0;
+  for (let i = 0; i < ops.length; i += 1000) applied += (await User.bulkWrite(ops.slice(i, i + 1000), { ordered: false })).modifiedCount || 0;
+  skipped += planned.length - applied;
+  const label = `${action === "deduct" ? "Deducted" : "Gifted"} ${days} days · ${planned.length.toLocaleString()} users`;
+  const batch = planned.length ? await BulkBatch.create({ kind: "users", ids: planned, action, days, count: planned.length, label, by: req.me._id }) : null;
+  const chips = Object.entries(filters).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(", ") || "no filters (everyone)";
+  record(req, { action: action === "deduct" ? "Bulk deducted subscription days" : "Bulk gifted subscription days", target: `${applied} users`,
+    detail: `${action === "deduct" ? "-" : "+"}${days} days · ${chips}${req.body?.reason ? ` — ${String(req.body.reason).slice(0, 200)}` : ""}`, cat: "user" });
+  ok(res, { matched: total, applied, skipped, toFreemium, batchId: applied ? batch._id : null });
 });
 
 router.post("/users/:id/adjust-points", async (req, res) => {

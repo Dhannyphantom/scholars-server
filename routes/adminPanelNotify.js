@@ -6,7 +6,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const { sanitizeEmailHtml, stripHtml, imageUrls } = require("../controllers/richMail");
 const { saveUpload, extendForUrls } = require("../controllers/notifyUploads");
 const { ScheduledNotification } = require("../models/AdminMisc");
-const { audienceFilter, audienceLabel, processNotification } = require("../controllers/notificationService");
+const { audienceFilter, audienceLabelFor, processNotification } = require("../controllers/notificationService");
 const { User } = require("../models/User");
 const { record } = require("../controllers/auditService");
 const { nameOf, isId, ok, fail } = require("../controllers/adminHelpers");
@@ -36,11 +36,13 @@ router.post("/send", async (req, res) => {
   if (channel === "push" && (!payload?.title || !payload?.message)) return fail(res, 400, "Title and message are required");
   if (channel === "email" && (!payload?.subject || !payload?.heading || !payload?.message)) return fail(res, 400, "Subject, heading and message are required");
   try { await audienceFilter(audience); } catch (e) { return fail(res, 404, e.message); }
+  if (audience.type === "batch" && audience.who && !["reps", "reps_teachers", "everyone"].includes(audience.who)) return fail(res, 400, "Invalid recipients");
+  const label = await audienceLabelFor(audience);
   const runAt = scheduleAt ? new Date(scheduleAt) : new Date();
   if (isNaN(runAt)) return fail(res, 400, "Invalid schedule time");
   const later = runAt.getTime() > Date.now() + 30 * 1000;
-  const job = await ScheduledNotification.create({ channel, audience: { ...audience, label: audienceLabel(audience) }, payload, runAt, by: req.me._id, byName: nameOf(req.me) });
-  record(req, { action: later ? `Scheduled ${channel}` : `Sent ${channel}`, target: audienceLabel(audience), detail: payload.title || payload.subject, cat: "notify" });
+  const job = await ScheduledNotification.create({ channel, audience: { type: audience.type, value: audience.value, who: audience.who, label }, payload, runAt, by: req.me._id, byName: nameOf(req.me) });
+  record(req, { action: later ? `Scheduled ${channel}` : `Sent ${channel}`, target: label, detail: payload.title || payload.subject, cat: "notify" });
   extendForUrls([payload.image, ...imageUrls(payload.message)], runAt).catch(() => {});
   if (!later) processNotification(job._id).catch((e) => console.error("[notify]", e.message));
   ok(res, { id: job._id, scheduled: later });

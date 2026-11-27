@@ -70,7 +70,7 @@ const ScheduledNotification = mongoose.model(
   "ScheduledNotification",
   new Schema({
     channel: { type: String, enum: ["push", "email"] },
-    audience: { type: { type: String }, value: String, label: String },
+    audience: { type: { type: String }, value: String, who: String, label: String },
     payload: Schema.Types.Mixed,
     runAt: { type: Date, index: true },
     status: { type: String, enum: ["pending", "processing", "sent", "failed", "cancelled"], default: "pending", index: true },
@@ -78,6 +78,22 @@ const ScheduledNotification = mongoose.model(
     by: { type: oid, ref: "User" },
     byName: String,
     createdAt: { type: Date, default: Date.now },
+  }),
+);
+
+// Snapshot of the users / schools touched by a bulk subscription change, so the follow-up
+// notification goes to exactly them. Expires after 90 days.
+const BulkBatch = mongoose.model(
+  "BulkBatch",
+  new Schema({
+    kind: { type: String, enum: ["users", "schools"], required: true },
+    ids: [{ type: oid }],
+    action: String,
+    days: Number,
+    count: Number,
+    label: String,
+    by: { type: oid, ref: "User" },
+    createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 90 },
   }),
 );
 
@@ -92,4 +108,4 @@ const NotifyUpload = mongoose.model(
   }),
 );
 
-module.exports = { NotifyUpload, AdminFlag, ActivityEvent, UserActivity, TicketNote, AdminProfile, ProTokenLog, ScheduledNotification };
+module.exports = { NotifyUpload, AdminFlag, ActivityEvent, UserActivity, TicketNote, AdminProfile, ProTokenLog, ScheduledNotification, BulkBatch };

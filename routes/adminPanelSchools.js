@@ -5,7 +5,8 @@ const { School } = require("../models/School");
 const { User } = require("../models/User");
 const WalletTransaction = require("../models/WalletTransaction");
 const walletService = require("../controllers/walletService");
-const { AdminFlag } = require("../models/AdminMisc");
+const { AdminFlag, BulkBatch } = require("../models/AdminMisc");
+const { parseDays, planChange } = require("../controllers/subscriptionAdjust");
 const { markSuspended } = require("../middlewares/guard");
 const { record } = require("../controllers/auditService");
 const { isId, oid, cap, nameOf, esc, ok, fail, paging } = require("../controllers/adminHelpers");
@@ -15,10 +16,9 @@ const flagSet = async () => new Set((await AdminFlag.find({ kind: "school" }).se
 const sName = (s) => cap(s?.name || "");
 
 // ───── cross-school lists (before /:id) ─────
-router.get("/", async (req, res) => {
-  const { page, limit, skip } = paging(req.query, 15);
+// list filters, shared by the school list and the bulk subscription tool
+const schoolFilter = async (q) => {
   const f = {};
-  const q = req.query;
   if (q.q) { const rx = new RegExp(esc(q.q), "i"); f.$or = [{ name: rx }, { email: rx }, { lga: rx }, { state: rx }]; }
   if (q.type) f.type = q.type.toLowerCase();
   if (q.state) f.state = q.state.toLowerCase();
@@ -27,6 +27,57 @@ router.get("/", async (req, res) => {
   const flagged = await AdminFlag.find({ kind: "school" }).select("ref").lean();
   const fids = flagged.map((x) => x.ref);
   if (q.status) f._id = q.status === "Suspended" ? { $in: fids } : { $nin: fids };
+  return { f, fids };
+};
+
+// Gift / deduct days for every school matching the list filters (manager only). dryRun => counts only.
+const BULK_MAX = 5000;
+router.post("/bulk-subscription", async (req, res) => {
+  const b = req.body?.filters || {};
+  const { f } = await schoolFilter(Object.fromEntries(["q", "type", "state", "sub", "status"].map((k) => [k, typeof b[k] === "string" ? b[k] : ""])));
+  const now = new Date();
+  if (req.body?.dryRun) {
+    const [matched, active] = await Promise.all([School.countDocuments(f), School.countDocuments({ $and: [f, { "subscription.isActive": true, "subscription.expiry": { $gt: now } }] })]);
+    return ok(res, { matched, active, inactive: matched - active, max: BULK_MAX });
+  }
+  const days = parseDays(req.body?.days);
+  if (!days) return fail(res, 400, "Enter days between 1 and 3650");
+  const action = req.body?.action === "deduct" ? "deduct" : "add";
+  const total = await School.countDocuments(f);
+  if (!total) return fail(res, 400, "No schools match these filters");
+  if (total > BULK_MAX) return fail(res, 400, `${total.toLocaleString()} schools match. Narrow the filters to ${BULK_MAX.toLocaleString()} or fewer.`);
+  const rows = await School.find(f).select("subscription teachers.user").lean();
+  const schoolOps = [], userOps = [], planned = [];
+  let toFreemium = 0, skipped = 0;
+  for (const s of rows) {
+    const p = planChange(s.subscription, action, days, now);
+    if (p.skip) { skipped++; continue; }
+    if (p.toFreemium) toFreemium++;
+    const $set = { "subscription.expiry": p.expiry, "subscription.isActive": p.isActive };
+    if (p.current) $set["subscription.current"] = p.current;
+    planned.push(s._id);
+    // expiry guard: if the school paid / was changed meanwhile, leave it alone
+    schoolOps.push({ updateOne: { filter: { _id: s._id, "subscription.expiry": s.subscription?.expiry ?? null }, update: { $set } } });
+    // teachers mirror the school's subscription (same as the single-school route)
+    const tids = (s.teachers || []).map((t) => t.user);
+    if (tids.length) userOps.push({ updateMany: { filter: { _id: { $in: tids } }, update: { $set } } });
+  }
+  let applied = 0;
+  for (let i = 0; i < schoolOps.length; i += 500) applied += (await School.bulkWrite(schoolOps.slice(i, i + 500), { ordered: false })).modifiedCount || 0;
+  for (let i = 0; i < userOps.length; i += 500) await User.bulkWrite(userOps.slice(i, i + 500), { ordered: false });
+  skipped += planned.length - applied;
+  const label = `${action === "deduct" ? "Deducted" : "Gifted"} ${days} days · ${planned.length.toLocaleString()} schools`;
+  const batch = planned.length ? await BulkBatch.create({ kind: "schools", ids: planned, action, days, count: planned.length, label, by: req.me._id }) : null;
+  const chips = Object.entries(b).filter(([, v]) => v && typeof v === "string").map(([k, v]) => `${k}: ${v}`).join(", ") || "no filters (all schools)";
+  record(req, { action: action === "deduct" ? "Bulk deducted school subscription days" : "Bulk gifted school subscription days", target: `${applied} schools`,
+    detail: `${action === "deduct" ? "-" : "+"}${days} days · ${chips}${req.body?.reason ? ` — ${String(req.body.reason).slice(0, 200)}` : ""}`, cat: "school" });
+  ok(res, { matched: total, applied, skipped, toFreemium, batchId: applied ? batch._id : null });
+});
+
+router.get("/", async (req, res) => {
+  const { page, limit, skip } = paging(req.query, 15);
+  const q = req.query;
+  const { f, fids } = await schoolFilter(q);
   const [rows, total, all, active, states] = await Promise.all([
     School.aggregate([{ $match: f }, { $sort: { createdAt: -1 } }, { $skip: skip }, { $limit: limit },
       { $project: { name: 1, email: 1, contact: 1, state: 1, lga: 1, type: 1, createdAt: 1, subscription: 1, rep: 1, students: { $size: "$students" }, teachers: { $size: "$teachers" }, classes: { $size: "$classes" } } }]),
@@ -218,14 +269,16 @@ router.delete("/:id", async (req, res) => {
 
 router.post("/:id/subscription-days", async (req, res) => {
   const s = await load(req, res); if (!s) return;
-  const days = parseInt(req.body.days);
-  if (!days || days < 1 || days > 3650) return fail(res, 400, "Enter days between 1 and 3650");
+  const days = parseDays(req.body.days);
+  if (!days) return fail(res, 400, "Enter days between 1 and 3650");
+  const action = req.body.action === "deduct" ? "deduct" : "add";
   const now = new Date();
-  const start = s.subscription?.expiry && now < s.subscription.expiry ? new Date(s.subscription.expiry) : now;
-  s.subscription = { current: now, expiry: new Date(start.getTime() + days * 864e5), isActive: true };
+  const plan = planChange(s.subscription, action, days, now);
+  if (plan.skip) return fail(res, 400, "This school's subscription has already expired, so there is nothing to deduct");
+  s.subscription = { current: plan.current || s.subscription?.current || now, expiry: plan.expiry, isActive: plan.isActive };
   await s.save();
-  await User.updateMany({ _id: { $in: s.teachers.map((t) => t.user) } }, { $set: { subscription: { current: s.subscription.current, expiry: s.subscription.expiry, isActive: true } } });
-  aud(req, s, "Granted school subscription days", `+${days} days${req.body.reason ? ` — ${req.body.reason}` : ""}`);
+  await User.updateMany({ _id: { $in: s.teachers.map((t) => t.user) } }, { $set: { subscription: { current: s.subscription.current, expiry: s.subscription.expiry, isActive: s.subscription.isActive } } });
+  aud(req, s, action === "deduct" ? "Deducted school subscription days" : "Granted school subscription days", `${action === "deduct" ? "-" : "+"}${days} days${plan.toFreemium ? " (now expired)" : ""}${req.body.reason ? ` — ${req.body.reason}` : ""}`);
   ok(res, { expiry: s.subscription.expiry });
 });
 

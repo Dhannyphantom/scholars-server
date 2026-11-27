@@ -3,9 +3,9 @@ const ejs = require("ejs");
 const path = require("path");
 const { User } = require("../models/User");
 const { School } = require("../models/School");
-const { ScheduledNotification } = require("../models/AdminMisc");
+const { ScheduledNotification, BulkBatch } = require("../models/AdminMisc");
 const { sendMail } = require("./mailer");
-const { esc, cap } = require("./adminHelpers");
+const { esc, cap, isId } = require("./adminHelpers");
 const { sanitizeEmailHtml } = require("./richMail");
 const { cleanupExpiredUploads } = require("./notifyUploads");
 
@@ -13,7 +13,7 @@ const SELECT = "firstName lastName username email expoPushToken subscription";
 const premiumQ = () => ({ "subscription.isActive": true, "subscription.expiry": { $gt: new Date() } });
 
 /** Mongo filter for an audience; throws Error('...') when a single target cannot be found */
-async function audienceFilter({ type, value }) {
+async function audienceFilter({ type, value, who }) {
   switch (type) {
     case "all": return {};
     case "students": return { accountType: "student" };
@@ -30,12 +30,37 @@ async function audienceFilter({ type, value }) {
       if (!u) throw new Error(`User "${value}" not found`);
       return { _id: u._id };
     }
+    case "batch": {
+      // users/schools touched by a bulk subscription change (see BulkBatch)
+      if (!isId(value)) throw new Error("This selection is no longer available");
+      const b = await BulkBatch.findById(value).lean();
+      if (!b) throw new Error("This selection has expired. Run the subscription change again.");
+      if (b.kind === "users") return { _id: { $in: b.ids } };
+      const schools = await School.find({ _id: { $in: b.ids } }).select("rep teachers.user students.user").lean();
+      const ids = new Set();
+      const add = (x) => x && ids.add(String(x));
+      for (const s of schools) {
+        add(s.rep);
+        if (who !== "reps") (s.teachers || []).forEach((t) => add(t.user));
+        if (who === "everyone") (s.students || []).forEach((t) => add(t.user));
+      }
+      return { _id: { $in: [...ids] } };
+    }
     default: throw new Error("Unknown audience");
   }
 }
 const audienceLabel = ({ type, value }) =>
-  ({ all: "All users", students: "All students", teachers: "All teachers", premium: "Premium users", freemium: "Freemium users" }[type] ||
+  ({ all: "All users", students: "All students", teachers: "All teachers", premium: "Premium users", freemium: "Freemium users", batch: "Selected users" }[type] ||
   (type === "school" ? `School: ${value}` : `User: @${String(value).replace(/^@/, "")}`));
+
+const WHO = { reps: "school reps", reps_teachers: "school reps & teachers", everyone: "everyone in the schools" };
+/** Same as audienceLabel, but can describe a bulk batch (needs a DB lookup) */
+async function audienceLabelFor(a) {
+  if (a.type !== "batch") return audienceLabel(a);
+  const b = isId(a.value) ? await BulkBatch.findById(a.value).select("kind label").lean() : null;
+  if (!b) return audienceLabel(a);
+  return b.kind === "schools" ? `${b.label} — ${WHO[a.who] || WHO.reps_teachers}` : b.label;
+}
 
 // Safe placeholders only — admin input is never evaluated as EJS
 const personalise = (str = "", u) =>
@@ -131,4 +156,4 @@ const startUploadCleanup = () => {
   setInterval(run, 60 * 60 * 1000).unref();
 };
 
-module.exports = { audienceFilter, audienceLabel, processNotification, startNotificationWorker, startUploadCleanup };
+module.exports = { audienceFilter, audienceLabel, audienceLabelFor, processNotification, startNotificationWorker, startUploadCleanup };
